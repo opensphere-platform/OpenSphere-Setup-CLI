@@ -128,4 +128,16 @@ if (claims.iss !== 'https://localhost:8444/oauth2/openid/opensphere-console' || 
   throw new Error('Console issuer/audience claims mismatch');
 }
 
-console.log('[E2E] First-administrator Wizard and Console OIDC login passed');
+for (const path of [
+  '/api/identity',
+  '/api/rhdh/catalog/entities?limit=1',
+  '/api/admin/plugins/catalog',
+  '/api/admin/backbone/status',
+  '/api/admin/observability/status',
+  '/api/admin/plugins/events'
+]) {
+  response = await request('GET', path, undefined, { authorization: `Bearer ${idToken}`, accept: 'application/json' });
+  expect(response, 200, `authenticated Console API ${path}`);
+}
+
+console.log('[E2E] First-administrator Wizard, OIDC login, and core management APIs passed');

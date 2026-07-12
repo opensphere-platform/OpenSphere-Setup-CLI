@@ -1,5 +1,6 @@
 import https from 'node:https';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import net from 'node:net';
 import { kubectl } from './process.mjs';
 import { validateLock } from './release.mjs';
@@ -28,7 +29,9 @@ const REQUIRED_URLS = [
   ['https://localhost:8090/readyz', 'application/json'],
   ['https://localhost:8090/oauth2/openid/opensphere-console/.well-known/openid-configuration', 'application/json'],
   ['https://localhost:8090/bff/healthz', 'text/plain'],
-  ['https://localhost:8090/ui/reset', 'text/html']
+  ['https://localhost:8090/ui/reset', 'text/html'],
+  ['https://localhost:8090/api/v1/registry', 'application/json'],
+  ['https://localhost:8090/api/cli/index.json', 'application/json']
 ];
 
 const REQUIRED_PVCS = [
@@ -47,11 +50,15 @@ function httpsGet(url, timeoutMs = 10_000) {
     const request = https.get(url, { rejectUnauthorized: false, timeout: timeoutMs }, (response) => {
       const chunks = [];
       response.on('data', (chunk) => chunks.push(chunk));
-      response.on('end', () => resolve({
-        status: response.statusCode,
-        contentType: String(response.headers['content-type'] ?? '').split(';')[0],
-        body: Buffer.concat(chunks).toString('utf8')
-      }));
+      response.on('end', () => {
+        const buffer = Buffer.concat(chunks);
+        resolve({
+          status: response.statusCode,
+          contentType: String(response.headers['content-type'] ?? '').split(';')[0],
+          body: buffer.toString('utf8'),
+          buffer
+        });
+      });
     });
     request.on('timeout', () => request.destroy(new Error(`HTTP timeout: ${url}`)));
     request.on('error', reject);
@@ -248,6 +255,21 @@ async function verifyHttp() {
   const discovery = JSON.parse(results.length ? (await httpsGet(REQUIRED_URLS[2][0])).body : '{}');
   if (discovery.issuer !== 'https://localhost:8444/oauth2/openid/opensphere-console') {
     throw new Error(`OIDC issuer is incorrect: ${discovery.issuer}`);
+  }
+  const registry = JSON.parse((await httpsGet('https://localhost:8090/api/v1/registry')).body);
+  if (registry.version !== 3 || !Array.isArray(registry.plugins) || typeof registry.trustedKeys !== 'object') {
+    throw new Error('Console Registry contract is not ready');
+  }
+  const cli = JSON.parse((await httpsGet('https://localhost:8090/api/cli/index.json')).body);
+  if (cli.ownership !== 'console-native' || !Array.isArray(cli.links) || cli.links.length === 0) {
+    throw new Error('Console-native CLI manifest is not ready');
+  }
+  for (const link of cli.links) {
+    const artifact = await httpsGet(new URL(link.href, 'https://localhost:8090/'));
+    if (artifact.status !== 200) throw new Error(`CLI artifact ${link.href} returned HTTP ${artifact.status}`);
+    if (artifact.buffer.length !== link.size) throw new Error(`CLI artifact ${link.href} size differs from its manifest`);
+    const digest = createHash('sha256').update(artifact.buffer).digest('hex');
+    if (digest !== link.sha256) throw new Error(`CLI artifact ${link.href} digest differs from its manifest`);
   }
   return results;
 }
