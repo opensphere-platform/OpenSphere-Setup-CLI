@@ -1,0 +1,27 @@
+name: Setup CLI CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Contract tests
+        run: npm test
+      - name: Certificate generator smoke test
+        shell: pwsh
+        run: |
+          ./src/New-Certificates.ps1 -OutputDirectory "$env:RUNNER_TEMP/certs"
+          if (-not (Test-Path "$env:RUNNER_TEMP/certs/tls.crt")) { throw 'tls.crt missing' }
+          if (-not (Test-Path "$env:RUNNER_TEMP/certs/tls.key")) { throw 'tls.key missing' }
+          if (-not (Test-Path "$env:RUNNER_TEMP/certs/sig.key")) { throw 'sig.key missing' }
