@@ -22,6 +22,9 @@ function validateInitialAdmin(initialAdmin) {
   if (!/^[a-z][a-z0-9._-]{1,31}$/.test(initialAdmin.username)) {
     throw new Error('--admin-username must be 2-32 lowercase letters, numbers, dot, underscore or hyphen');
   }
+  if (['admin', 'idm_admin', 'anonymous'].includes(initialAdmin.username)) {
+    throw new Error(`--admin-username ${initialAdmin.username} is reserved by the identity service`);
+  }
   if (!initialAdmin.displayName.trim()) throw new Error('--admin-display-name must not be empty');
   if (!/^[^\s@]+@[^\s@]+$/.test(initialAdmin.email)) throw new Error('--admin-email must be an email address');
   return initialAdmin;
@@ -76,6 +79,11 @@ async function main() {
 
   if (command === 'bootstrap') {
     validateChannel(channel);
+    const initialAdmin = validateInitialAdmin({
+      username: option('--admin-username', 'opensphere-admin'),
+      displayName: option('--admin-display-name', 'OpenSphere Administrator'),
+      email: option('--admin-email', 'admin@opensphere.local')
+    });
     assertKubectl();
     let lock;
     const installed = readInstallationLock();
@@ -108,11 +116,6 @@ async function main() {
         console.log(`[완료] ${channel} 채널을 ${lock.releaseDigest}로 새로 잠금`);
       }
     }
-    const initialAdmin = validateInitialAdmin({
-      username: option('--admin-username', 'admin'),
-      displayName: option('--admin-display-name', 'OpenSphere Administrator'),
-      email: option('--admin-email', 'admin@opensphere.local')
-    });
     await bootstrap(lock, {
       initialAdmin,
       requireZeroRestarts: hasOption('--require-zero-restarts') || (!installed && !hasOption('--allow-restarts')),

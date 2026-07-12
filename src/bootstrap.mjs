@@ -257,7 +257,7 @@ async function provisionInitialAdmin({ username, displayName, email }) {
 export async function bootstrap(lock, {
   keepTemporaryFiles = false,
   initialAdmin = {
-    username: 'admin',
+    username: 'opensphere-admin',
     displayName: 'OpenSphere Administrator',
     email: 'admin@opensphere.local'
   },

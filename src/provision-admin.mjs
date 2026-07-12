@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 
 const BASE = process.env.KANIDM_BOOTSTRAP_URL || 'https://localhost:18443';
 const PASSWORD = process.env.KANIDM_ADMIN_PASSWORD;
-const ADMIN = process.env.OPENSPHERE_INITIAL_ADMIN || 'admin';
+const ADMIN = process.env.OPENSPHERE_INITIAL_ADMIN || 'opensphere-admin';
 const ADMIN_DISPLAY = process.env.OPENSPHERE_INITIAL_ADMIN_DISPLAY || 'OpenSphere Administrator';
 const ADMIN_EMAIL = process.env.OPENSPHERE_INITIAL_ADMIN_EMAIL || 'admin@opensphere.local';
 const SKIP_SERVICE_TOKENS = process.env.OPENSPHERE_SKIP_SERVICE_TOKENS === 'true';

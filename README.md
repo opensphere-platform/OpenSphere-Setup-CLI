@@ -19,6 +19,10 @@ opensphere-setup.cmd bootstrap --release candidate
 opensphere-setup.cmd bootstrap --release stable
 ```
 
+기본 최초 관리자 이름은 Kanidm 예약 계정 `admin`과 충돌하지 않는 `opensphere-admin`이다.
+다른 이름을 원하면 최초 설치 시 `--admin-username`, `--admin-display-name`, `--admin-email`을
+지정한다. `admin`, `idm_admin`, `anonymous`는 identity 예약 계정이므로 Setup이 설치 전에 거부한다.
+
 `resolve`는 channel tag를 9개 canonical GHCR image digest로 해석해 release lock을 만든다.
 새 cluster의 `bootstrap`은 요청 channel을 설치 시점에 새로 해석하고, cluster에 installation lock이
 있으면 그 digest만 사용해 resume한다. `--lock`은 명시적으로 제공한 immutable 입력일 때만 사용하며
