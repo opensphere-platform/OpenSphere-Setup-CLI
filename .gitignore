@@ -1,0 +1,4 @@
+node_modules/
+.opensphere-setup/
+dist/
+*.log
