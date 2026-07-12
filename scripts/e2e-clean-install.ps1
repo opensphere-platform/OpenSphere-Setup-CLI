@@ -140,6 +140,16 @@ function Invoke-Setup {
   }
 }
 
+function Invoke-FreshSetupAndOnboarding {
+  Push-Location $RepoRoot
+  try {
+    & node .\scripts\e2e-bootstrap-onboarding.mjs $Channel
+    if ($LASTEXITCODE -ne 0) { throw "OpenSphere first-administrator E2E failed for $Channel" }
+  } finally {
+    Pop-Location
+  }
+}
+
 function Invoke-InterruptedSetup {
   $stdout = Join-Path $EvidenceDirectory ("$Channel-interrupted.stdout.log")
   $stderr = Join-Path $EvidenceDirectory ("$Channel-interrupted.stderr.log")
@@ -185,7 +195,7 @@ for ($iteration = 1; $iteration -le $Iterations; $iteration += 1) {
 
   Write-Host "[E2E] $Channel iteration $iteration/${Iterations}: fresh bootstrap"
   if ($InterruptAfterLock) { Invoke-InterruptedSetup }
-  Invoke-Setup
+  Invoke-FreshSetupAndOnboarding
   $before = Get-SecretFingerprint
 
   Write-Host "[E2E] $Channel iteration $iteration/${Iterations}: resume/idempotency"
