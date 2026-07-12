@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -89,6 +91,87 @@ function recordInstallationLock(lock) {
   applyYaml(yaml);
 }
 
+function freePort() {
+  return new Promise((resolvePort, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.on('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const { port } = server.address();
+      server.close(() => resolvePort(port));
+    });
+  });
+}
+
+function waitForForward(process, timeoutMs = 30_000) {
+  return new Promise((resolveReady, reject) => {
+    const timer = setTimeout(() => reject(new Error('Kanidm bootstrap tunnel timed out')), timeoutMs);
+    const inspect = (chunk) => {
+      if (String(chunk).includes('Forwarding from 127.0.0.1:')) {
+        clearTimeout(timer);
+        resolveReady();
+      }
+    };
+    process.stdout.on('data', inspect);
+    process.stderr.on('data', inspect);
+    process.once('exit', (code) => {
+      clearTimeout(timer);
+      reject(new Error(`Kanidm bootstrap tunnel exited early (${code})`));
+    });
+  });
+}
+
+function openBrowser(url) {
+  const command = process.platform === 'win32'
+    ? ['cmd.exe', ['/d', '/c', 'start', '', url]]
+    : process.platform === 'darwin'
+      ? ['open', [url]]
+      : ['xdg-open', [url]];
+  const child = spawn(command[0], command[1], { detached: true, stdio: 'ignore', windowsHide: false });
+  child.unref();
+}
+
+async function provisionInitialAdmin() {
+  try {
+    kubectl(['-n', 'opensphere-console', 'get', 'secret', 'opensphere-identity-kanidm'], { capture: true });
+    console.log('[재사용] 최초 관리자 service credential이 이미 구성됨');
+    return null;
+  } catch {}
+
+  const recovery = kubectl([
+    '-n', 'opensphere-console-auth', 'exec', 'kanidm-0', '--',
+    'kanidmd', 'recover-account', '-c', '/config/server.toml', 'idm_admin'
+  ], { capture: true });
+  const password = recovery.match(/new_password:\s*"([^"]+)"/)?.[1];
+  if (!password) throw new Error('Kanidm recovery password was not returned');
+
+  const port = await freePort();
+  const forward = spawn('kubectl', [
+    '-n', 'opensphere-console-auth', 'port-forward', 'svc/kanidm', `${port}:8443`, '--address', '127.0.0.1'
+  ], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  try {
+    await waitForForward(forward);
+    const provision = spawnSync(process.execPath, [join(HERE, 'provision-admin.mjs')], {
+      encoding: 'utf8',
+      windowsHide: true,
+      env: {
+        ...process.env,
+        KANIDM_BOOTSTRAP_URL: `https://localhost:${port}`,
+        KANIDM_ADMIN_PASSWORD: password
+      }
+    });
+    if (provision.status !== 0) {
+      throw new Error(`Initial admin provisioning failed: ${provision.stderr.trim()}`);
+    }
+    const resetToken = provision.stdout.trim();
+    if (!resetToken) throw new Error('Initial admin reset token was not returned');
+    console.log('[완료] 최초 관리자와 Console service credential 구성');
+    return `https://localhost:8090/ui/reset?token=${encodeURIComponent(resetToken)}`;
+  } finally {
+    forward.kill();
+  }
+}
+
 export async function bootstrap(lock, { keepTemporaryFiles = false } = {}) {
   validateLock(lock);
   const versions = assertKubectl();
@@ -130,9 +213,13 @@ export async function bootstrap(lock, { keepTemporaryFiles = false } = {}) {
     }
     recordInstallationLock(lock);
 
-    console.log('[대기] CBS와 Console rollout');
+    console.log('[대기] Kanidm과 CBS rollout');
+    kubectl(['-n', 'opensphere-console-auth', 'rollout', 'status', 'statefulset/kanidm', '--timeout=360s']);
+    const onboardingUrl = await provisionInitialAdmin();
+    kubectl(['-n', 'opensphere-console', 'rollout', 'restart', 'deployment/opensphere-console-auth', 'deployment/opensphere-console-backend']);
+
+    console.log('[대기] CBS와 Main Console rollout');
     for (const [namespace, resource, timeout] of [
-      ['opensphere-console-auth', 'statefulset/kanidm', '360s'],
       ['opensphere-backbone', 'deployment/backbone-postgres', '600s'],
       ['opensphere-backbone', 'statefulset/backbone-rustfs', '600s'],
       ['opensphere-backbone', 'deployment/backbone-gitea', '900s'],
@@ -144,7 +231,11 @@ export async function bootstrap(lock, { keepTemporaryFiles = false } = {}) {
     ]) kubectl(['-n', namespace, 'rollout', 'status', resource, `--timeout=${timeout}`]);
 
     console.log('[완료] OpenSphere Console edge baseline 배포');
-    return { lock, temporaryDirectory: keepTemporaryFiles ? work : undefined };
+    if (onboardingUrl) {
+      openBrowser(onboardingUrl);
+      console.log('[필요] 최초 관리자 Wizard가 브라우저에 열렸습니다. 비밀번호 설정 후 Console 로그인을 완료하세요.');
+    }
+    return { lock, onboardingUrl, temporaryDirectory: keepTemporaryFiles ? work : undefined };
   } finally {
     if (!keepTemporaryFiles) await rm(work, { recursive: true, force: true });
   }
