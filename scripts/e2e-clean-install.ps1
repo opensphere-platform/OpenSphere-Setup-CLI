@@ -1,0 +1,224 @@
+[CmdletBinding()]
+param(
+  [ValidateSet('edge', 'candidate', 'stable')][string]$Channel = 'edge',
+  [ValidateRange(1, 100)][int]$Iterations = 1,
+  [string]$Context = 'docker-desktop',
+  [switch]$FullClusterReset,
+  [switch]$InterruptAfterLock,
+  [switch]$RemoveAfterLastRun
+)
+
+$ErrorActionPreference = 'Stop'
+$RepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$EvidenceDirectory = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot '.opensphere-e2e'))
+if (-not $EvidenceDirectory.StartsWith($RepoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw "Evidence path escaped repository root: $EvidenceDirectory"
+}
+[System.IO.Directory]::CreateDirectory($EvidenceDirectory) | Out-Null
+
+$Namespaces = @('opensphere-console-auth', 'opensphere-console', 'opensphere-backbone')
+$Crds = @(
+  'backboneclaims.backbone.opensphere.io',
+  'uipluginpackages.plugins.opensphere.io',
+  'uipluginregistrations.plugins.opensphere.io'
+)
+$ClusterRoles = @(
+  'dupa-backbone-installer',
+  'dupa-module-profile-installer',
+  'opensphere-console-backend',
+  'opensphere-console-oaa-gateway-controlled-operator',
+  'opensphere-console-oaa-gateway-environment-reader',
+  'opensphere-module-cluster-observer-v1'
+)
+$ClusterRoleBindings = @(
+  'dupa-backbone-installer',
+  'dupa-module-profile-installer',
+  'opensphere-console-backend',
+  'opensphere-console-oaa-gateway-controlled-operator',
+  'opensphere-console-oaa-gateway-environment-reader'
+)
+$ManagedSecrets = @(
+  'opensphere-console-auth/kanidm-tls',
+  'opensphere-console/kanidm-tls',
+  'opensphere-console/shell-tls',
+  'opensphere-console/opensphere-console-auth-ca',
+  'opensphere-console/opensphere-console-auth-sig',
+  'opensphere-console/opensphere-identity-kanidm',
+  'opensphere-console/opensphere-rolemgr-kanidm',
+  'opensphere-backbone/backbone-postgres',
+  'opensphere-backbone/backbone-rustfs',
+  'opensphere-backbone/backbone-gitea'
+)
+
+function Invoke-Kubectl {
+  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
+  & kubectl --context $Context @Arguments
+  if ($LASTEXITCODE -ne 0) { throw "kubectl failed: $($Arguments -join ' ')" }
+}
+
+function Wait-ClusterReady {
+  $deadline = [DateTimeOffset]::UtcNow.AddMinutes(10)
+  do {
+    try {
+      $nodes = & kubectl --context $Context get nodes -o json 2>$null | ConvertFrom-Json
+      if ($LASTEXITCODE -eq 0 -and $nodes.items.Count -gt 0) {
+        $notReady = @($nodes.items | Where-Object {
+          (@($_.status.conditions | Where-Object { $_.type -eq 'Ready' -and $_.status -eq 'True' })).Count -ne 1
+        })
+        if ($notReady.Count -eq 0) { return }
+      }
+    } catch {}
+    Start-Sleep -Seconds 5
+  } while ([DateTimeOffset]::UtcNow -lt $deadline)
+  throw "Kubernetes context $Context did not become Ready"
+}
+
+function Remove-OpenSphere {
+  foreach ($resource in @('backboneclaims.backbone.opensphere.io', 'uipluginpackages.plugins.opensphere.io', 'uipluginregistrations.plugins.opensphere.io')) {
+    & kubectl --context $Context delete $resource --all --all-namespaces --ignore-not-found --wait=false 2>$null | Out-Null
+  }
+  & kubectl --context $Context delete namespace @Namespaces --ignore-not-found --wait=false | Out-Null
+  $deadline = [DateTimeOffset]::UtcNow.AddMinutes(5)
+  do {
+    $remaining = @($Namespaces | Where-Object {
+      (& kubectl --context $Context get namespace $_ --ignore-not-found -o name 2>$null)
+    })
+    if ($remaining.Count -eq 0) { break }
+    Start-Sleep -Seconds 2
+  } while ([DateTimeOffset]::UtcNow -lt $deadline)
+  if ($remaining.Count) { throw "Namespaces did not terminate: $($remaining -join ', ')" }
+
+  & kubectl --context $Context delete customresourcedefinition @Crds --ignore-not-found --wait=true | Out-Null
+  & kubectl --context $Context delete clusterrole @ClusterRoles --ignore-not-found --wait=true | Out-Null
+  & kubectl --context $Context delete clusterrolebinding @ClusterRoleBindings --ignore-not-found --wait=true | Out-Null
+
+  $pvs = & kubectl --context $Context get pv -o json | ConvertFrom-Json
+  $leftovers = @($pvs.items | Where-Object { $_.spec.claimRef.namespace -in $Namespaces })
+  if ($leftovers.Count) {
+    throw "OpenSphere persistent volumes remain after cleanup: $($leftovers.metadata.name -join ', ')"
+  }
+}
+
+function Reset-TestEnvironment {
+  if ($FullClusterReset) {
+    if ($Context -ne 'docker-desktop') {
+      throw '-FullClusterReset is restricted to the docker-desktop context'
+    }
+    & docker desktop kubernetes reset-cluster
+    if ($LASTEXITCODE -ne 0) { throw 'Docker Desktop Kubernetes reset failed' }
+    Wait-ClusterReady
+  } else {
+    Remove-OpenSphere
+  }
+}
+
+function Get-SecretFingerprint {
+  $values = [ordered]@{}
+  foreach ($reference in $ManagedSecrets) {
+    $parts = $reference.Split('/', 2)
+    $secret = & kubectl --context $Context -n $parts[0] get secret $parts[1] -o json | ConvertFrom-Json
+    if ($LASTEXITCODE -ne 0) { throw "Secret lookup failed: $reference" }
+    $canonical = [ordered]@{}
+    foreach ($property in @($secret.data.PSObject.Properties | Sort-Object Name)) {
+      $canonical[$property.Name] = $property.Value
+    }
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes(($canonical | ConvertTo-Json -Compress))
+    $values[$reference] = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant()
+  }
+  return $values
+}
+
+function Invoke-Setup {
+  Push-Location $RepoRoot
+  try {
+    & .\opensphere-setup.cmd bootstrap --release $Channel --context $Context `
+      --admin-username e2e-admin --admin-display-name 'OpenSphere E2E Administrator' `
+      --admin-email 'e2e-admin@opensphere.local' --no-open-browser
+    if ($LASTEXITCODE -ne 0) { throw "OpenSphere Setup bootstrap failed for $Channel" }
+  } finally {
+    Pop-Location
+  }
+}
+
+function Invoke-InterruptedSetup {
+  $stdout = Join-Path $EvidenceDirectory ("$Channel-interrupted.stdout.log")
+  $stderr = Join-Path $EvidenceDirectory ("$Channel-interrupted.stderr.log")
+  Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
+  $node = (Get-Command node -ErrorAction Stop).Source
+  $arguments = @(
+    (Join-Path $RepoRoot 'src/cli.mjs'), 'bootstrap',
+    '--release', $Channel, '--context', $Context,
+    '--admin-username', 'e2e-admin',
+    '--admin-display-name', 'OpenSphere-E2E-Administrator',
+    '--admin-email', 'e2e-admin@opensphere.local',
+    '--no-open-browser'
+  )
+  $process = Start-Process -FilePath $node -ArgumentList $arguments -WorkingDirectory $RepoRoot `
+    -RedirectStandardOutput $stdout -RedirectStandardError $stderr -WindowStyle Hidden -PassThru
+  $deadline = [DateTimeOffset]::UtcNow.AddMinutes(2)
+  try {
+    do {
+      Start-Sleep -Milliseconds 100
+      $lock = & kubectl --context $Context -n opensphere-console get configmap opensphere-installation-lock --ignore-not-found -o name 2>$null
+      if ($lock) { break }
+      if ($process.HasExited) {
+        throw "Setup exited before the interruption point; inspect $stdout and $stderr"
+      }
+    } while ([DateTimeOffset]::UtcNow -lt $deadline)
+    if (-not $lock) { throw 'Installation lock was not recorded before interruption timeout' }
+  } finally {
+    if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+  }
+  Start-Sleep -Seconds 3
+  Write-Host '[E2E] Setup process interrupted after durable cluster lock; resuming'
+}
+
+for ($iteration = 1; $iteration -le $Iterations; $iteration += 1) {
+  Write-Host "[E2E] $Channel iteration $iteration/${Iterations}: reset"
+  Reset-TestEnvironment
+
+  $lockPath = [System.IO.Path]::GetFullPath((Join-Path $RepoRoot ".opensphere-setup/$Channel-release-lock.json"))
+  if (-not $lockPath.StartsWith($RepoRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Release lock path escaped repository root: $lockPath"
+  }
+  Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+
+  Write-Host "[E2E] $Channel iteration $iteration/${Iterations}: fresh bootstrap"
+  if ($InterruptAfterLock) { Invoke-InterruptedSetup }
+  Invoke-Setup
+  $before = Get-SecretFingerprint
+
+  Write-Host "[E2E] $Channel iteration $iteration/${Iterations}: resume/idempotency"
+  Invoke-Setup
+  $after = Get-SecretFingerprint
+  if (($before | ConvertTo-Json -Compress) -ne ($after | ConvertTo-Json -Compress)) {
+    throw 'Managed secret payload changed during idempotent resume'
+  }
+
+  Push-Location $RepoRoot
+  try {
+    & node .\src\cli.mjs verify --release $Channel --context $Context --require-zero-restarts
+    if ($LASTEXITCODE -ne 0) { throw 'Final Setup verification failed' }
+  } finally {
+    Pop-Location
+  }
+
+  $evidence = & kubectl --context $Context -n opensphere-console get configmap opensphere-installation-evidence -o jsonpath='{.data.evidence\.json}' | ConvertFrom-Json
+  $result = [ordered]@{
+    test = 'OpenSphere clean channel installation'
+    channel = $Channel
+    iteration = $iteration
+    context = $Context
+    fullClusterReset = [bool]$FullClusterReset
+    interruptedAfterLock = [bool]$InterruptAfterLock
+    completedAt = [DateTimeOffset]::UtcNow.ToString('o')
+    secretPayloadsStableAcrossResume = $true
+    evidence = $evidence
+  }
+  $mode = if ($FullClusterReset) { 'full-reset' } elseif ($InterruptAfterLock) { 'interrupted-resume' } else { 'clean-resources' }
+  $path = Join-Path $EvidenceDirectory ("{0}-{1}-iteration-{2}.json" -f $Channel, $mode, $iteration)
+  [System.IO.File]::WriteAllText($path, (($result | ConvertTo-Json -Depth 12) + [Environment]::NewLine))
+  Write-Host "[E2E] PASS -> $path"
+}
+
+if ($RemoveAfterLastRun) { Remove-OpenSphere }

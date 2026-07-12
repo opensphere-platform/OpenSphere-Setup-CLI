@@ -5,8 +5,11 @@ import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { assertKubectl, kubectl, run } from './process.mjs';
+import { kubectl, run } from './process.mjs';
+import { preflight } from './preflight.mjs';
+import { fetchWithRetry } from './http.mjs';
 import { validateLock } from './release.mjs';
+import { verifyInstallation } from './verify.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RAW_ROOT = 'https://raw.githubusercontent.com/opensphere-platform/OpenSphere-console';
@@ -65,15 +68,16 @@ function ensureTlsSecret(namespace, name, cert, key) {
   applyYaml(yaml);
 }
 
-async function fetchManifest(lock, spec) {
+async function fetchManifest(lock, spec, storageClass) {
   const url = `${RAW_ROOT}/${lock.sourceRevision}/${spec.path}`;
-  const response = await fetch(url);
+  const response = await fetchWithRetry(url);
   if (!response.ok) throw new Error(`Manifest download failed (${spec.path}): HTTP ${response.status}`);
   let yaml = await response.text();
   for (const [pattern, component] of spec.replacements ?? []) {
     const image = lock.components[component].image;
     yaml = yaml.replace(new RegExp(pattern, 'g'), image);
   }
+  yaml = yaml.replace(/storageClassName:\s*standard/g, `storageClassName: ${storageClass}`);
   for (const match of yaml.matchAll(/^[ \t]*image:[ \t]+["']?([^"'#\s]+)/gm)) {
     if (!/^ghcr\.io\/opensphere-platform\/[a-z0-9-]+@sha256:[a-f0-9]{64}$/.test(match[1])) {
       throw new Error(`Manifest ${spec.path} contains an ungoverned image reference: ${match[1]}`);
@@ -82,13 +86,76 @@ async function fetchManifest(lock, spec) {
   return yaml;
 }
 
-function recordInstallationLock(lock) {
-  const json = JSON.stringify(lock);
+function recordInstallationState(lock, storageClass, initialAdmin) {
+  const config = {
+    apiVersion: 'bootstrap.opensphere.io/v1alpha1',
+    kind: 'OpenSphereInstallationConfig',
+    channel: lock.channel,
+    releaseDigest: lock.releaseDigest,
+    storageClass,
+    initialAdmin
+  };
   const yaml = kubectl([
     '-n', 'opensphere-console', 'create', 'configmap', 'opensphere-installation-lock',
-    `--from-literal=release.json=${json}`, '--dry-run=client', '-o', 'yaml'
+    `--from-literal=release.json=${JSON.stringify(lock)}`,
+    `--from-literal=config.json=${JSON.stringify(config)}`,
+    '--dry-run=client', '-o', 'yaml'
   ], { capture: true });
   applyYaml(yaml);
+}
+
+function recordInitialAdmin(initialAdmin) {
+  const yaml = kubectl([
+    '-n', 'opensphere-console', 'create', 'configmap', 'opensphere-initial-admin',
+    `--from-literal=username=${initialAdmin.username}`,
+    `--from-literal=displayName=${initialAdmin.displayName}`,
+    `--from-literal=email=${initialAdmin.email}`,
+    '--dry-run=client', '-o', 'yaml'
+  ], { capture: true });
+  applyYaml(yaml);
+}
+
+function readInitialAdmin() {
+  const json = kubectl([
+    '-n', 'opensphere-console', 'get', 'configmap', 'opensphere-initial-admin',
+    '--ignore-not-found', '-o', 'json'
+  ], { capture: true });
+  if (!json) return null;
+  const data = JSON.parse(json).data ?? {};
+  if (!data.username || !data.displayName || !data.email) {
+    throw new Error('Existing initial administrator metadata is incomplete');
+  }
+  return { username: data.username, displayName: data.displayName, email: data.email };
+}
+
+function readInstallationConfig() {
+  const json = kubectl([
+    '-n', 'opensphere-console', 'get', 'configmap', 'opensphere-installation-lock',
+    '--ignore-not-found', '-o', 'json'
+  ], { capture: true });
+  if (!json) return null;
+  const raw = JSON.parse(json).data?.['config.json'];
+  if (!raw) throw new Error('Existing installation config has no config.json');
+  return JSON.parse(raw);
+}
+
+export function readInstallationLock() {
+  const namespace = kubectl(['get', 'namespace', 'opensphere-console', '--ignore-not-found', '-o', 'name'], { capture: true });
+  if (!namespace) return null;
+  const json = kubectl([
+    '-n', 'opensphere-console', 'get', 'configmap', 'opensphere-installation-lock',
+    '--ignore-not-found', '-o', 'json'
+  ], { capture: true });
+  if (!json) return null;
+  const object = JSON.parse(json);
+  const raw = object.data?.['release.json'];
+  if (!raw) throw new Error('Existing installation lock has no release.json');
+  return validateLock(JSON.parse(raw));
+}
+
+export function existingOpenSphereNamespaces() {
+  return ['opensphere-console-auth', 'opensphere-console', 'opensphere-backbone']
+    .filter((name) => kubectl(['get', 'namespace', name, '--ignore-not-found', '-o', 'name'], { capture: true }));
 }
 
 function freePort() {
@@ -131,12 +198,12 @@ function openBrowser(url) {
   child.unref();
 }
 
-async function provisionInitialAdmin() {
-  try {
-    kubectl(['-n', 'opensphere-console', 'get', 'secret', 'opensphere-identity-kanidm'], { capture: true });
-    console.log('[재사용] 최초 관리자 service credential이 이미 구성됨');
-    return null;
-  } catch {}
+async function provisionInitialAdmin({ username, displayName, email }) {
+  let serviceCredentialsExist = true;
+  for (const name of ['opensphere-identity-kanidm', 'opensphere-rolemgr-kanidm']) {
+    try { kubectl(['-n', 'opensphere-console', 'get', 'secret', name], { capture: true }); }
+    catch { serviceCredentialsExist = false; }
+  }
 
   const recovery = kubectl([
     '-n', 'opensphere-console-auth', 'exec', 'kanidm-0', '--',
@@ -157,28 +224,72 @@ async function provisionInitialAdmin() {
       env: {
         ...process.env,
         KANIDM_BOOTSTRAP_URL: `https://localhost:${port}`,
-        KANIDM_ADMIN_PASSWORD: password
+        KANIDM_ADMIN_PASSWORD: password,
+        OPENSPHERE_INITIAL_ADMIN: username,
+        OPENSPHERE_INITIAL_ADMIN_DISPLAY: displayName,
+        OPENSPHERE_INITIAL_ADMIN_EMAIL: email,
+        OPENSPHERE_SKIP_SERVICE_TOKENS: String(serviceCredentialsExist)
       }
     });
     if (provision.status !== 0) {
       throw new Error(`Initial admin provisioning failed: ${provision.stderr.trim()}`);
     }
-    const resetToken = provision.stdout.trim();
-    if (!resetToken) throw new Error('Initial admin reset token was not returned');
-    console.log('[완료] 최초 관리자와 Console service credential 구성');
-    return `https://localhost:8090/ui/reset?token=${encodeURIComponent(resetToken)}`;
+    let result;
+    try { result = JSON.parse(provision.stdout.trim()); }
+    catch { throw new Error('Initial admin provisioning returned an invalid result'); }
+    if (!result.onboardingRequired) {
+      console.log('[재사용] Console service credential과 최초 관리자 credential이 이미 구성됨');
+      return { onboardingUrl: null, serviceCredentialsCreated: false };
+    }
+    if (!result.resetToken) throw new Error('Initial admin reset token was not returned');
+    console.log(serviceCredentialsExist
+      ? '[재사용] Console service credential 유지, 최초 관리자 Wizard token 재발급'
+      : '[완료] 최초 관리자와 Console service credential 구성');
+    return {
+      onboardingUrl: `https://localhost:8090/ui/reset?token=${encodeURIComponent(result.resetToken)}`,
+      serviceCredentialsCreated: !serviceCredentialsExist
+    };
   } finally {
     forward.kill();
   }
 }
 
-export async function bootstrap(lock, { keepTemporaryFiles = false } = {}) {
+export async function bootstrap(lock, {
+  keepTemporaryFiles = false,
+  initialAdmin = {
+    username: 'admin',
+    displayName: 'OpenSphere Administrator',
+    email: 'admin@opensphere.local'
+  },
+  requireZeroRestarts = true,
+  storageClass,
+  openOnboarding = true
+} = {}) {
   validateLock(lock);
-  const versions = assertKubectl();
+  const installed = readInstallationLock();
+  const existingNamespaces = existingOpenSphereNamespaces();
+  if (installed && installed.releaseDigest !== lock.releaseDigest) {
+    throw new Error(`Existing installation is locked to ${installed.releaseDigest}; upgrade is a separate transaction`);
+  }
+  if (!installed && existingNamespaces.length) {
+    throw new Error(`Unmanaged OpenSphere state exists without a release lock: ${existingNamespaces.join(', ')}`);
+  }
+  const storedConfig = installed ? readInstallationConfig() : null;
+  if (installed && !storedConfig) throw new Error('Managed installation has no installation config');
+  if (storedConfig?.releaseDigest !== installed?.releaseDigest) {
+    throw new Error('Installation config differs from the cluster release lock');
+  }
+  if (storedConfig && storageClass && storedConfig.storageClass !== storageClass) {
+    throw new Error(`Installation uses StorageClass ${storedConfig.storageClass}; changing it requires migration`);
+  }
+  const effectiveAdmin = installed ? (readInitialAdmin() ?? storedConfig.initialAdmin) : initialAdmin;
+  const cluster = preflight({ storageClass: storedConfig?.storageClass ?? storageClass });
   const work = await mkdtemp(join(tmpdir(), 'opensphere-setup-'));
   try {
-    console.log(`[완료] Kubernetes 연결 (${versions.cluster.serverVersion.gitVersion})`);
+    console.log(`[완료] Kubernetes 연결 (${cluster.serverVersion}, ${cluster.nodeCount} nodes, StorageClass ${cluster.storageClass})`);
     for (const namespace of ['opensphere-console-auth', 'opensphere-console', 'opensphere-backbone']) ensureNamespace(namespace);
+    recordInstallationState(lock, cluster.storageClass, effectiveAdmin);
+    console.log(`[완료] ${lock.channel} release lock 기록 (${lock.releaseDigest})`);
 
     run('pwsh', ['-NoProfile', '-File', join(HERE, 'New-Certificates.ps1'), '-OutputDirectory', work]);
     const cert = join(work, 'tls.crt');
@@ -205,18 +316,20 @@ export async function bootstrap(lock, { keepTemporaryFiles = false } = {}) {
     console.log('[완료] Namespace와 bootstrap secret 준비');
 
     for (const spec of MANIFESTS) {
-      const yaml = await fetchManifest(lock, spec);
+      const yaml = await fetchManifest(lock, spec, cluster.storageClass);
       const file = join(work, spec.path.replaceAll('/', '-'));
       await writeFile(file, yaml, 'utf8');
       applyYaml(yaml);
       console.log(`[완료] ${spec.path}`);
     }
-    recordInstallationLock(lock);
-
     console.log('[대기] Kanidm과 CBS rollout');
     kubectl(['-n', 'opensphere-console-auth', 'rollout', 'status', 'statefulset/kanidm', '--timeout=360s']);
-    const onboardingUrl = await provisionInitialAdmin();
-    kubectl(['-n', 'opensphere-console', 'rollout', 'restart', 'deployment/opensphere-console-auth', 'deployment/opensphere-console-backend']);
+    const onboarding = await provisionInitialAdmin(effectiveAdmin);
+    const onboardingUrl = onboarding.onboardingUrl;
+    recordInitialAdmin(effectiveAdmin);
+    if (onboarding.serviceCredentialsCreated) {
+      kubectl(['-n', 'opensphere-console', 'rollout', 'restart', 'deployment/opensphere-console-auth', 'deployment/opensphere-console-backend']);
+    }
 
     console.log('[대기] CBS와 Main Console rollout');
     for (const [namespace, resource, timeout] of [
@@ -230,12 +343,16 @@ export async function bootstrap(lock, { keepTemporaryFiles = false } = {}) {
       ['opensphere-console', 'deployment/opensphere-console', '600s']
     ]) kubectl(['-n', namespace, 'rollout', 'status', resource, `--timeout=${timeout}`]);
 
-    console.log('[완료] OpenSphere Console edge baseline 배포');
-    if (onboardingUrl) {
+    console.log('[검증] release lock, runtime image, Secret, 인증 및 Console endpoint');
+    const evidence = await verifyInstallation(lock, { requireZeroRestarts });
+    console.log(`[완료] OpenSphere Console ${lock.channel} 설치 검증 (${evidence.podCount} pods, ${evidence.serviceCount} services)`);
+    if (onboardingUrl && openOnboarding) {
       openBrowser(onboardingUrl);
       console.log('[필요] 최초 관리자 Wizard가 브라우저에 열렸습니다. 비밀번호 설정 후 Console 로그인을 완료하세요.');
+    } else if (onboardingUrl) {
+      console.log('[완료] 최초 관리자 Wizard token이 생성됐으며 비대화형 검증을 위해 브라우저 열기는 생략했습니다.');
     }
-    return { lock, onboardingUrl, temporaryDirectory: keepTemporaryFiles ? work : undefined };
+    return { lock, evidence, onboardingUrl, temporaryDirectory: keepTemporaryFiles ? work : undefined };
   } finally {
     if (!keepTemporaryFiles) await rm(work, { recursive: true, force: true });
   }

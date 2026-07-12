@@ -4,9 +4,10 @@ import { spawnSync } from 'node:child_process';
 
 const BASE = process.env.KANIDM_BOOTSTRAP_URL || 'https://localhost:18443';
 const PASSWORD = process.env.KANIDM_ADMIN_PASSWORD;
-const ADMIN = process.env.OPENSPHERE_INITIAL_ADMIN || 'cmars';
-const ADMIN_DISPLAY = process.env.OPENSPHERE_INITIAL_ADMIN_DISPLAY || 'CMARS';
-const ADMIN_EMAIL = process.env.OPENSPHERE_INITIAL_ADMIN_EMAIL || 'cmars@triangles.co.kr';
+const ADMIN = process.env.OPENSPHERE_INITIAL_ADMIN || 'admin';
+const ADMIN_DISPLAY = process.env.OPENSPHERE_INITIAL_ADMIN_DISPLAY || 'OpenSphere Administrator';
+const ADMIN_EMAIL = process.env.OPENSPHERE_INITIAL_ADMIN_EMAIL || 'admin@opensphere.local';
+const SKIP_SERVICE_TOKENS = process.env.OPENSPHERE_SKIP_SERVICE_TOKENS === 'true';
 
 if (!PASSWORD) throw new Error('KANIDM_ADMIN_PASSWORD is required');
 
@@ -106,27 +107,39 @@ for (const group of ['opensphere-console-admins', 'opensphere-console-operators'
 }
 await ensureEntry(token, `/v1/person/${ADMIN}`, { attrs: { name: [ADMIN], displayname: [ADMIN_DISPLAY] } });
 let response = await request('PATCH', `/v1/person/${ADMIN}`, { attrs: { mail: [ADMIN_EMAIL] } }, token);
-// Kanidm 1.4.x may return 404 while the freshly-created entry is becoming visible.
-// Mail is optional for the first credential ceremony; identity can reconcile it later.
-if (response.status >= 300 && response.status !== 404) {
+for (let attempt = 0; response.status === 404 && attempt < 10; attempt += 1) {
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  response = await request('PATCH', `/v1/person/${ADMIN}`, { attrs: { mail: [ADMIN_EMAIL] } }, token);
+}
+if (response.status >= 300) {
   throw new Error(`Admin mail update failed: HTTP ${response.status}`);
 }
 await addMember(token, 'opensphere-console-admins', ADMIN);
 
-const reader = await serviceToken(token, 'opensphere-console-reader', 'OpenSphere Console Reader', false);
-await addMember(token, 'idm_people_pii_read', 'opensphere-console-reader');
-const roleManager = await serviceToken(token, 'opensphere-console-rolemgr', 'OpenSphere Console Role Manager', true);
-for (const group of ['idm_people_admins', 'idm_group_admins']) {
-  await addMember(token, group, 'opensphere-console-rolemgr');
+if (!SKIP_SERVICE_TOKENS) {
+  const reader = await serviceToken(token, 'opensphere-console-reader', 'OpenSphere Console Reader', false);
+  await addMember(token, 'idm_people_pii_read', 'opensphere-console-reader');
+  const roleManager = await serviceToken(token, 'opensphere-console-rolemgr', 'OpenSphere Console Role Manager', true);
+  for (const group of ['idm_people_admins', 'idm_group_admins']) {
+    await addMember(token, group, 'opensphere-console-rolemgr');
+  }
+  applySecret('opensphere-identity-kanidm', reader);
+  applySecret('opensphere-rolemgr-kanidm', roleManager);
 }
-applySecret('opensphere-identity-kanidm', reader);
-applySecret('opensphere-rolemgr-kanidm', roleManager);
+
+response = await request('GET', `/v1/person/${ADMIN}/_credential/_status`, undefined, token);
+if (response.status !== 200 || !Array.isArray(response.json?.creds)) {
+  throw new Error(`Initial admin credential status failed: HTTP ${response.status}`);
+}
+if (response.json.creds.length > 0) {
+  process.stdout.write(JSON.stringify({ onboardingRequired: false }));
+  process.exit(0);
+}
 
 response = await request('GET', `/v1/person/${ADMIN}/_credential/_update_intent/3600`, undefined, token);
 if (response.status !== 200 || !response.json?.token) {
   throw new Error(`Initial admin reset intent failed: HTTP ${response.status}`);
 }
 
-// The reset token is intentionally the only stdout value. The caller must capture it and
-// open the local onboarding URL without logging or persisting the credential.
-process.stdout.write(response.json.token);
+// The reset token is captured by the parent, never logged or persisted.
+process.stdout.write(JSON.stringify({ onboardingRequired: true, resetToken: response.json.token }));

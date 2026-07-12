@@ -1,6 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { COMPONENTS, RELEASE_API_VERSION, validateChannel, validateLock } from '../src/release.mjs';
+import {
+  calculateReleaseDigest,
+  COMPONENTS,
+  RELEASE_API_VERSION,
+  SOURCE,
+  validateChannel,
+  validateLock
+} from '../src/release.mjs';
+
+const REVISION = '1'.repeat(40);
+const DIGEST = `sha256:${'a'.repeat(64)}`;
+
+function validLock(channel = 'edge') {
+  const components = Object.fromEntries(Object.entries(COMPONENTS).map(([name, repository]) => [
+    name,
+    {
+      repository,
+      image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
+      sourceRevision: REVISION
+    }
+  ]));
+  return {
+    apiVersion: RELEASE_API_VERSION,
+    kind: 'OpenSphereReleaseLock',
+    channel,
+    releaseDigest: calculateReleaseDigest(channel, components),
+    source: SOURCE,
+    sourceRevision: REVISION,
+    components
+  };
+}
 
 test('canonical baseline contains the promised nine repositories', () => {
   assert.deepEqual(Object.values(COMPONENTS), [
@@ -21,14 +51,41 @@ test('only governed release channels are accepted', () => {
   assert.throws(() => validateChannel('latest'), /Unsupported channel/);
 });
 
+test('canonical digest-pinned release lock is accepted', () => {
+  const lock = validLock();
+  assert.equal(validateLock(lock), lock);
+});
+
 test('release lock rejects tag-only references', () => {
-  const digest = `sha256:${'a'.repeat(64)}`;
-  const components = Object.fromEntries(Object.keys(COMPONENTS).map((name) => [
-    name,
-    { image: `ghcr.io/opensphere-platform/${COMPONENTS[name]}@${digest}` }
-  ]));
-  const valid = { apiVersion: RELEASE_API_VERSION, kind: 'OpenSphereReleaseLock', channel: 'edge', components };
-  assert.equal(validateLock(valid), valid);
-  valid.components.console.image = 'ghcr.io/opensphere-platform/opensphere-console:edge';
-  assert.throws(() => validateLock(valid), /not digest-pinned/);
+  const lock = validLock();
+  lock.components.console.image = 'ghcr.io/opensphere-platform/opensphere-console:edge';
+  assert.throws(() => validateLock(lock), /not digest-pinned/);
+});
+
+test('release lock rejects repository substitution', () => {
+  const lock = validLock();
+  lock.components.console.repository = 'other-console';
+  assert.throws(() => validateLock(lock), /repository is not canonical/);
+});
+
+test('release lock rejects mixed source revisions', () => {
+  const lock = validLock();
+  lock.components.auth.sourceRevision = '2'.repeat(40);
+  assert.throws(() => validateLock(lock), /source revision differs/);
+});
+
+test('release lock rejects a tampered release digest', () => {
+  const lock = validLock();
+  lock.releaseDigest = `sha256:${'b'.repeat(64)}`;
+  assert.throws(() => validateLock(lock), /digest does not match/);
+});
+
+test('release lock rejects missing or additional components', () => {
+  const missing = validLock();
+  delete missing.components.cbsGitea;
+  assert.throws(() => validateLock(missing), /component set is not canonical/);
+
+  const extra = validLock();
+  extra.components.unknown = extra.components.console;
+  assert.throws(() => validateLock(extra), /component set is not canonical/);
 });

@@ -18,7 +18,8 @@ export function run(command, args, options = {}) {
 }
 
 export function kubectl(args, options) {
-  return run('kubectl', args, options);
+  const context = process.env.OPENSPHERE_KUBE_CONTEXT;
+  return run('kubectl', context ? ['--context', context, ...args] : args, options);
 }
 
 export function assertKubectl() {

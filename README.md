@@ -1,7 +1,7 @@
 # OpenSphere Setup CLI — Bootstrap Product Specification
 
-> **Status**: Edge MVP implementation in progress  
-> **Version**: 0.1.0-edge.1  
+> **Status**: Channel-aware bootstrap 0.2 implementation and clean-cluster E2E
+> **Version**: 0.2.0-edge.1
 > **Date**: 2026-07-12  
 > **Scope**: 기존 Kubernetes 환경에 OpenSphere Console을 최초 기동하는 독립 실행형 Setup CLI와 공통 bootstrap engine  
 > **Target users**: Kubernetes 전문 지식이 없는 설치 담당자와 자동화 운영자
@@ -10,15 +10,41 @@
 
 - [릴리스 배포 및 버전 선택 구현 계획](./RELEASE-DISTRIBUTION-AND-VERSION-SELECTION.md)
 
-현재 실행 가능한 Edge MVP:
+현재 실행 가능한 channel bootstrap:
 
 ```powershell
 opensphere-setup.cmd resolve --release edge
 opensphere-setup.cmd bootstrap --release edge
+opensphere-setup.cmd bootstrap --release candidate
+opensphere-setup.cmd bootstrap --release stable
 ```
 
-`resolve`는 channel tag를 9개 canonical GHCR image digest로 해석해 release lock을 만들며,
-`bootstrap`은 저장된 digest lock만 Kubernetes에 적용한다. 현재 MVP는 로컬 `node`와 `kubectl`을
+`resolve`는 channel tag를 9개 canonical GHCR image digest로 해석해 release lock을 만든다.
+새 cluster의 `bootstrap`은 요청 channel을 설치 시점에 새로 해석하고, cluster에 installation lock이
+있으면 그 digest만 사용해 resume한다. `--lock`은 명시적으로 제공한 immutable 입력일 때만 사용하며
+로컬 cache를 묵시적으로 재사용하지 않는다. 모든 Kubernetes workload는 digest-pinned image만 받는다.
+
+Setup은 설치 완료 전에 다음을 직접 검증한다.
+
+- 9개 canonical image와 동일 source revision
+- Kubernetes v1.30+, linux/amd64 Ready node, 필수 RBAC, StorageClass
+- 14개 Ready Pod의 정지상태와 release lock/runtime image 일치
+- 4개 Bound PVC, PostgreSQL/pgvector 기능
+- Kanidm 최초 관리자와 Console service credential 실제 조회
+- Console, readiness, OIDC discovery, BFF, 최초 관리자 Wizard endpoint
+- 재실행 시 bootstrap Secret payload 불변성
+
+반복 가능한 파괴적 E2E:
+
+```powershell
+# Docker Desktop Kubernetes 자체를 초기화하고 edge 설치/재실행 검증
+./scripts/e2e-clean-install.ps1 -Channel edge -FullClusterReset
+
+# release lock 직후 Setup을 강제 종료한 뒤 resume 검증
+./scripts/e2e-clean-install.ps1 -Channel edge -InterruptAfterLock
+```
+
+현재 구현은 로컬 `node`와 `kubectl`을
 사용하는 개발 단계이며, 이 문서가 요구하는 단일 실행 파일·내장 Kubernetes client·서명 검증은
 후속 distribution 단계의 완료 gate로 유지한다.
 

@@ -18,6 +18,18 @@ jobs:
           node-version: '24'
       - name: Contract tests
         run: npm test
+      - name: Source and E2E harness syntax
+        shell: pwsh
+        run: |
+          Get-ChildItem src/*.mjs | ForEach-Object { node --check $_.FullName }
+          [void][scriptblock]::Create((Get-Content -Raw scripts/e2e-clean-install.ps1))
+      - name: Live channel resolution contract
+        shell: pwsh
+        run: |
+          foreach ($channel in @('edge', 'candidate', 'stable')) {
+            node src/cli.mjs resolve --release $channel --lock "$env:RUNNER_TEMP/$channel-lock.json"
+            if ($LASTEXITCODE -ne 0) { throw "$channel channel resolution failed" }
+          }
       - name: Certificate generator smoke test
         shell: pwsh
         run: |

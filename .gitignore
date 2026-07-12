@@ -1,4 +1,2 @@
-node_modules/
 .opensphere-setup/
-dist/
-*.log
+.opensphere-e2e/
