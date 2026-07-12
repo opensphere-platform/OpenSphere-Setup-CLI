@@ -72,8 +72,10 @@ async function fetchManifest(lock, spec) {
     const image = lock.components[component].image;
     yaml = yaml.replace(new RegExp(pattern, 'g'), image);
   }
-  if (/^\s*image:\s*(?!ghcr\.io\/opensphere-platform\/[^\s]+@sha256:)/m.test(yaml)) {
-    throw new Error(`Manifest ${spec.path} contains an ungoverned image reference after rendering`);
+  for (const match of yaml.matchAll(/^[ \t]*image:[ \t]+["']?([^"'#\s]+)/gm)) {
+    if (!/^ghcr\.io\/opensphere-platform\/[a-z0-9-]+@sha256:[a-f0-9]{64}$/.test(match[1])) {
+      throw new Error(`Manifest ${spec.path} contains an ungoverned image reference: ${match[1]}`);
+    }
   }
   return yaml;
 }
