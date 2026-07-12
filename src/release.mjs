@@ -48,17 +48,19 @@ async function registryToken(repository) {
 
 export async function resolveImage(repository, channel, { fetchImpl = fetch } = {}) {
   const token = await registryToken(repository);
-  const url = `https://${REGISTRY}/v2/${OWNER}/${repository}/manifests/${channel}`;
-  const response = await fetchImpl(url, {
-    method: 'HEAD',
+  const base = `https://${REGISTRY}/v2/${OWNER}/${repository}`;
+  const headers = {
+    authorization: `Bearer ${token}`,
+    accept: [
+      'application/vnd.oci.image.index.v1+json',
+      'application/vnd.docker.distribution.manifest.list.v2+json',
+      'application/vnd.oci.image.manifest.v1+json',
+      'application/vnd.docker.distribution.manifest.v2+json'
+    ].join(', ')
+  };
+  const response = await fetchImpl(`${base}/manifests/${channel}`, {
     headers: {
-      authorization: `Bearer ${token}`,
-      accept: [
-        'application/vnd.oci.image.index.v1+json',
-        'application/vnd.docker.distribution.manifest.list.v2+json',
-        'application/vnd.oci.image.manifest.v1+json',
-        'application/vnd.docker.distribution.manifest.v2+json'
-      ].join(', ')
+      ...headers
     }
   });
   if (!response.ok) {
@@ -68,7 +70,28 @@ export async function resolveImage(repository, channel, { fetchImpl = fetch } = 
   if (!/^sha256:[a-f0-9]{64}$/.test(digest ?? '')) {
     throw new Error(`Invalid registry digest for ${repository}:${channel}`);
   }
-  return `${REGISTRY}/${OWNER}/${repository}@${digest}`;
+  const document = await response.json();
+  let manifest = document;
+  if (Array.isArray(document.manifests)) {
+    const descriptor = document.manifests.find((entry) =>
+      entry.platform?.os === 'linux' && entry.platform?.architecture === 'amd64'
+    );
+    if (!descriptor?.digest) throw new Error(`${repository}:${channel} has no linux/amd64 manifest`);
+    const platformResponse = await fetchImpl(`${base}/manifests/${descriptor.digest}`, { headers });
+    if (!platformResponse.ok) throw new Error(`Platform manifest unavailable for ${repository}: HTTP ${platformResponse.status}`);
+    manifest = await platformResponse.json();
+  }
+  if (!manifest.config?.digest) throw new Error(`Image config descriptor missing for ${repository}:${channel}`);
+  const configResponse = await fetchImpl(`${base}/blobs/${manifest.config.digest}`, {
+    headers: { authorization: `Bearer ${token}` }
+  });
+  if (!configResponse.ok) throw new Error(`Image config unavailable for ${repository}: HTTP ${configResponse.status}`);
+  const config = await configResponse.json();
+  const sourceRevision = config.config?.Labels?.['io.opensphere.source-revision'];
+  if (!/^[a-f0-9]{40}$/.test(sourceRevision ?? '')) {
+    throw new Error(`Source revision label missing for ${repository}:${channel}`);
+  }
+  return { image: `${REGISTRY}/${OWNER}/${repository}@${digest}`, sourceRevision };
 }
 
 export function validateChannel(channel) {
@@ -93,16 +116,16 @@ export function validateLock(lock) {
 
 export async function resolveChannel(channel) {
   validateChannel(channel);
-  const sourceResponse = await fetch('https://api.github.com/repos/opensphere-platform/OpenSphere-console/commits/main', {
-    headers: { accept: 'application/vnd.github+json', 'user-agent': 'opensphere-setup' }
-  });
-  if (!sourceResponse.ok) throw new Error(`Console source revision lookup failed: HTTP ${sourceResponse.status}`);
-  const sourceRevision = (await sourceResponse.json()).sha;
   const resolved = await Promise.all(Object.entries(COMPONENTS).map(async ([name, repository]) => [
     name,
-    { repository, image: await resolveImage(repository, channel) }
+    { repository, ...await resolveImage(repository, channel) }
   ]));
   const components = Object.fromEntries(resolved);
+  const revisions = new Set(Object.values(components).map((component) => component.sourceRevision));
+  if (revisions.size !== 1) {
+    throw new Error(`Channel ${channel} is not atomic: component source revisions differ`);
+  }
+  const [sourceRevision] = revisions;
   const payload = JSON.stringify({ channel, components });
   const releaseDigest = `sha256:${createHash('sha256').update(payload).digest('hex')}`;
   return {
