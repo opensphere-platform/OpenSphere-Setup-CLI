@@ -8,6 +8,7 @@ const ADMIN = process.env.OPENSPHERE_INITIAL_ADMIN || 'opensphere-admin';
 const ADMIN_DISPLAY = process.env.OPENSPHERE_INITIAL_ADMIN_DISPLAY || 'OpenSphere Administrator';
 const ADMIN_EMAIL = process.env.OPENSPHERE_INITIAL_ADMIN_EMAIL || 'admin@opensphere.local';
 const SKIP_SERVICE_TOKENS = process.env.OPENSPHERE_SKIP_SERVICE_TOKENS === 'true';
+const AUTH_ENVIRONMENT = process.env.OPENSPHERE_AUTH_ENVIRONMENT || 'development';
 
 if (!PASSWORD) throw new Error('KANIDM_ADMIN_PASSWORD is required');
 
@@ -102,11 +103,21 @@ function applySecret(name, token) {
 }
 
 const token = await authenticate();
+const credentialMinimum = AUTH_ENVIRONMENT === 'production' ? 'mfa' : 'any';
+let response = await request(
+  'PUT',
+  '/v1/group/idm_all_persons/_attr/credential_type_minimum',
+  [credentialMinimum],
+  token
+);
+if (response.status >= 300) {
+  throw new Error(`Account policy update failed: HTTP ${response.status} ${response.text}`);
+}
 for (const group of ['opensphere-console-admins', 'opensphere-console-operators', 'opensphere-console-viewers']) {
   await ensureEntry(token, `/v1/group/${group}`, { attrs: { name: [group] } });
 }
 await ensureEntry(token, `/v1/person/${ADMIN}`, { attrs: { name: [ADMIN], displayname: [ADMIN_DISPLAY] } });
-let response = await request('PATCH', `/v1/person/${ADMIN}`, { attrs: { mail: [ADMIN_EMAIL] } }, token);
+response = await request('PATCH', `/v1/person/${ADMIN}`, { attrs: { mail: [ADMIN_EMAIL] } }, token);
 for (let attempt = 0; response.status === 404 && attempt < 10; attempt += 1) {
   await new Promise((resolve) => setTimeout(resolve, 250));
   response = await request('PATCH', `/v1/person/${ADMIN}`, { attrs: { mail: [ADMIN_EMAIL] } }, token);
