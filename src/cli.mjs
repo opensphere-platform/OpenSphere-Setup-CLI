@@ -6,11 +6,16 @@ import { resolveChannel, validateChannel, validateLock } from './release.mjs';
 import { assertKubectl, kubectl } from './process.mjs';
 import { verifyInstallation } from './verify.mjs';
 
-function option(name, fallback) {
-  const index = process.argv.indexOf(name);
-  if (index < 0) return fallback;
+function option(names, fallback) {
+  const aliases = Array.isArray(names) ? names : [names];
+  const matches = aliases
+    .map((name) => ({ name, index: process.argv.indexOf(name) }))
+    .filter(({ index }) => index >= 0);
+  if (matches.length === 0) return fallback;
+  if (matches.length > 1) throw new Error(`${aliases.join('/')} may only be specified once`);
+  const [{ name, index }] = matches;
   const value = process.argv[index + 1];
-  if (!value || value.startsWith('--')) throw new Error(`${name} requires a value`);
+  if (!value || value.startsWith('-')) throw new Error(`${name} requires a value`);
   return value;
 }
 
@@ -45,6 +50,7 @@ function help() {
 Usage:
   opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
   opensphere-setup bootstrap --release <channel> [--lock <verified-lock-file>]
+  opensphere-setup bootstrap -r <channel> [--lock <verified-lock-file>]
       [--context <kube-context>] [--admin-username <name>]
       [--admin-display-name <name>] [--admin-email <email>]
       [--storage-class <name>] [--no-open-browser]
@@ -59,7 +65,7 @@ Kubernetes receives digest-pinned images only.`);
 
 async function main() {
   const command = process.argv[2] ?? 'help';
-  const channel = option('--release', 'stable');
+  const channel = option(['--release', '-r'], 'stable');
   const lockPath = resolve(option('--lock', `.opensphere-setup/${channel}-release-lock.json`));
   const explicitLock = hasOption('--lock');
   const context = option('--context', '');

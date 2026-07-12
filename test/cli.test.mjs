@@ -28,3 +28,23 @@ test('missing option values are rejected', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /--release requires a value/);
 });
+
+test('-r is an alias for --release', () => {
+  const result = spawnSync(process.execPath, [CLI, 'bootstrap', '-r', 'not-a-channel', '--admin-username', 'admin'], {
+    encoding: 'utf8',
+    cwd: ROOT,
+    windowsHide: true
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /Unsupported channel: not-a-channel/);
+});
+
+test('long and short release options cannot conflict', () => {
+  const result = spawnSync(process.execPath, [CLI, 'bootstrap', '--release', 'stable', '-r', 'edge'], {
+    encoding: 'utf8',
+    cwd: ROOT,
+    windowsHide: true
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--release\/-r may only be specified once/);
+});
