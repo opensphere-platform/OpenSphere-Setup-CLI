@@ -104,7 +104,9 @@ export async function bootstrap(lock, { keepTemporaryFiles = false } = {}) {
     ensureTlsSecret('opensphere-console-auth', 'kanidm-tls', cert, key);
     ensureTlsSecret('opensphere-console', 'kanidm-tls', cert, key);
     ensureTlsSecret('opensphere-console', 'shell-tls', cert, key);
-    ensureGenericSecret('opensphere-console', 'opensphere-console-auth-ca', {}, { 'ca.crt': cert });
+    // nginx currently addresses tls.crt while other consumers use the conventional ca.crt.
+    // Publish the same trust anchor under both stable keys during the compatibility window.
+    ensureGenericSecret('opensphere-console', 'opensphere-console-auth-ca', {}, { 'ca.crt': cert, 'tls.crt': cert });
     ensureGenericSecret('opensphere-console', 'opensphere-console-auth-sig', {}, { 'sig.key': sig });
     ensureGenericSecret('opensphere-backbone', 'backbone-postgres', { password: hex(32) });
     ensureGenericSecret('opensphere-backbone', 'backbone-rustfs', {
