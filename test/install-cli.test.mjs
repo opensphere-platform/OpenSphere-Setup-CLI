@@ -1,0 +1,79 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { installConsoleCli } from '../src/install-cli.mjs';
+
+async function fixture({ advertisedBytes, servedBytes = advertisedBytes }) {
+  const digest = createHash('sha256').update(advertisedBytes).digest('hex');
+  const manifest = {
+    name: 'os', ownership: 'console-native', version: '0.4.0',
+    links: [{
+      os: 'windows', arch: 'amd64', href: '/api/cli/os.exe',
+      size: advertisedBytes.byteLength, sha256: digest
+    }]
+  };
+  const server = createServer((request, response) => {
+    if (request.url === '/api/cli/index.json') {
+      response.setHeader('content-type', 'application/json');
+      return response.end(JSON.stringify(manifest));
+    }
+    if (request.url === '/api/cli/os.exe') {
+      response.setHeader('content-type', 'application/octet-stream');
+      return response.end(servedBytes);
+    }
+    response.statusCode = 404;
+    response.end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return {
+    url: `http://127.0.0.1:${server.address().port}`,
+    close: () => new Promise((resolve) => server.close(resolve))
+  };
+}
+
+test('installs the Console-owned artifact only after size and digest verification', async () => {
+  const bytes = Buffer.from('verified-os-cli');
+  const source = await fixture({ advertisedBytes: bytes });
+  const directory = await mkdtemp(join(tmpdir(), 'opensphere-os-install-'));
+  try {
+    const installed = await installConsoleCli({
+      consoleUrl: source.url,
+      installDirectory: directory,
+      platform: 'win32',
+      arch: 'x64',
+      updatePath: false
+    });
+    assert.equal(installed.version, '0.4.0');
+    assert.deepEqual(await readFile(join(directory, 'os.exe')), bytes);
+  } finally {
+    await source.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('digest mismatch fails closed without replacing an existing CLI', async () => {
+  const source = await fixture({
+    advertisedBytes: Buffer.from('expected'),
+    servedBytes: Buffer.from('tampered')
+  });
+  const directory = await mkdtemp(join(tmpdir(), 'opensphere-os-install-'));
+  const current = Buffer.from('current-cli');
+  await writeFile(join(directory, 'os.exe'), current);
+  try {
+    await assert.rejects(() => installConsoleCli({
+      consoleUrl: source.url,
+      installDirectory: directory,
+      platform: 'win32',
+      arch: 'x64',
+      updatePath: false
+    }), /size differs|digest differs/);
+    assert.deepEqual(await readFile(join(directory, 'os.exe')), current);
+  } finally {
+    await source.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

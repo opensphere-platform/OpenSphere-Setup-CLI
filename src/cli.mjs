@@ -2,6 +2,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { bootstrap, existingOpenSphereNamespaces, readInstallationLock } from './bootstrap.mjs';
+import { installConsoleCli } from './install-cli.mjs';
 import { resolveChannel, validateChannel, validateLock } from './release.mjs';
 import { assertKubectl, kubectl } from './process.mjs';
 import { verifyInstallation } from './verify.mjs';
@@ -45,7 +46,7 @@ async function readLock(lockPath) {
 }
 
 function help() {
-  console.log(`OpenSphere Setup CLI 0.2.0-edge.1
+  console.log(`OpenSphere Setup CLI 0.3.0-edge.1
 
 Usage:
   opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
@@ -55,6 +56,8 @@ Usage:
       [--admin-display-name <name>] [--admin-email <email>]
       [--storage-class <name>] [--no-open-browser]
   opensphere-setup verify [--context <kube-context>]
+  opensphere-setup install-cli [--console <url>] [--install-dir <directory>]
+      [--insecure-skip-tls-verify]
   opensphere-setup status
   opensphere-setup version
 
@@ -72,7 +75,18 @@ async function main() {
   if (context) process.env.OPENSPHERE_KUBE_CONTEXT = context;
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
-  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.2.0-edge.1');
+  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.3.0-edge.1');
+
+  if (command === 'install-cli') {
+    const installed = await installConsoleCli({
+      consoleUrl: option('--console', 'https://localhost:8090'),
+      installDirectory: option('--install-dir', undefined),
+      insecureSkipTlsVerify: hasOption('--insecure-skip-tls-verify')
+    });
+    console.log(`[완료] os ${installed.version} 무결성 검증 및 설치`);
+    console.log(`Path: ${installed.target}`);
+    return;
+  }
 
   if (command === 'resolve') {
     validateChannel(channel);
@@ -128,6 +142,15 @@ async function main() {
       storageClass: option('--storage-class', undefined),
       openOnboarding: !hasOption('--no-open-browser')
     });
+    const installedCli = await installConsoleCli({
+      consoleUrl: option('--console', 'https://localhost:8090'),
+      installDirectory: option('--install-dir', undefined),
+      // Bootstrap verifies the local Console endpoint and its artifacts first. The
+      // bootstrap certificate is intentionally self-signed until an operator
+      // supplies the production endpoint certificate.
+      insecureSkipTlsVerify: true
+    });
+    console.log(`[완료] Console-native os ${installedCli.version} 설치 (${installedCli.target})`);
     return;
   }
 

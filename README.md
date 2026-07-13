@@ -1,7 +1,7 @@
 # OpenSphere Setup CLI — Bootstrap Product Specification
 
-> **Status**: Channel-aware bootstrap 0.2 implementation and clean-cluster E2E
-> **Version**: 0.2.0-edge.1
+> **Status**: Channel-aware bootstrap 0.3 implementation and clean-cluster E2E
+> **Version**: 0.3.0-edge.1
 > **Date**: 2026-07-12  
 > **Scope**: 기존 Kubernetes 환경에 OpenSphere Console을 최초 기동하는 독립 실행형 Setup CLI와 공통 bootstrap engine  
 > **Target users**: Kubernetes 전문 지식이 없는 설치 담당자와 자동화 운영자
@@ -23,7 +23,8 @@ opensphere-setup.cmd bootstrap --release stable
 다른 이름을 원하면 최초 설치 시 `--admin-username`, `--admin-display-name`, `--admin-email`을
 지정한다. `admin`, `idm_admin`, `anonymous`는 identity 예약 계정이므로 Setup이 설치 전에 거부한다.
 
-`resolve`는 channel tag를 9개 canonical GHCR image digest로 해석해 release lock을 만든다.
+`resolve`는 channel tag를 9개 canonical GHCR image digest로 해석해 release lock을 만든다. Console-native
+`os` 바이너리는 별도 workload/repository가 아니라 `opensphere-console` 이미지에 무결성 manifest와 함께 내장된다.
 새 cluster의 `bootstrap`은 요청 channel을 설치 시점에 새로 해석하고, cluster에 installation lock이
 있으면 그 digest만 사용해 resume한다. `--lock`은 명시적으로 제공한 immutable 입력일 때만 사용하며
 로컬 cache를 묵시적으로 재사용하지 않는다. 모든 Kubernetes workload는 digest-pinned image만 받는다.
