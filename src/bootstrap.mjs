@@ -31,6 +31,18 @@ const MANIFESTS = [
   { path: 'deploy/opensphere-console.yaml', replacements: [['ghcr.io/opensphere-platform/opensphere-console:[^\\s]+', 'console']] }
 ];
 
+const CORE_ROLLOUTS = [
+  ['opensphere-console-auth', 'statefulset/kanidm', '360s'],
+  ['opensphere-backbone', 'deployment/backbone-postgres', '600s'],
+  ['opensphere-backbone', 'statefulset/backbone-rustfs', '600s'],
+  ['opensphere-backbone', 'deployment/backbone-gitea', '900s'],
+  ['opensphere-console', 'deployment/opensphere-console-auth', '600s'],
+  ['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s'],
+  ['opensphere-console', 'deployment/opensphere-console-backend', '600s'],
+  ['opensphere-backbone', 'deployment/opensphere-console-oaa-gateway', '600s'],
+  ['opensphere-console', 'deployment/opensphere-console', '600s']
+];
+
 function hex(bytes) {
   return randomBytes(bytes).toString('hex');
 }
@@ -84,6 +96,26 @@ async function fetchManifest(lock, spec, storageClass) {
     }
   }
   return yaml;
+}
+
+async function materializeRelease(lock, storageClass) {
+  return Promise.all(MANIFESTS.map(async (spec) => ({
+    path: spec.path,
+    yaml: await fetchManifest(lock, spec, storageClass)
+  })));
+}
+
+function applyRelease(release, label) {
+  for (const manifest of release) {
+    applyYaml(manifest.yaml);
+    console.log(`[${label}] ${manifest.path}`);
+  }
+}
+
+function waitForCoreRollouts() {
+  for (const [namespace, resource, timeout] of CORE_ROLLOUTS) {
+    kubectl(['-n', namespace, 'rollout', 'status', resource, `--timeout=${timeout}`]);
+  }
 }
 
 function recordInstallationState(lock, storageClass, initialAdmin) {
@@ -332,16 +364,9 @@ export async function bootstrap(lock, {
     }
 
     console.log('[대기] CBS와 Main Console rollout');
-    for (const [namespace, resource, timeout] of [
-      ['opensphere-backbone', 'deployment/backbone-postgres', '600s'],
-      ['opensphere-backbone', 'statefulset/backbone-rustfs', '600s'],
-      ['opensphere-backbone', 'deployment/backbone-gitea', '900s'],
-      ['opensphere-console', 'deployment/opensphere-console-auth', '600s'],
-      ['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s'],
-      ['opensphere-console', 'deployment/opensphere-console-backend', '600s'],
-      ['opensphere-backbone', 'deployment/opensphere-console-oaa-gateway', '600s'],
-      ['opensphere-console', 'deployment/opensphere-console', '600s']
-    ]) kubectl(['-n', namespace, 'rollout', 'status', resource, `--timeout=${timeout}`]);
+    // Kanidm was already awaited before administrator provisioning; waiting again
+    // is harmless and keeps bootstrap/upgrade rollout coverage identical.
+    waitForCoreRollouts();
 
     console.log('[검증] release lock, runtime image, Secret, 인증 및 Console endpoint');
     const evidence = await verifyInstallation(lock, { requireZeroRestarts });
@@ -355,5 +380,67 @@ export async function bootstrap(lock, {
     return { lock, evidence, onboardingUrl, temporaryDirectory: keepTemporaryFiles ? work : undefined };
   } finally {
     if (!keepTemporaryFiles) await rm(work, { recursive: true, force: true });
+  }
+}
+
+export async function upgrade(previousLock, targetLock, { storageClass, runtime = {} } = {}) {
+  const operations = {
+    readInstallationLock,
+    readInstallationConfig,
+    readInitialAdmin,
+    materializeRelease,
+    applyRelease,
+    recordInstallationState,
+    waitForCoreRollouts,
+    verifyInstallation,
+    ...runtime
+  };
+  validateLock(previousLock);
+  validateLock(targetLock);
+  const installed = operations.readInstallationLock();
+  if (!installed || installed.releaseDigest !== previousLock.releaseDigest) {
+    throw new Error('Cluster release lock changed before the upgrade transaction started');
+  }
+  if (previousLock.releaseDigest === targetLock.releaseDigest) {
+    const evidence = await operations.verifyInstallation(previousLock, { requireZeroRestarts: false });
+    return { changed: false, lock: previousLock, evidence };
+  }
+
+  const storedConfig = operations.readInstallationConfig();
+  if (!storedConfig) throw new Error('Managed installation has no installation config');
+  if (storageClass && storageClass !== storedConfig.storageClass) {
+    throw new Error(`Installation uses StorageClass ${storedConfig.storageClass}; changing it requires migration`);
+  }
+  const effectiveStorageClass = storedConfig.storageClass;
+  const initialAdmin = operations.readInitialAdmin() ?? storedConfig.initialAdmin;
+  if (!initialAdmin) throw new Error('Managed installation has no initial administrator metadata');
+
+  // Both directions are downloaded and digest-policy checked before the first
+  // cluster mutation. A registry/source outage therefore cannot strand rollback.
+  console.log('[준비] 대상 release와 이전 release rollback manifest 검증');
+  const [targetRelease, rollbackRelease] = await Promise.all([
+    operations.materializeRelease(targetLock, effectiveStorageClass),
+    operations.materializeRelease(previousLock, effectiveStorageClass)
+  ]);
+
+  try {
+    operations.applyRelease(targetRelease, '업그레이드');
+    operations.recordInstallationState(targetLock, effectiveStorageClass, initialAdmin);
+    console.log('[대기] 대상 release rollout');
+    operations.waitForCoreRollouts();
+    const evidence = await operations.verifyInstallation(targetLock, { requireZeroRestarts: false });
+    console.log(`[완료] ${previousLock.releaseDigest} → ${targetLock.releaseDigest}`);
+    return { changed: true, lock: targetLock, evidence };
+  } catch (upgradeError) {
+    console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
+    try {
+      operations.applyRelease(rollbackRelease, '롤백');
+      operations.recordInstallationState(previousLock, effectiveStorageClass, initialAdmin);
+      operations.waitForCoreRollouts();
+      await operations.verifyInstallation(previousLock, { requireZeroRestarts: false });
+    } catch (rollbackError) {
+      throw new Error(`Upgrade failed (${upgradeError.message}); rollback also failed (${rollbackError.message})`);
+    }
+    throw new Error(`Upgrade failed and the previous release was restored: ${upgradeError.message}`);
   }
 }

@@ -17,6 +17,7 @@ opensphere-setup.cmd resolve --release edge
 opensphere-setup.cmd bootstrap --release edge
 opensphere-setup.cmd bootstrap --release candidate
 opensphere-setup.cmd bootstrap --release stable
+opensphere-setup.cmd upgrade --release edge
 ```
 
 기본 최초 관리자 이름은 Kanidm 예약 계정 `admin`과 충돌하지 않는 `opensphere-admin`이다.

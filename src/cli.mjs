@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { bootstrap, existingOpenSphereNamespaces, readInstallationLock } from './bootstrap.mjs';
+import { bootstrap, existingOpenSphereNamespaces, readInstallationLock, upgrade } from './bootstrap.mjs';
 import { installConsoleCli } from './install-cli.mjs';
 import { resolveChannel, validateChannel, validateLock } from './release.mjs';
 import { assertKubectl, kubectl } from './process.mjs';
@@ -55,6 +55,8 @@ Usage:
       [--context <kube-context>] [--admin-username <name>]
       [--admin-display-name <name>] [--admin-email <email>]
       [--storage-class <name>] [--no-open-browser]
+  opensphere-setup upgrade --release <edge|candidate|stable> [--lock <verified-lock-file>]
+      [--context <kube-context>] [--storage-class <name>]
   opensphere-setup verify [--context <kube-context>]
   opensphere-setup install-cli [--console <url>] [--install-dir <directory>]
       [--insecure-skip-tls-verify]
@@ -150,6 +152,32 @@ async function main() {
       // supplies the production endpoint certificate.
       insecureSkipTlsVerify: true
     });
+    console.log(`[완료] Console-native os ${installedCli.version} 설치 (${installedCli.target})`);
+    return;
+  }
+
+  if (command === 'upgrade') {
+    validateChannel(channel);
+    assertKubectl();
+    const installed = readInstallationLock();
+    if (!installed) throw new Error('No managed OpenSphere installation lock was found');
+    let target;
+    if (explicitLock) {
+      target = await readLock(lockPath);
+      if (target.channel !== channel) throw new Error(`Supplied lock channel ${target.channel} differs from requested channel ${channel}`);
+      console.log(`[사용] 명시적 target release lock ${target.releaseDigest}`);
+    } else {
+      target = await resolveChannel(channel);
+      await writeLock(lockPath, target);
+      console.log(`[완료] ${channel} target을 ${target.releaseDigest}로 잠금`);
+    }
+    const result = await upgrade(installed, target, { storageClass: option('--storage-class', undefined) });
+    const installedCli = await installConsoleCli({
+      consoleUrl: option('--console', 'https://localhost:8090'),
+      installDirectory: option('--install-dir', undefined),
+      insecureSkipTlsVerify: true
+    });
+    console.log(result.changed ? '[완료] release upgrade 트랜잭션 검증' : '[재사용] 이미 요청 release가 설치됨');
     console.log(`[완료] Console-native os ${installedCli.version} 설치 (${installedCli.target})`);
     return;
   }
