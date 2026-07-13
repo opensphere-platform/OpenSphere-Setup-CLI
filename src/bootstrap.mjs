@@ -112,9 +112,39 @@ function applyRelease(release, label) {
   }
 }
 
+export function terminalPodError(pods) {
+  const immediate = new Set(['CreateContainerConfigError', 'CreateContainerError', 'InvalidImageName']);
+  for (const pod of pods.items ?? []) {
+    for (const status of pod.status?.containerStatuses ?? []) {
+      const waiting = status.state?.waiting;
+      if (waiting && immediate.has(waiting.reason)) {
+        return `${pod.metadata?.name}/${status.name}: ${waiting.reason}${waiting.message ? ` (${waiting.message})` : ''}`;
+      }
+    }
+  }
+  return null;
+}
+
 function waitForCoreRollouts() {
   for (const [namespace, resource, timeout] of CORE_ROLLOUTS) {
-    kubectl(['-n', namespace, 'rollout', 'status', resource, `--timeout=${timeout}`]);
+    const seconds = Number.parseInt(timeout, 10);
+    const deadline = Date.now() + (seconds * 1000);
+    while (Date.now() < deadline) {
+      try {
+        kubectl(['-n', namespace, 'rollout', 'status', resource, '--timeout=15s'], { capture: true });
+        break;
+      } catch (rolloutError) {
+        const workload = JSON.parse(kubectl(['-n', namespace, 'get', resource, '-o', 'json'], { capture: true }));
+        const labels = workload.spec?.selector?.matchLabels ?? {};
+        const selector = Object.entries(labels).map(([key, value]) => `${key}=${value}`).join(',');
+        const pods = JSON.parse(kubectl([
+          '-n', namespace, 'get', 'pods', ...(selector ? ['-l', selector] : []), '-o', 'json'
+        ], { capture: true }));
+        const terminal = terminalPodError(pods);
+        if (terminal) throw new Error(`${resource} has a terminal pod error: ${terminal}`);
+        if (Date.now() >= deadline) throw rolloutError;
+      }
+    }
   }
 }
 

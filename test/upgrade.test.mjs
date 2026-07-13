@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { upgrade } from '../src/bootstrap.mjs';
+import { terminalPodError, upgrade } from '../src/bootstrap.mjs';
 import {
   calculateReleaseDigest,
   COMPONENTS,
@@ -82,4 +82,19 @@ test('failed target verification restores and verifies the previous release', as
     'wait',
     `verify:${previous.sourceRevision}`
   ]);
+});
+
+test('terminal pod configuration errors are detected before rollout timeout', () => {
+  assert.match(terminalPodError({
+    items: [{
+      metadata: { name: 'auth-abc' },
+      status: { containerStatuses: [{
+        name: 'auth',
+        state: { waiting: { reason: 'CreateContainerConfigError', message: 'numeric uid required' } }
+      }] }
+    }]
+  }), /auth-abc\/auth: CreateContainerConfigError.*numeric uid required/);
+  assert.equal(terminalPodError({
+    items: [{ status: { containerStatuses: [{ state: { waiting: { reason: 'ContainerCreating' } } }] } }]
+  }), null);
 });
