@@ -141,4 +141,64 @@ for (const path of [
   expect(response, 200, `authenticated Console API ${path}`);
 }
 
-console.log('[E2E] First-administrator Wizard, OIDC login, and core management APIs passed');
+// The administrator CLI uses persistent P-256 device trust, not a repeatedly
+// minted bearer token. Exercise the complete enrollment, short-session and
+// immediate-revocation path against the freshly installed Console.
+const { privateKey, publicKey } = crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+const publicJwk = publicKey.export({ format: 'jwk' });
+const jsonHeaders = { 'content-type': 'application/json', accept: 'application/json' };
+response = expect(await request('POST', '/bff/cli/enrollments', JSON.stringify({
+  label: 'setup-e2e-device',
+  publicJwk
+}), jsonHeaders), 201, 'create CLI device enrollment');
+const enrollment = JSON.parse(response.text);
+
+response = expect(await request(
+  'GET',
+  `/bff/cli/enrollments/${enrollment.enrollmentId}?code=${encodeURIComponent(enrollment.userCode)}`,
+  undefined,
+  { authorization: `Bearer ${idToken}`, accept: 'application/json' }
+), 200, 'inspect CLI device enrollment');
+response = expect(await request(
+  'POST',
+  `/bff/cli/enrollments/${enrollment.enrollmentId}/approve`,
+  JSON.stringify({ userCode: enrollment.userCode }),
+  { ...jsonHeaders, authorization: `Bearer ${idToken}` }
+), 200, 'approve CLI device enrollment');
+
+response = expect(await request(
+  'POST',
+  `/bff/cli/enrollments/${enrollment.enrollmentId}/poll`,
+  JSON.stringify({ pollToken: enrollment.pollToken }),
+  jsonHeaders
+), 200, 'poll approved CLI device enrollment');
+const device = JSON.parse(response.text);
+
+response = expect(await request('POST', '/bff/cli/challenge', JSON.stringify({ deviceId: device.deviceId }), jsonHeaders), 201, 'create CLI device challenge');
+const cliChallenge = JSON.parse(response.text);
+const challengeMessage = `opensphere-cli-session-v1\n${device.deviceId}\n${cliChallenge.challengeId}\n${cliChallenge.nonce}`;
+// Match the production Go CLI's ecdsa.SignASN1 wire format. Node's default
+// ECDSA encoding is ASN.1 DER; the Auth BFF verifies that same representation.
+const signature = crypto.sign('SHA256', Buffer.from(challengeMessage), privateKey).toString('base64url');
+response = expect(await request('POST', '/bff/cli/session', JSON.stringify({
+  deviceId: device.deviceId,
+  challengeId: cliChallenge.challengeId,
+  signature
+}), jsonHeaders), 200, 'exchange device proof for short CLI session');
+const cliSession = JSON.parse(response.text).accessToken;
+
+response = expect(await request('GET', '/api/admin/backbone/status', undefined, {
+  authorization: `Bearer ${cliSession}`,
+  accept: 'application/json'
+}), 200, 'use short CLI session on managed API');
+response = expect(await request('DELETE', `/bff/cli/devices/${device.deviceId}`, undefined, {
+  authorization: `Bearer ${idToken}`,
+  accept: 'application/json'
+}), 200, 'revoke CLI device');
+response = expect(await request('POST', '/bff/token/introspect', new URLSearchParams({ token: cliSession }).toString(), {
+  'content-type': 'application/x-www-form-urlencoded',
+  accept: 'application/json'
+}), 200, 'introspect revoked CLI session');
+if (JSON.parse(response.text).active !== false) throw new Error('Revoked CLI device session remained active');
+
+console.log('[E2E] First-administrator Wizard, OIDC login, core management APIs, and CLI device trust passed');
