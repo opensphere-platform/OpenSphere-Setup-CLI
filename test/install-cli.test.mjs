@@ -77,3 +77,26 @@ test('digest mismatch fails closed without replacing an existing CLI', async () 
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test('a verified reinstall replaces an existing CLI without a fixed backup collision', async () => {
+  const source = await fixture({ advertisedBytes: Buffer.from('new-verified-cli') });
+  const directory = await mkdtemp(join(tmpdir(), 'opensphere-os-install-'));
+  await writeFile(join(directory, 'os.exe'), Buffer.from('old-cli'));
+  // This legacy fixed backup name reproduced the Windows EPERM failure in the
+  // previous installer. The new transaction must not touch or reuse it.
+  await writeFile(join(directory, 'os.exe.previous'), Buffer.from('legacy-backup'));
+  try {
+    await installConsoleCli({
+      consoleUrl: source.url,
+      installDirectory: directory,
+      platform: 'win32',
+      arch: 'x64',
+      updatePath: false
+    });
+    assert.deepEqual(await readFile(join(directory, 'os.exe')), Buffer.from('new-verified-cli'));
+    assert.deepEqual(await readFile(join(directory, 'os.exe.previous')), Buffer.from('legacy-backup'));
+  } finally {
+    await source.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});

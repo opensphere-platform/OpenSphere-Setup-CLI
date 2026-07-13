@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import http from 'node:http';
 import https from 'node:https';
-import { chmod, mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
@@ -84,11 +84,15 @@ function ensureUserPath(directory) {
 }
 
 async function replaceAtomically(target, bytes) {
-  await mkdir(resolve(target, '..'), { recursive: true });
-  const temporary = join(resolve(target, '..'), `.${basename(target)}.${process.pid}.${Date.now()}.tmp`);
-  const backup = `${target}.previous`;
+  const directory = resolve(target, '..');
+  const filename = basename(target);
+  await mkdir(directory, { recursive: true });
+  const nonce = `${process.pid}.${Date.now()}`;
+  const temporary = join(directory, `.${filename}.${nonce}.tmp`);
+  // A running Windows executable can keep its old file handle locked after a
+  // successful rename. Never reuse or synchronously delete a fixed backup name.
+  const backup = join(directory, `.${filename}.previous.${nonce}`);
   await writeFile(temporary, bytes, { mode: 0o755 });
-  await rm(backup, { force: true });
   let hadTarget = false;
   try {
     await rename(target, backup);
@@ -102,7 +106,14 @@ async function replaceAtomically(target, bytes) {
   try {
     await rename(temporary, target);
     if (process.platform !== 'win32') await chmod(target, 0o755);
-    await rm(backup, { force: true });
+    // Replacement is already committed. Locked stale backups are harmless and
+    // are retried on later installs instead of turning a successful upgrade into
+    // a false failure.
+    for (const entry of await readdir(directory)) {
+      if (entry.startsWith(`.${filename}.previous.`)) {
+        await rm(join(directory, entry), { force: true }).catch(() => {});
+      }
+    }
   } catch (error) {
     await rm(temporary, { force: true });
     if (hadTarget) await rename(backup, target).catch(() => {});
