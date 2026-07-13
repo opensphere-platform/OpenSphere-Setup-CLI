@@ -134,7 +134,8 @@ for (const path of [
   '/api/admin/plugins/catalog',
   '/api/admin/backbone/status',
   '/api/admin/observability/status',
-  '/api/admin/plugins/events'
+  '/api/admin/plugins/events',
+  '/api/proxy/apis/backbone.opensphere.io/v1alpha1/backboneclaims'
 ]) {
   response = await request('GET', path, undefined, { authorization: `Bearer ${idToken}`, accept: 'application/json' });
   expect(response, 200, `authenticated Console API ${path}`);
