@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, X509Certificate } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -15,6 +15,8 @@ import { normalizeConsoleUrl } from './console-url.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RAW_ROOT = 'https://raw.githubusercontent.com/opensphere-platform/OpenSphere-console';
+const RUSTFS_ENDPOINT = 'https://backbone-rustfs.opensphere-backbone.svc.cluster.local:9000';
+const RUSTFS_DNS_NAME = 'backbone-rustfs.opensphere-backbone.svc.cluster.local';
 
 const MANIFESTS = [
   { path: 'backend/identity/kanidm-image/deploy.yaml', replacements: [['ghcr.io/opensphere-platform/opensphere-console-kanidm:[^\\s]+', 'kanidm']] },
@@ -78,16 +80,17 @@ function ensureGenericSecret(namespace, name, literals = {}, files = {}) {
   })}\n`);
 }
 
-function ensureTlsSecret(namespace, name, cert, key) {
+function ensureTlsSecret(namespace, name, cert, key, { replace = false } = {}) {
   try {
     kubectl(['-n', namespace, 'get', 'secret', name], { capture: true });
-    return;
+    if (!replace) return false;
   } catch {}
   const yaml = kubectl([
     '-n', namespace, 'create', 'secret', 'tls', name,
     `--cert=${cert}`, `--key=${key}`, '--dry-run=client', '-o', 'yaml'
   ], { capture: true });
   applyYaml(yaml);
+  return true;
 }
 
 // Endpoint and protocol are release configuration, not a credential. Keep the
@@ -96,11 +99,93 @@ function ensureTlsSecret(namespace, name, cert, key) {
 function setSecretLiteral(namespace, name, key, value) {
   const existing = JSON.parse(kubectl(['-n', namespace, 'get', 'secret', name, '-o', 'json'], { capture: true }));
   const encoded = Buffer.from(String(value)).toString('base64');
-  if (existing.data?.[key] === encoded) return;
+  if (existing.data?.[key] === encoded) return false;
   applyYaml(`${JSON.stringify({
     apiVersion: 'v1', kind: 'Secret', metadata: { name, namespace }, type: existing.type || 'Opaque',
     data: { ...(existing.data || {}), [key]: encoded }
   })}\n`);
+  return true;
+}
+
+function readSecretSnapshot(namespace, name) {
+  try {
+    const secret = JSON.parse(kubectl(['-n', namespace, 'get', 'secret', name, '-o', 'json'], { capture: true }));
+    return { namespace, name, exists: true, type: secret.type || 'Opaque', data: secret.data || {} };
+  } catch {
+    return { namespace, name, exists: false };
+  }
+}
+
+function restoreSecretSnapshot(snapshot) {
+  if (!snapshot.exists) {
+    kubectl(['-n', snapshot.namespace, 'delete', 'secret', snapshot.name, '--ignore-not-found']);
+    return;
+  }
+  applyYaml(`${JSON.stringify({
+    apiVersion: 'v1', kind: 'Secret', metadata: { name: snapshot.name, namespace: snapshot.namespace },
+    type: snapshot.type, data: snapshot.data
+  })}\n`);
+}
+
+function rustfsTlsNeedsUpgrade() {
+  try {
+    const secret = JSON.parse(kubectl(['-n', 'opensphere-backbone', 'get', 'secret', 'backbone-rustfs-tls', '-o', 'json'], { capture: true }));
+    const pem = Buffer.from(secret.data?.['tls.crt'] ?? '', 'base64');
+    const certificate = new X509Certificate(pem);
+    return !certificate.subjectAltName.includes(`DNS:${RUSTFS_DNS_NAME}`);
+  } catch {
+    return true;
+  }
+}
+
+function appendCertificateAuthority(namespace, name, caPath) {
+  const secret = JSON.parse(kubectl(['-n', namespace, 'get', 'secret', name, '-o', 'json'], { capture: true }));
+  const existing = Buffer.from(secret.data?.['ca.crt'] ?? '', 'base64').toString('utf8').trim();
+  const incoming = readFileSync(caPath, 'utf8').trim();
+  if (existing.includes(incoming)) return false;
+  const bundled = [existing, incoming].filter(Boolean).join('\n');
+  applyYaml(`${JSON.stringify({
+    apiVersion: 'v1', kind: 'Secret', metadata: { name, namespace }, type: secret.type || 'Opaque',
+    data: { ...(secret.data || {}), 'ca.crt': Buffer.from(`${bundled}\n`).toString('base64') }
+  })}\n`);
+  return true;
+}
+
+// A legacy installation has no RustFS TLS secret. Add a dedicated leaf and
+// append only its new CA to the existing trust bundle. This avoids replacing
+// the current PostgreSQL/Kanidm trust root before the target release is proven.
+async function prepareUpgradePrerequisites(consoleUrl) {
+  const snapshots = [
+    readSecretSnapshot('opensphere-backbone', 'backbone-rustfs'),
+    readSecretSnapshot('opensphere-backbone', 'backbone-postgres'),
+    readSecretSnapshot('opensphere-backbone', 'backbone-rustfs-tls')
+  ];
+  let changed = setSecretLiteral('opensphere-backbone', 'backbone-rustfs', 'endpoint', RUSTFS_ENDPOINT);
+  if (!rustfsTlsNeedsUpgrade()) {
+    return { changed, restore: () => snapshots.slice().reverse().forEach(restoreSecretSnapshot) };
+  }
+
+  let work;
+  try {
+    work = await mkdtemp(join(tmpdir(), 'opensphere-rustfs-tls-'));
+    run('pwsh', [
+      '-NoProfile', '-File', join(HERE, 'New-Certificates.ps1'), '-OutputDirectory', work,
+      '-DnsNames', new URL(normalizeConsoleUrl(consoleUrl)).hostname
+    ]);
+    const cert = join(work, 'tls.crt');
+    const key = join(work, 'tls.key');
+    const ca = join(work, 'ca.crt');
+    ensureGenericSecret('opensphere-backbone', 'backbone-postgres', {}, { 'ca.crt': ca });
+    ensureTlsSecret('opensphere-backbone', 'backbone-rustfs-tls', cert, key, { replace: true });
+    appendCertificateAuthority('opensphere-backbone', 'backbone-postgres', ca);
+    changed = true;
+    return { changed, restore: () => snapshots.slice().reverse().forEach(restoreSecretSnapshot) };
+  } catch (error) {
+    snapshots.slice().reverse().forEach(restoreSecretSnapshot);
+    throw error;
+  } finally {
+    if (work) await rm(work, { recursive: true, force: true });
+  }
 }
 
 function validateAuthEnvironment(value) {
@@ -494,9 +579,9 @@ export async function bootstrap(lock, {
     ensureGenericSecret('opensphere-backbone', 'backbone-rustfs', {
       access_key: `os${hex(10)}`,
       secret_key: hex(32),
-      endpoint: 'https://backbone-rustfs.opensphere-backbone.svc.cluster.local:9000'
+      endpoint: RUSTFS_ENDPOINT
     });
-    setSecretLiteral('opensphere-backbone', 'backbone-rustfs', 'endpoint', 'https://backbone-rustfs.opensphere-backbone.svc.cluster.local:9000');
+    setSecretLiteral('opensphere-backbone', 'backbone-rustfs', 'endpoint', RUSTFS_ENDPOINT);
     ensureGenericSecret('opensphere-backbone', 'backbone-gitea', {
       db_password: hex(32),
       admin_user: 'opensphere-admin',
@@ -559,7 +644,9 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     materializeRelease,
     applyRelease,
     recordInstallationState,
+    prepareUpgradePrerequisites,
     waitForCoreRollouts,
+    runBackboneRecoveryDrill,
     verifyInstallation,
     ...runtime
   };
@@ -596,17 +683,25 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     operations.materializeRelease(previousLock, effectiveStorageClass, effectiveConsoleUrl, effectiveAuthEnvironment)
   ]);
 
+  let prerequisites;
   try {
+    prerequisites = await operations.prepareUpgradePrerequisites(effectiveConsoleUrl);
+    if (prerequisites.changed) console.log('[준비] 기존 설치에 RustFS TLS와 CA trust bundle 추가');
     operations.applyRelease(targetRelease, '업그레이드');
     operations.recordInstallationState(targetLock, effectiveStorageClass, initialAdmin, effectiveConsoleUrl, effectiveAuthEnvironment);
     console.log('[대기] 대상 release rollout');
     operations.waitForCoreRollouts();
-    const evidence = await operations.verifyInstallation(targetLock, { requireZeroRestarts: false, consoleUrl: effectiveConsoleUrl });
+    console.log('[검증] Backbone PostgreSQL → RustFS backup 및 비파괴 restore drill');
+    const recoveryDrill = operations.runBackboneRecoveryDrill();
+    const evidence = await operations.verifyInstallation(targetLock, {
+      requireZeroRestarts: false, consoleUrl: effectiveConsoleUrl, requireRecoveryDrill: Boolean(recoveryDrill)
+    });
     console.log(`[완료] ${previousLock.releaseDigest} → ${targetLock.releaseDigest}`);
     return { changed: true, lock: targetLock, consoleUrl: effectiveConsoleUrl, evidence };
   } catch (upgradeError) {
     console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
     try {
+      if (typeof prerequisites?.restore === 'function') prerequisites.restore();
       operations.applyRelease(rollbackRelease, '롤백');
       operations.recordInstallationState(previousLock, effectiveStorageClass, initialAdmin, effectiveConsoleUrl, effectiveAuthEnvironment);
       operations.waitForCoreRollouts();

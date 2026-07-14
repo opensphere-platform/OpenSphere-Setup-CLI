@@ -45,7 +45,12 @@ function runtime(previous, events, { failTarget = false } = {}) {
     },
     applyRelease: (release, label) => events.push(`apply:${label}:${release[0].yaml}`),
     recordInstallationState: (release) => events.push(`record:${release.sourceRevision}`),
+    prepareUpgradePrerequisites: async () => {
+      events.push('prepare-prerequisites');
+      return { changed: true, restore: () => events.push('restore-prerequisites') };
+    },
     waitForCoreRollouts: () => events.push('wait'),
+    runBackboneRecoveryDrill: () => events.push('recovery-drill'),
     verifyInstallation: async (release) => {
       events.push(`verify:${release.sourceRevision}`);
       if (failTarget && release.sourceRevision !== previous.sourceRevision) throw new Error('target is unhealthy');
@@ -63,9 +68,11 @@ test('upgrade prefetches both releases before applying and verifies the target',
   assert.deepEqual(events, [
     `materialize:${target.sourceRevision}`,
     `materialize:${previous.sourceRevision}`,
+    'prepare-prerequisites',
     `apply:업그레이드:${target.sourceRevision}`,
     `record:${target.sourceRevision}`,
     'wait',
+    'recovery-drill',
     `verify:${target.sourceRevision}`
   ]);
 });
@@ -78,7 +85,8 @@ test('failed target verification restores and verifies the previous release', as
     upgrade(previous, target, { runtime: runtime(previous, events, { failTarget: true }) }),
     /previous release was restored: target is unhealthy/
   );
-  assert.deepEqual(events.slice(-4), [
+  assert.deepEqual(events.slice(-5), [
+    'restore-prerequisites',
     `apply:롤백:${previous.sourceRevision}`,
     `record:${previous.sourceRevision}`,
     'wait',
