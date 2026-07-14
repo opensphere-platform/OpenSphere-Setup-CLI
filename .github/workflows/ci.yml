@@ -13,6 +13,8 @@ permissions:
 jobs:
   test:
     runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -46,6 +48,8 @@ jobs:
     # installation before a public Console ingress/DNS endpoint exists.
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

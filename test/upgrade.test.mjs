@@ -59,6 +59,7 @@ function runtime(previous, events, { failTarget = false } = {}) {
     waitForCoreRollouts: () => events.push('wait'),
     waitForBackboneBoundaryReconcile: () => events.push('boundary-reconcile'),
     runBackboneRecoveryDrill: () => events.push('recovery-drill'),
+    preflight: () => ({ storageClass: 'hostpath' }),
     verifyInstallation: async (release) => {
       events.push(`verify:${release.sourceRevision}`);
       if (failTarget && release.sourceRevision !== previous.sourceRevision) throw new Error('target is unhealthy');

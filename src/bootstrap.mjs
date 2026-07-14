@@ -855,6 +855,7 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     waitForBackboneBoundaryReconcile,
     runBackboneRecoveryDrill,
     verifyInstallation,
+    preflight,
     ...runtime
   };
   validateLock(previousLock);
@@ -883,7 +884,7 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
   }
 
   const effectiveStorageClass = storedConfig.storageClass;
-  preflight({ storageClass: effectiveStorageClass, channel: targetLock.channel });
+  operations.preflight({ storageClass: effectiveStorageClass, channel: targetLock.channel });
   const requestedBackupTarget = backupTargetSecret ? parseBackupTargetSecretRef(backupTargetSecret) : undefined;
   const initialAdmin = operations.readInitialAdmin() ?? storedConfig.initialAdmin;
   if (!initialAdmin) throw new Error('Managed installation has no initial administrator metadata');

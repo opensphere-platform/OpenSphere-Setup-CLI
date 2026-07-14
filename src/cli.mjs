@@ -113,13 +113,15 @@ async function main() {
   if (command === 'bootstrap') {
     validateChannel(channel);
     const selectedAuthEnvironment = selectAuthEnvironment(channel, authEnvironment);
-    const migrated = await migrateLegacyInstallationLock();
-    if (migrated) console.log(`[마이그레이션] 기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
     const initialAdmin = validateInitialAdmin({
       username: option('--admin-username', 'opensphere-admin'),
       displayName: option('--admin-display-name', 'OpenSphere Administrator'),
       email: option('--admin-email', 'admin@opensphere.local')
     });
+    // Validate user input before touching the cluster. Besides providing a
+    // clearer error, this keeps invalid bootstrap attempts side-effect free.
+    const migrated = await migrateLegacyInstallationLock();
+    if (migrated) console.log(`[마이그레이션] 기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
     assertKubectl();
     let lock;
     const installed = readInstallationLock();
