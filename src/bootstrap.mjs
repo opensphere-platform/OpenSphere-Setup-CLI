@@ -372,7 +372,7 @@ async function fetchManifest(lock, spec, storageClass, consoleUrl = 'https://loc
 }
 
 async function materializeRelease(lock, storageClass, consoleUrl, authEnvironment = 'development') {
-  return Promise.all(MANIFESTS.map(async (spec) => ({
+  return Promise.all(BASE_MANIFESTS.map(async (spec) => ({
     path: spec.path,
     yaml: await fetchManifest(lock, spec, storageClass, consoleUrl, authEnvironment)
   })));
