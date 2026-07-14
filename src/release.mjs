@@ -117,6 +117,14 @@ export function calculateReleaseDigest(channel, components) {
   return `sha256:${createHash('sha256').update(payload).digest('hex')}`;
 }
 
+// Releases created before the attestation trust root existed used this digest
+// shape. It is kept only to prove an already-installed lock was not altered
+// before its images are re-verified and the lock is migrated below.
+export function calculateLegacyReleaseDigest(channel, components) {
+  const payload = JSON.stringify({ channel, components });
+  return `sha256:${createHash('sha256').update(payload).digest('hex')}`;
+}
+
 function canonicalImage(image) {
   return new RegExp(`^${REGISTRY}/${OWNER}/opensphere-[a-z0-9-]+@sha256:[a-f0-9]{64}$`).test(image ?? '');
 }
@@ -148,6 +156,25 @@ export async function verifyReleaseProvenance(lock, { verifyImage = verifyImageP
   validateLock(lock);
   await Promise.all(Object.values(lock.components).map(({ image }) => verifyImage(image)));
   return { ...lock, provenanceVerifiedAt: new Date().toISOString() };
+}
+
+// Legacy locks must never be accepted merely because they predate the trust
+// field. Their original digest is checked first; callers must then verify every
+// component attestation before persisting the returned canonical lock.
+export function migrateLegacyReleaseLock(lock) {
+  if (!lock || Object.hasOwn(lock, 'trust')) {
+    throw new Error('Only a pre-attestation release lock can be migrated');
+  }
+  const expectedLegacyDigest = calculateLegacyReleaseDigest(lock.channel, lock.components);
+  if (lock.releaseDigest !== expectedLegacyDigest) {
+    throw new Error('Legacy release lock digest does not match its component set');
+  }
+  const migrated = {
+    ...lock,
+    trust: RELEASE_TRUST,
+    releaseDigest: calculateReleaseDigest(lock.channel, lock.components)
+  };
+  return validateLock(migrated);
 }
 
 export function validateLock(lock) {

@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { kubectl, run } from './process.mjs';
 import { preflight } from './preflight.mjs';
 import { fetchWithRetry } from './http.mjs';
-import { validateLock } from './release.mjs';
+import { migrateLegacyReleaseLock, validateLock, verifyReleaseProvenance } from './release.mjs';
 import { verifyInstallation } from './verify.mjs';
 import { normalizeConsoleUrl } from './console-url.mjs';
 
@@ -252,7 +252,7 @@ function readInstallationConfig() {
   return JSON.parse(raw);
 }
 
-export function readInstallationLock() {
+function readStoredInstallationLock() {
   const namespace = kubectl(['get', 'namespace', 'opensphere-console', '--ignore-not-found', '-o', 'name'], { capture: true });
   if (!namespace) return null;
   const json = kubectl([
@@ -263,7 +263,36 @@ export function readInstallationLock() {
   const object = JSON.parse(json);
   const raw = object.data?.['release.json'];
   if (!raw) throw new Error('Existing installation lock has no release.json');
-  return validateLock(JSON.parse(raw));
+  return JSON.parse(raw);
+}
+
+export function readInstallationLock() {
+  const lock = readStoredInstallationLock();
+  return lock ? validateLock(lock) : null;
+}
+
+// Persist a canonical trust root only after every already-installed legacy
+// image has passed the same GitHub provenance check used for new channels.
+export async function migrateLegacyInstallationLock() {
+  const legacy = readStoredInstallationLock();
+  if (!legacy || Object.hasOwn(legacy, 'trust')) return null;
+
+  const migrated = migrateLegacyReleaseLock(legacy);
+  await verifyReleaseProvenance(migrated);
+
+  const config = readInstallationConfig();
+  const initialAdmin = readInitialAdmin() ?? config?.initialAdmin;
+  if (!config || !initialAdmin) {
+    throw new Error('Legacy installation has incomplete metadata; trust migration is refused');
+  }
+  recordInstallationState(
+    migrated,
+    config.storageClass,
+    initialAdmin,
+    config.consoleUrl ?? 'https://localhost:8090',
+    config.authEnvironment ?? 'development'
+  );
+  return migrated;
 }
 
 export function existingOpenSphereNamespaces() {

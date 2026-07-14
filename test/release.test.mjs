@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   calculateReleaseDigest,
+  calculateLegacyReleaseDigest,
   COMPONENTS,
+  migrateLegacyReleaseLock,
   RELEASE_API_VERSION,
   RELEASE_TRUST,
   SOURCE,
@@ -93,6 +95,25 @@ test('release lock rejects an absent or substituted trust root', () => {
   const substituted = validLock();
   substituted.trust = { ...RELEASE_TRUST, sourceRef: 'refs/heads/feature/untrusted' };
   assert.throws(() => validateLock(substituted), /trust root is not canonical/);
+});
+
+test('a legacy lock receives the trust root only after its original digest is proven', () => {
+  const legacy = validLock();
+  delete legacy.trust;
+  legacy.releaseDigest = calculateLegacyReleaseDigest(legacy.channel, legacy.components);
+
+  const migrated = migrateLegacyReleaseLock(legacy);
+  assert.equal(migrated.trust, RELEASE_TRUST);
+  assert.equal(migrated.releaseDigest, calculateReleaseDigest(migrated.channel, migrated.components));
+  assert.doesNotThrow(() => validateLock(migrated));
+  assert.equal(Object.hasOwn(legacy, 'trust'), false);
+});
+
+test('a tampered legacy lock cannot be upgraded into the trusted format', () => {
+  const legacy = validLock();
+  delete legacy.trust;
+  legacy.releaseDigest = `sha256:${'c'.repeat(64)}`;
+  assert.throws(() => migrateLegacyReleaseLock(legacy), /Legacy release lock digest/);
 });
 
 test('image provenance verification binds GH attestation to the release workflow', () => {
