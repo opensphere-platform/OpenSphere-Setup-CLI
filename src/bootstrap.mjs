@@ -52,7 +52,7 @@ export const MANAGED_CLUSTER_RBAC = Object.freeze([
   'clusterrole/opensphere-console-oaa-gateway-controlled-operator'
 ]);
 
-const MANIFESTS = [
+export const BASE_MANIFESTS = Object.freeze([
   { path: 'backend/identity/kanidm-image/deploy.yaml', replacements: [['ghcr.io/opensphere-platform/opensphere-console-kanidm:[^\\s]+', 'kanidm']] },
   { path: 'backend/backbone/bootstrap/backbone.yaml', replacements: [
     ['opensphere-backbone-postgres@sha256:[a-f0-9]+', 'cbsPostgresql'],
@@ -66,7 +66,7 @@ const MANIFESTS = [
   { path: 'backend/opensphere-console-backend/deploy.yaml', replacements: [['ghcr.io/opensphere-platform/opensphere-console-backend:[^\\s]+', 'backend']] },
   { path: 'backend/identity/opensphere-console-auth/deploy.yaml', replacements: [['ghcr.io/opensphere-platform/opensphere-console-auth:[^\\s]+', 'auth']] },
   { path: 'deploy/opensphere-console.yaml', replacements: [['ghcr.io/opensphere-platform/opensphere-console:[^\\s]+', 'console']] }
-];
+]);
 
 const CORE_ROLLOUTS = [
   ['opensphere-console-auth', 'statefulset/kanidm', '360s'],
@@ -949,7 +949,7 @@ export async function bootstrap(lock, {
     console.log(`[완료] 감사 백업 대상 준비 (${backupTarget.mode})`);
     console.log('[완료] Namespace와 bootstrap secret 준비');
 
-    for (const spec of MANIFESTS) {
+    for (const spec of BASE_MANIFESTS) {
       const yaml = await fetchManifest(lock, spec, cluster.storageClass, effectiveConsoleUrl, effectiveAuthEnvironment);
       const file = join(work, spec.path.replaceAll('/', '-'));
       await writeFile(file, yaml, 'utf8');
