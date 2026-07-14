@@ -10,7 +10,8 @@ test('bootstrap service tokens are bounded and carry rotation metadata', async (
   const source = await readFile(join(ROOT, 'src', 'provision-admin.mjs'), 'utf8');
   assert.match(source, /OPENSPHERE_SERVICE_TOKEN_TTL_DAYS/);
   assert.match(source, /SERVICE_TOKEN_TTL_DAYS < 1 \|\| SERVICE_TOKEN_TTL_DAYS > 90/);
-  assert.match(source, /expiry: expiresAt/);
+  assert.match(source, /const expiry = Math\.floor\(expiresAt\.getTime\(\) \/ 1000\)/);
+  assert.match(source, /expiry,/);
   assert.doesNotMatch(source, /expiry:\s*null/);
   assert.match(source, /expires_at: credential\.expiresAt/);
 });

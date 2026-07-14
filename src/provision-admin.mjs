@@ -83,19 +83,23 @@ async function serviceToken(token, account, displayName, readWrite) {
   await ensureEntry(token, `/v1/service_account/${account}`, {
     attrs: { name: [account], displayname: [displayName], entry_managed_by: ['idm_admin'] }
   });
-  const expiresAt = new Date(Date.now() + SERVICE_TOKEN_TTL_DAYS * 86400 * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + SERVICE_TOKEN_TTL_DAYS * 86400 * 1000);
+  // Kanidm v1 API serializes ApiTokenGenerate.expiry with
+  // time::serde::timestamp::option, i.e. Unix seconds rather than RFC3339.
+  // Keep the ISO value only for the operator-visible Secret metadata.
+  const expiry = Math.floor(expiresAt.getTime() / 1000);
   const response = await request('POST', `/v1/service_account/${account}/_api_token`, {
     // New credentials overlap the previous bounded token. A successful Secret
     // replacement and rollout is therefore atomic from the workload view; old
     // credentials naturally expire and cannot become permanent bootstrap keys.
     label: `opensphere-console-${new Date().toISOString().slice(0, 10)}`,
-    expiry: expiresAt,
+    expiry,
     read_write: readWrite
   }, token);
   if (response.status >= 300 || typeof response.json !== 'string') {
     throw new Error(`API token generation failed for ${account}: HTTP ${response.status}`);
   }
-  return { token: response.json, expiresAt };
+  return { token: response.json, expiresAt: expiresAt.toISOString() };
 }
 
 function applySecret(name, credential) {
