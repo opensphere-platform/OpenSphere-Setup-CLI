@@ -127,12 +127,12 @@ function restoreSecretSnapshot(snapshot) {
   })}\n`);
 }
 
-function rustfsTlsNeedsUpgrade() {
+function tlsSecretNeedsDnsName(namespace, name, dnsName) {
   try {
-    const secret = JSON.parse(kubectl(['-n', 'opensphere-backbone', 'get', 'secret', 'backbone-rustfs-tls', '-o', 'json'], { capture: true }));
+    const secret = JSON.parse(kubectl(['-n', namespace, 'get', 'secret', name, '-o', 'json'], { capture: true }));
     const pem = Buffer.from(secret.data?.['tls.crt'] ?? '', 'base64');
     const certificate = new X509Certificate(pem);
-    return !certificate.subjectAltName.includes(`DNS:${RUSTFS_DNS_NAME}`);
+    return !certificate.subjectAltName.includes(`DNS:${dnsName}`);
   } catch {
     return true;
   }
@@ -151,17 +151,20 @@ function appendCertificateAuthority(namespace, name, caPath) {
   return true;
 }
 
-// A legacy installation has no RustFS TLS secret. Add a dedicated leaf and
-// append only its new CA to the existing trust bundle. This avoids replacing
-// the current PostgreSQL/Kanidm trust root before the target release is proven.
+// A legacy installation may lack CBS TLS leaves. Add only the required new
+// leaves and append their CA to the existing PostgreSQL trust bundle, without
+// replacing the current PostgreSQL/Kanidm trust root before target verification.
 async function prepareUpgradePrerequisites(consoleUrl) {
   const snapshots = [
     readSecretSnapshot('opensphere-backbone', 'backbone-rustfs'),
     readSecretSnapshot('opensphere-backbone', 'backbone-postgres'),
+    readSecretSnapshot('opensphere-backbone', 'backbone-postgres-tls'),
     readSecretSnapshot('opensphere-backbone', 'backbone-rustfs-tls')
   ];
   let changed = setSecretLiteral('opensphere-backbone', 'backbone-rustfs', 'endpoint', RUSTFS_ENDPOINT);
-  if (!rustfsTlsNeedsUpgrade()) {
+  const needsPostgresTls = tlsSecretNeedsDnsName('opensphere-backbone', 'backbone-postgres-tls', 'backbone-postgres.opensphere-backbone.svc.cluster.local');
+  const needsRustfsTls = tlsSecretNeedsDnsName('opensphere-backbone', 'backbone-rustfs-tls', RUSTFS_DNS_NAME);
+  if (!needsPostgresTls && !needsRustfsTls) {
     return { changed, restore: () => snapshots.slice().reverse().forEach(restoreSecretSnapshot) };
   }
 
@@ -176,7 +179,8 @@ async function prepareUpgradePrerequisites(consoleUrl) {
     const key = join(work, 'tls.key');
     const ca = join(work, 'ca.crt');
     ensureGenericSecret('opensphere-backbone', 'backbone-postgres', {}, { 'ca.crt': ca });
-    ensureTlsSecret('opensphere-backbone', 'backbone-rustfs-tls', cert, key, { replace: true });
+    if (needsPostgresTls) ensureTlsSecret('opensphere-backbone', 'backbone-postgres-tls', cert, key, { replace: true });
+    if (needsRustfsTls) ensureTlsSecret('opensphere-backbone', 'backbone-rustfs-tls', cert, key, { replace: true });
     appendCertificateAuthority('opensphere-backbone', 'backbone-postgres', ca);
     changed = true;
     return { changed, restore: () => snapshots.slice().reverse().forEach(restoreSecretSnapshot) };
@@ -245,6 +249,18 @@ export function terminalPodError(pods) {
   return null;
 }
 
+function terminalPodEventError(namespace, pods) {
+  for (const pod of pods.items ?? []) {
+    const events = JSON.parse(kubectl([
+      '-n', namespace, 'get', 'events', '--field-selector', `involvedObject.name=${pod.metadata?.name}`,
+      '-o', 'json'
+    ], { capture: true }));
+    const failedMount = (events.items ?? []).find((event) => event.type === 'Warning' && event.reason === 'FailedMount' && /secret .+ not found/.test(event.message ?? ''));
+    if (failedMount) return `${pod.metadata?.name}: ${failedMount.message}`;
+  }
+  return null;
+}
+
 function waitForCoreRollouts() {
   for (const [namespace, resource, timeout] of CORE_ROLLOUTS) {
     const seconds = Number.parseInt(timeout, 10);
@@ -262,6 +278,8 @@ function waitForCoreRollouts() {
         ], { capture: true }));
         const terminal = terminalPodError(pods);
         if (terminal) throw new Error(`${resource} has a terminal pod error: ${terminal}`);
+        const terminalEvent = terminalPodEventError(namespace, pods);
+        if (terminalEvent) throw new Error(`${resource} has a terminal pod error: ${terminalEvent}`);
         if (Date.now() >= deadline) throw rolloutError;
       }
     }
