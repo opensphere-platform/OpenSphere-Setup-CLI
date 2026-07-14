@@ -19,7 +19,7 @@ const REQUIRED_SECRETS = Object.freeze({
   'opensphere-console/opensphere-console-auth-sig': ['sig.key'],
   'opensphere-console/opensphere-identity-kanidm': ['url', 'token'],
   'opensphere-console/opensphere-rolemgr-kanidm': ['url', 'token'],
-  'opensphere-backbone/backbone-postgres': ['password'],
+  'opensphere-backbone/backbone-postgres': ['password', 'bootstrap_password'],
   'opensphere-backbone/backbone-rustfs': ['access_key', 'secret_key', 'endpoint'],
   'opensphere-backbone/backbone-gitea': ['db_password', 'admin_user', 'admin_password']
 });
@@ -158,7 +158,39 @@ function verifyPostgresql() {
     "SELECT current_database() || ':' || extversion FROM pg_extension WHERE extname='vector'"
   ], { capture: true });
   if (!/^console:\S+/.test(result)) throw new Error('PostgreSQL vector extension verification failed');
-  return result;
+  const auditBoundary = kubectl([
+    '-n', 'opensphere-backbone', 'exec', 'deployment/backbone-postgres', '--',
+    'psql', '-U', 'console', '-d', 'console', '-Atc',
+    `SELECT
+      (SELECT rolsuper = false AND rolbypassrls = false AND rolcanlogin = true FROM pg_roles WHERE rolname = 'console')
+      AND (SELECT rolsuper = true AND rolcanlogin = false FROM pg_roles WHERE rolname = 'opensphere_audit_owner')
+      AND (SELECT rolsuper = true AND rolcanlogin = true FROM pg_roles WHERE rolname = 'opensphere_db_bootstrap')
+      AND (SELECT pg_get_userbyid(relowner) = 'opensphere_audit_owner' FROM pg_class WHERE oid = 'public.audit_log'::regclass)
+      AND (SELECT tgenabled = 'A' FROM pg_trigger WHERE tgrelid = 'public.audit_log'::regclass AND tgname = 'audit_log_append_only')
+      AND has_table_privilege('console', 'public.audit_log', 'SELECT')
+      AND has_table_privilege('console', 'public.audit_log', 'INSERT')
+      AND NOT has_table_privilege('console', 'public.audit_log', 'UPDATE')
+      AND NOT has_table_privilege('console', 'public.audit_log', 'DELETE')
+      AND NOT has_table_privilege('console', 'public.audit_log', 'TRUNCATE')`
+  ], { capture: true });
+  if (auditBoundary !== 't') throw new Error('PostgreSQL audit runtime boundary is not sealed');
+
+  for (const [statement, message] of [
+    ['SET session_replication_role = replica', 'PostgreSQL console runtime role can disable audit triggers'],
+    ['ALTER ROLE opensphere_audit_owner LOGIN', 'PostgreSQL console runtime role can alter the sealed audit owner']
+  ]) {
+    try {
+      kubectl([
+        '-n', 'opensphere-backbone', 'exec', 'deployment/backbone-postgres', '--',
+        'psql', '-U', 'console', '-d', 'console', '-v', 'ON_ERROR_STOP=1', '-c',
+        statement
+      ], { capture: true });
+    } catch {
+      continue;
+    }
+    throw new Error(message);
+  }
+  return { vector: result, auditBoundary: 'sealed' };
 }
 
 function decodeSecretValue(secret, key) {

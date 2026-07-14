@@ -364,7 +364,13 @@ export async function bootstrap(lock, {
     // Publish the same trust anchor under both stable keys during the compatibility window.
     ensureGenericSecret('opensphere-console', 'opensphere-console-auth-ca', {}, { 'ca.crt': cert, 'tls.crt': cert });
     ensureGenericSecret('opensphere-console', 'opensphere-console-auth-sig', {}, { 'sig.key': sig });
-    ensureGenericSecret('opensphere-backbone', 'backbone-postgres', { password: hex(32) });
+    ensureGenericSecret('opensphere-backbone', 'backbone-postgres', {
+      // `password` belongs to the constrained Console runtime role. PostgreSQL
+      // initialisation uses a distinct bootstrap operator so Console can never
+      // begin life as the database superuser.
+      password: hex(32),
+      bootstrap_password: hex(32)
+    });
     ensureGenericSecret('opensphere-backbone', 'backbone-rustfs', {
       access_key: `os${hex(10)}`,
       secret_key: hex(32),
