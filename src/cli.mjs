@@ -9,6 +9,7 @@ import { assertKubectl, kubectl } from './process.mjs';
 import { verifyInstallation } from './verify.mjs';
 import { normalizeConsoleUrl } from './console-url.mjs';
 import { selectAuthEnvironment } from './auth-environment.mjs';
+import { assertReleaseShellTlsReference, parseShellTlsSecretRef } from './shell-tls.mjs';
 
 function option(names, fallback) {
   const aliases = Array.isArray(names) ? names : [names];
@@ -59,6 +60,7 @@ Usage:
        [--admin-display-name <name>] [--admin-email <email>]
        [--storage-class <name>] [--console <https-origin>]
        [--auth-environment <development|production>] [--backup-target-secret <namespace/name>]
+       [--shell-tls-secret <namespace/name>]
        [--no-open-browser] [--onboarding-url-file <path>] [--add-to-path]
   opensphere-setup upgrade --release <edge|candidate|stable> [--lock <verified-lock-file>]
       [--context <kube-context>] [--storage-class <name>] [--console <https-origin>]
@@ -113,6 +115,8 @@ async function main() {
   if (command === 'bootstrap') {
     validateChannel(channel);
     const selectedAuthEnvironment = selectAuthEnvironment(channel, authEnvironment);
+    const requestedShellTlsSecret = hasOption('--shell-tls-secret') ? option('--shell-tls-secret', '') : undefined;
+    assertReleaseShellTlsReference(channel, requestedShellTlsSecret ? parseShellTlsSecretRef(requestedShellTlsSecret) : undefined);
     const initialAdmin = validateInitialAdmin({
       username: option('--admin-username', 'opensphere-admin'),
       displayName: option('--admin-display-name', 'OpenSphere Administrator'),
@@ -161,6 +165,7 @@ async function main() {
       consoleUrl: suppliedConsoleUrl ?? 'https://localhost:8090',
       authEnvironment: selectedAuthEnvironment,
       backupTargetSecret: hasOption('--backup-target-secret') ? option('--backup-target-secret', '') : undefined,
+      shellTlsSecret: requestedShellTlsSecret,
       openOnboarding: !hasOption('--no-open-browser'),
       onboardingUrlFile: hasOption('--onboarding-url-file') ? option('--onboarding-url-file', '') : undefined
     });

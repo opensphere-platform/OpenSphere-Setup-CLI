@@ -15,8 +15,8 @@
 ```powershell
 opensphere-setup.cmd resolve --release edge
 opensphere-setup.cmd bootstrap --release edge
-opensphere-setup.cmd bootstrap --release candidate --backup-target-secret platform-secrets/opensphere-audit-backup
-opensphere-setup.cmd bootstrap --release stable --backup-target-secret platform-secrets/opensphere-audit-backup
+opensphere-setup.cmd bootstrap --release candidate --backup-target-secret platform-secrets/opensphere-audit-backup --shell-tls-secret platform-secrets/opensphere-console-public-tls
+opensphere-setup.cmd bootstrap --release stable --backup-target-secret platform-secrets/opensphere-audit-backup --shell-tls-secret platform-secrets/opensphere-console-public-tls
 opensphere-setup.cmd upgrade --release edge
 ```
 
@@ -25,6 +25,8 @@ opensphere-setup.cmd upgrade --release edge
 초기 설치에서는 public Ingress/DNS가 아직 준비되지 않아도 된다. Setup은 Kubernetes Service에 loopback port-forward를 열어 Console 자체의 `os` 아티팩트를 manifest의 size·SHA-256으로 검증해 설치한다. `--console`은 이 임시 전송 주소가 아니라 설치 후 사용할 HTTPS Console origin이며 OIDC·발급 URL에 고정된다.
 
 `edge`는 개발용 in-cluster RustFS를 감사 백업 대상으로 사용한다. `candidate`와 `stable`은 반드시 외부 S3 호환 백업 Secret을 지정해야 하며, 같은 클러스터의 RustFS·localhost·Service DNS는 거부된다. Secret에는 `endpoint`, `bucket`, `access_key`, `secret_key`, `ca.crt`, 선택 `region`이 필요하다. 승격 채널은 자동으로 `production` 인증 정책(TOTP 강제)을 사용하며 `development`로 완화할 수 없다. 또한 승격용 StorageClass는 `opensphere.io/backbone-storage-profile=durable-v1`, `opensphere.io/encryption-at-rest=true`, `opensphere.io/failure-domain=multi-node|zone-redundant|region-redundant`, `reclaimPolicy=Retain`, `allowVolumeExpansion=true`을 모두 선언해야 한다. node-local provisioner는 거부된다.
+
+`candidate`와 `stable`은 `--shell-tls-secret <namespace/name>`도 필수다. 해당 Secret은 `kubernetes.io/tls` type이어야 하며, `tls.crt`에는 Console hostname을 포함하는 leaf와 issuer chain이 함께 있어야 하고, `tls.key`는 leaf와 일치해야 한다. 설치 담당자는 source Secret에 `opensphere.io/shell-tls-profile=external-ca-v1` annotation을 명시한다. Setup은 이 계약을 검증한 뒤 `opensphere-console/shell-tls`에 최소 TLS data만 복사한다. 이 Secret·Console URL의 교체는 자동 재실행이나 upgrade가 아닌 명시적 endpoint migration으로만 처리한다.
 
 기본 최초 관리자 이름은 Kanidm 예약 계정 `admin`과 충돌하지 않는 `opensphere-admin`이다.
 다른 이름을 원하면 최초 설치 시 `--admin-username`, `--admin-display-name`, `--admin-email`을

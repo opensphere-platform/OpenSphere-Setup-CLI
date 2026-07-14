@@ -14,6 +14,15 @@ import { verifyInstallation } from './verify.mjs';
 import { normalizeConsoleUrl } from './console-url.mjs';
 import { assertReleaseBackupTarget, backupTargetData, inspectBackupTarget, parseBackupTargetSecretRef } from './backup-target.mjs';
 import { selectAuthEnvironment } from './auth-environment.mjs';
+import {
+  EXTERNAL_SHELL_TLS_ANNOTATION,
+  EXTERNAL_SHELL_TLS_PROFILE,
+  assertReleaseShellTlsReference,
+  inspectExternalShellTlsSecret,
+  parseShellTlsSecretRef,
+  shellTlsSecretData,
+  shellTlsSecretRefText
+} from './shell-tls.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RAW_ROOT = 'https://raw.githubusercontent.com/opensphere-platform/OpenSphere-console';
@@ -137,6 +146,35 @@ function ensureTlsSecret(namespace, name, cert, key, { replace = false } = {}) {
   ], { capture: true });
   applyYaml(yaml);
   return true;
+}
+
+function ensureExternalShellTlsSecret(sourceRef, source) {
+  const namespace = 'opensphere-console';
+  const name = 'shell-tls';
+  const expectedData = shellTlsSecretData(source);
+  const expectedAnnotations = {
+    [EXTERNAL_SHELL_TLS_ANNOTATION]: EXTERNAL_SHELL_TLS_PROFILE,
+    'opensphere.io/source-secret': shellTlsSecretRefText(sourceRef)
+  };
+  try {
+    const existing = readSecret(namespace, name);
+    const unchanged = existing.type === 'kubernetes.io/tls'
+      && Object.entries(expectedData).every(([key, value]) => existing.data?.[key] === value)
+      && Object.entries(expectedAnnotations).every(([key, value]) => existing.metadata?.annotations?.[key] === value);
+    if (!unchanged) {
+      throw new Error('Existing shell-tls differs from the configured external TLS source; certificate rotation requires an explicit endpoint migration');
+    }
+    return false;
+  } catch (error) {
+    if (!String(error.message).startsWith('Existing shell-tls differs')) {
+      applyYaml(`${JSON.stringify({
+        apiVersion: 'v1', kind: 'Secret', metadata: { name, namespace, annotations: expectedAnnotations },
+        type: 'kubernetes.io/tls', data: expectedData
+      })}\n`);
+      return true;
+    }
+    throw error;
+  }
 }
 
 // Endpoint and protocol are release configuration, not a credential. Keep the
@@ -448,7 +486,7 @@ function waitForBackboneBoundaryReconcile(lock) {
   throw new Error('PostgreSQL boundary reconcile Job did not complete before timeout');
 }
 
-function recordInstallationState(lock, storageClass, initialAdmin, consoleUrl, authEnvironment = 'development') {
+function recordInstallationState(lock, storageClass, initialAdmin, consoleUrl, authEnvironment = 'development', shellTlsSecret) {
   const config = {
     apiVersion: 'bootstrap.opensphere.io/v1alpha1',
     kind: 'OpenSphereInstallationConfig',
@@ -457,6 +495,7 @@ function recordInstallationState(lock, storageClass, initialAdmin, consoleUrl, a
     storageClass,
     consoleUrl: normalizeConsoleUrl(consoleUrl),
     authEnvironment: validateAuthEnvironment(authEnvironment),
+    ...(shellTlsSecret ? { shellTlsSecret } : {}),
     initialAdmin
   };
   const yaml = kubectl([
@@ -541,7 +580,8 @@ export async function migrateLegacyInstallationLock() {
     config.storageClass,
     initialAdmin,
     config.consoleUrl ?? 'https://localhost:8090',
-    config.authEnvironment ?? 'development'
+    config.authEnvironment ?? 'development',
+    config.shellTlsSecret
   );
   return migrated;
 }
@@ -699,6 +739,7 @@ export async function bootstrap(lock, {
   requireRecoveryDrill = true,
   authEnvironment,
   backupTargetSecret,
+  shellTlsSecret,
   onboardingUrlFile
 } = {}) {
   validateLock(lock);
@@ -733,13 +774,27 @@ export async function bootstrap(lock, {
     throw new Error('Changing the audit backup target requires a dedicated migration; bootstrap will not replace it');
   }
   const requestedBackupTarget = backupTargetSecret ? parseBackupTargetSecretRef(backupTargetSecret) : undefined;
+  const requestedShellTls = shellTlsSecret ? parseShellTlsSecretRef(shellTlsSecret) : undefined;
+  const storedShellTls = storedConfig?.shellTlsSecret ? parseShellTlsSecretRef(storedConfig.shellTlsSecret) : undefined;
+  const effectiveShellTls = installed ? storedShellTls : requestedShellTls;
+  if (installed && shellTlsSecret && shellTlsSecretRefText(requestedShellTls) !== shellTlsSecretRefText(storedShellTls)) {
+    throw new Error('Changing the Console external TLS source requires an explicit endpoint migration');
+  }
+  assertReleaseShellTlsReference(lock.channel, effectiveShellTls);
   const effectiveAdmin = installed ? (readInitialAdmin() ?? storedConfig.initialAdmin) : initialAdmin;
   const cluster = preflight({ storageClass: storedConfig?.storageClass ?? storageClass, channel: lock.channel });
   const work = await mkdtemp(join(tmpdir(), 'opensphere-setup-'));
   try {
     console.log(`[완료] Kubernetes 연결 (${cluster.serverVersion}, ${cluster.nodeCount} nodes, StorageClass ${cluster.storageClass})`);
     for (const namespace of ['opensphere-console-auth', 'opensphere-console', 'opensphere-backbone']) ensureNamespace(namespace);
-    recordInstallationState(lock, cluster.storageClass, effectiveAdmin, effectiveConsoleUrl, effectiveAuthEnvironment);
+    const externalShellTls = effectiveShellTls
+      ? readSecret(effectiveShellTls.namespace, effectiveShellTls.name)
+      : undefined;
+    if (externalShellTls) inspectExternalShellTlsSecret(externalShellTls, effectiveConsoleUrl);
+    recordInstallationState(
+      lock, cluster.storageClass, effectiveAdmin, effectiveConsoleUrl, effectiveAuthEnvironment,
+      shellTlsSecretRefText(effectiveShellTls)
+    );
     console.log(`[완료] ${lock.channel} release lock 기록 (${lock.releaseDigest})`);
 
     run('pwsh', [
@@ -752,7 +807,8 @@ export async function bootstrap(lock, {
     const sig = join(work, 'sig.key');
     ensureTlsSecret('opensphere-console-auth', 'kanidm-tls', cert, key);
     ensureTlsSecret('opensphere-console', 'kanidm-tls', cert, key);
-    ensureTlsSecret('opensphere-console', 'shell-tls', cert, key);
+    if (externalShellTls) ensureExternalShellTlsSecret(effectiveShellTls, externalShellTls);
+    else ensureTlsSecret('opensphere-console', 'shell-tls', cert, key);
     // The root is a real CA; TLS leaves are never treated as trust anchors.
     ensureGenericSecret('opensphere-console', 'opensphere-console-auth-ca', {}, { 'ca.crt': ca, 'tls.crt': cert });
     ensureGenericSecret('opensphere-console', 'opensphere-console-auth-sig', {}, { 'sig.key': sig });
@@ -875,6 +931,8 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
   // password-only authentication.  The migration needs an explicit operator
   // workflow, not an accidental channel upgrade.
   selectAuthEnvironment(targetLock.channel, effectiveAuthEnvironment);
+  const storedShellTls = storedConfig.shellTlsSecret ? parseShellTlsSecretRef(storedConfig.shellTlsSecret) : undefined;
+  assertReleaseShellTlsReference(targetLock.channel, storedShellTls);
   if (consoleUrl && normalizeConsoleUrl(consoleUrl) !== effectiveConsoleUrl) {
     throw new Error(`Installation uses Console URL ${effectiveConsoleUrl}; changing it requires an endpoint migration`);
   }
@@ -909,7 +967,7 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     console.log('[대기] PostgreSQL audit ownership boundary reconcile');
     operations.waitForBackboneBoundaryReconcile(targetLock);
     if (prerequisites.changed) operations.restartBackboneTrustConsumers();
-    operations.recordInstallationState(targetLock, effectiveStorageClass, initialAdmin, effectiveConsoleUrl, effectiveAuthEnvironment);
+    operations.recordInstallationState(targetLock, effectiveStorageClass, initialAdmin, effectiveConsoleUrl, effectiveAuthEnvironment, storedConfig.shellTlsSecret);
     console.log('[대기] 대상 release rollout');
     operations.waitForCoreRollouts();
     console.log('[검증] Backbone PostgreSQL → RustFS backup 및 비파괴 restore drill');
@@ -923,7 +981,7 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
     try {
       operations.applyRelease(rollbackRelease, '롤백');
-      operations.recordInstallationState(previousLock, effectiveStorageClass, initialAdmin, effectiveConsoleUrl, effectiveAuthEnvironment);
+      operations.recordInstallationState(previousLock, effectiveStorageClass, initialAdmin, effectiveConsoleUrl, effectiveAuthEnvironment, storedConfig.shellTlsSecret);
       operations.reconcileRollbackStatefulSets();
       operations.waitForCoreRollouts();
       await operations.verifyInstallation(previousLock, {
