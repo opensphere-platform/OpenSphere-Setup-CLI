@@ -50,6 +50,13 @@ jobs:
     # installation before a public Console ingress/DNS endpoint exists.
     runs-on: ubuntu-latest
     timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        # edge defaults to development for rapid local iteration, but Setup
+        # must also prove the explicit production profile reaches the auth
+        # BFF before a promotion channel can rely on its TOTP gate.
+        auth-environment: [development, production]
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -74,10 +81,13 @@ jobs:
           node src/cli.mjs bootstrap --release edge --lock "$RUNNER_TEMP/edge-release-lock.json" \
             --context kind-opensphere-e2e --storage-class local-path \
             --console https://console.e2e.invalid \
+            --auth-environment "${{ matrix.auth-environment }}" \
             --admin-username e2e-admin \
             --admin-display-name 'OpenSphere E2E Administrator' \
             --admin-email e2e-admin@opensphere.local \
             --no-open-browser
           node src/cli.mjs verify --context kind-opensphere-e2e --console https://console.e2e.invalid --require-zero-restarts
+          actual_auth_environment="$(kubectl --context kind-opensphere-e2e -n opensphere-console get deployment opensphere-console-auth -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="AUTH_ENVIRONMENT")].value}')"
+          test "$actual_auth_environment" = "${{ matrix.auth-environment }}"
           test -x "$RUNNER_TEMP/opensphere-bin/os"
           "$RUNNER_TEMP/opensphere-bin/os" --version
