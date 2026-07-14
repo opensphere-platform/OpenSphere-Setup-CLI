@@ -69,6 +69,14 @@ test('promotion bootstrap refuses to touch the cluster without an external shell
   assert.match(result.stderr, /requires --shell-tls-secret/);
 });
 
+test('promotion preflight refuses missing external inputs before cluster access', () => {
+  const result = spawnSync(process.execPath, [CLI, 'preflight', '--release', 'candidate', '--console', 'https://console.example.test'], {
+    encoding: 'utf8', cwd: ROOT, windowsHide: true
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--backup-target-secret must be an existing namespace\/name Secret reference/);
+});
+
 test('service credential rotation is an explicit supported maintenance command', () => {
   const result = spawnSync(process.execPath, [CLI, 'help'], {
     encoding: 'utf8', cwd: ROOT, windowsHide: true

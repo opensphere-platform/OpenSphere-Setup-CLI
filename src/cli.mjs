@@ -10,6 +10,7 @@ import { verifyInstallation } from './verify.mjs';
 import { normalizeConsoleUrl } from './console-url.mjs';
 import { selectAuthEnvironment } from './auth-environment.mjs';
 import { assertReleaseShellTlsReference, parseShellTlsSecretRef } from './shell-tls.mjs';
+import { preflightPromotion } from './promotion-preflight.mjs';
 
 function option(names, fallback) {
   const aliases = Array.isArray(names) ? names : [names];
@@ -54,6 +55,9 @@ function help() {
 
 Usage:
   opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
+  opensphere-setup preflight --release <candidate|stable> --console <https-origin>
+      --backup-target-secret <namespace/name> --shell-tls-secret <namespace/name>
+      [--context <kube-context>] [--storage-class <name>]
   opensphere-setup bootstrap --release <channel> [--lock <verified-lock-file>]
   opensphere-setup bootstrap -r <channel> [--lock <verified-lock-file>]
       [--context <kube-context>] [--admin-username <name>]
@@ -76,6 +80,18 @@ Usage:
 Fresh bootstrap resolves the selected channel at install time. Resume always uses the
 cluster installation lock. --lock is an explicit immutable input; it is never a cache hint.
 Kubernetes receives digest-pinned images only.`);
+}
+
+function readSecret(reference) {
+  return JSON.parse(kubectl(['-n', reference.namespace, 'get', 'secret', reference.name, '-o', 'json'], { capture: true }));
+}
+
+function printPromotionPreflight(evidence) {
+  console.log(`[완료] ${evidence.channel} 설치 전 읽기 전용 사전검증`);
+  console.log(`Kubernetes ${evidence.kubernetesVersion} / ${evidence.nodeCount} nodes / StorageClass ${evidence.storageClass}`);
+  console.log(`Backup ${evidence.backup.endpoint} bucket=${evidence.backup.bucket} region=${evidence.backup.region}`);
+  console.log(`TLS ${evidence.tls.hostname} (${evidence.tls.profile}, expires ${evidence.tls.validTo})`);
+  console.log(`Authentication policy: ${evidence.authEnvironment} (TOTP enforced)`);
 }
 
 async function main() {
@@ -110,6 +126,21 @@ async function main() {
     await writeLock(lockPath, lock);
     console.log(`[완료] ${channel} 채널을 ${lock.releaseDigest}로 잠금`);
     console.log(`Lock: ${lockPath}`);
+    return;
+  }
+
+  if (command === 'preflight') {
+    validateChannel(channel);
+    const evidence = preflightPromotion({
+      channel,
+      storageClass: option('--storage-class', undefined),
+      consoleUrl: suppliedConsoleUrl,
+      authEnvironment,
+      backupTargetSecret: option('--backup-target-secret', ''),
+      shellTlsSecret: option('--shell-tls-secret', ''),
+      readSecret
+    });
+    printPromotionPreflight(evidence);
     return;
   }
 

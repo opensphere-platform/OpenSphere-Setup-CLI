@@ -36,6 +36,8 @@ opensphere-setup uninstall --purge-data --confirm DELETE-OPENSPHERE
 
 `candidate`와 `stable`은 `--shell-tls-secret <namespace/name>`도 필수다. 해당 Secret은 `kubernetes.io/tls` type이어야 하며, `tls.crt`에는 Console hostname을 포함하는 leaf와 issuer chain이 함께 있어야 하고, `tls.key`는 leaf와 일치해야 한다. 설치 담당자는 source Secret에 `opensphere.io/shell-tls-profile=external-ca-v1` annotation을 명시한다. Setup은 이 계약을 검증한 뒤 `opensphere-console/shell-tls`에 최소 TLS data만 복사한다. 이 Secret·Console URL의 교체는 자동 재실행이나 upgrade가 아닌 명시적 endpoint migration으로만 처리한다.
 
+원격 운영 환경에는 bootstrap 전 읽기 전용 `preflight`를 실행한다. 이 명령은 Kubernetes 권한·node·StorageClass·외부 S3 Secret·외부 CA TLS Secret·production TOTP 정책을 검사하지만, 어떤 OpenSphere resource도 만들지 않고 Secret 값도 출력하지 않는다. 자세한 준비·독립 증적 절차는 [`docs/PROMOTION-OPERATIONAL-PREFLIGHT.md`](docs/PROMOTION-OPERATIONAL-PREFLIGHT.md)를 따른다.
+
 기본 최초 관리자 이름은 Kanidm 예약 계정 `admin`과 충돌하지 않는 `opensphere-admin`이다.
 다른 이름을 원하면 최초 설치 시 `--admin-username`, `--admin-display-name`, `--admin-email`을
 지정한다. `admin`, `idm_admin`, `anonymous`는 identity 예약 계정이므로 Setup이 설치 전에 거부한다.
