@@ -16,6 +16,9 @@ test('evidence collector records runtime facts but never reads Secret objects or
   assert.match(collector, /installation-lock\.yaml/);
   assert.match(collector, /release-inventory\.yaml/);
   assert.match(collector, /audit-runtime-boundary\.txt/);
+  assert.match(collector, /clusterrole\/dupa-backbone-installer/);
+  assert.match(collector, /clusterrolebinding\/opensphere-console-backend/);
+  assert.doesNotMatch(collector, /app\.kubernetes\.io\/part-of=opensphere/);
   assert.doesNotMatch(collector, /\bget\s+secrets?\b/i);
   assert.doesNotMatch(collector, /\bdescribe\s+secrets?\b/i);
 });
