@@ -92,6 +92,17 @@ jobs:
           test "$actual_auth_environment" = "${{ matrix.auth-environment }}"
           test -x "$RUNNER_TEMP/opensphere-bin/os"
           "$RUNNER_TEMP/opensphere-bin/os" --version
+      - name: Collect redacted audit evidence
+        if: always()
+        run: bash scripts/collect-audit-evidence.sh kind-opensphere-e2e "$RUNNER_TEMP/audit-evidence"
+      - name: Upload redacted audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-evidence-${{ matrix.auth-environment }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/audit-evidence
+          if-no-files-found: error
+          retention-days: 90
 
   clean-kubernetes-edge-upgrade-rollback:
     # Exercise a real image-set transition and a deliberate return to the
@@ -138,3 +149,14 @@ jobs:
           test "$installed_revision" = "$PREVIOUS_CONSOLE_REVISION"
           test -x "$RUNNER_TEMP/opensphere-bin/os"
           "$RUNNER_TEMP/opensphere-bin/os" --version
+      - name: Collect redacted upgrade and rollback evidence
+        if: always()
+        run: bash scripts/collect-audit-evidence.sh kind-opensphere-upgrade-e2e "$RUNNER_TEMP/audit-evidence"
+      - name: Upload redacted upgrade and rollback evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-evidence-upgrade-rollback-${{ github.run_id }}
+          path: ${{ runner.temp }}/audit-evidence
+          if-no-files-found: error
+          retention-days: 90
