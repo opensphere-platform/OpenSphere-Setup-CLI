@@ -55,6 +55,7 @@ function runtime(previous, events, { failTarget = false } = {}) {
       return { mode: 'in-cluster-rustfs', restore: () => events.push('restore-backup-target') };
     },
     restartBackboneTrustConsumers: () => events.push('restart-backbone-trust-consumers'),
+    removeOptionalOaaStaging: () => events.push('remove-optional-oaa-staging'),
     reconcileRollbackStatefulSets: () => events.push('reconcile-rollback-statefulsets'),
     waitForCoreRollouts: () => events.push('wait'),
     waitForBackboneBoundaryReconcile: () => events.push('boundary-reconcile'),
@@ -81,6 +82,7 @@ test('upgrade prefetches both releases before applying and verifies the target',
     'prepare-prerequisites',
     'prepare-backup-target',
     `apply:업그레이드:${target.sourceRevision}`,
+    'remove-optional-oaa-staging',
     'boundary-reconcile',
     'restart-backbone-trust-consumers',
     `record:${target.sourceRevision}`,
@@ -98,8 +100,9 @@ test('failed target verification restores and verifies the previous release', as
     upgrade(previous, target, { runtime: runtime(previous, events, { failTarget: true }) }),
     /previous release was restored: target is unhealthy/
   );
-  assert.deepEqual(events.slice(-7), [
+  assert.deepEqual(events.slice(-8), [
     `apply:롤백:${previous.sourceRevision}`,
+    'remove-optional-oaa-staging',
     `record:${previous.sourceRevision}`,
     'reconcile-rollback-statefulsets',
     'wait',

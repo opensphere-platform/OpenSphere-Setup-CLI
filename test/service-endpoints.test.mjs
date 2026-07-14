@@ -6,7 +6,7 @@ const required = [
   ['opensphere-console-auth', 'kanidm'], ['opensphere-console-auth', 'kanidm-core'], ['opensphere-console-auth', 'kanidm-ext'],
   ['opensphere-console', 'opensphere-console-auth'], ['opensphere-console', 'opensphere-console-auth-ext'],
   ['opensphere-console', 'opensphere-console-backend'], ['opensphere-console', 'opensphere-console-dupa-controller'], ['opensphere-console', 'opensphere-console-ext'],
-  ['opensphere-backbone', 'backbone-postgres'], ['opensphere-backbone', 'backbone-rustfs'], ['opensphere-backbone', 'backbone-gitea'], ['opensphere-backbone', 'opensphere-console-oaa-gateway']
+  ['opensphere-backbone', 'backbone-postgres'], ['opensphere-backbone', 'backbone-rustfs'], ['opensphere-backbone', 'backbone-gitea']
 ];
 
 function fixture({ ready = true } = {}) {
@@ -21,7 +21,7 @@ function fixture({ ready = true } = {}) {
 
 test('installation verification requires every core Service to have a ready endpoint', () => {
   const { services, slices } = fixture();
-  assert.equal(verifyRequiredServiceEndpoints(services, slices).length, 12);
+  assert.equal(verifyRequiredServiceEndpoints(services, slices).length, 11);
   slices[0].endpoints[0].conditions.ready = false;
   assert.throws(() => verifyRequiredServiceEndpoints(services, slices), /has no ready EndpointSlice endpoint: opensphere-console-auth\/kanidm/);
 });

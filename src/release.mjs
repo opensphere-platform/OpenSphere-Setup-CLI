@@ -41,6 +41,20 @@ export const COMPONENTS = Object.freeze({
   cbsGitea: 'opensphere-cbs-gitea'
 });
 
+// The OAA image is a governed, attested package because an approved AI
+// subShell may use it later. It is intentionally not part of a fresh Main
+// Shell runtime: Console bootstrap must not pre-install a subShell service.
+export const BASE_RUNTIME_COMPONENTS = Object.freeze([
+  'console',
+  'auth',
+  'backend',
+  'dupaController',
+  'kanidm',
+  'cbsPostgresql',
+  'cbsRustfs',
+  'cbsGitea'
+]);
+
 // A resolved image is a multi-platform index.  Do not let a channel appear
 // installable on arm64 merely because its amd64 variant has the right label.
 export const RELEASE_PLATFORMS = Object.freeze(['linux/amd64', 'linux/arm64']);

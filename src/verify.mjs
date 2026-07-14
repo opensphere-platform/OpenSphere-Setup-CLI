@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import net from 'node:net';
 import { kubectl } from './process.mjs';
-import { validateLock } from './release.mjs';
+import { BASE_RUNTIME_COMPONENTS, validateLock } from './release.mjs';
 import { normalizeConsoleUrl, oidcIssuer } from './console-url.mjs';
 import { assertReleaseBackupTarget, inspectBackupTarget } from './backup-target.mjs';
 
@@ -58,8 +58,7 @@ const REQUIRED_SERVICES = Object.freeze([
   'opensphere-console/opensphere-console-ext',
   'opensphere-backbone/backbone-postgres',
   'opensphere-backbone/backbone-rustfs',
-  'opensphere-backbone/backbone-gitea',
-  'opensphere-backbone/opensphere-console-oaa-gateway'
+  'opensphere-backbone/backbone-gitea'
 ]);
 
 function getJson(args) {
@@ -330,7 +329,7 @@ function verifyWorkloads(lock, { requireZeroRestarts }) {
   const resources = getJson(['get', 'deployment,statefulset', '-A']).items
     .filter((item) => NAMESPACES.includes(item.metadata.namespace));
   const liveImages = resources.flatMap((item) => item.spec.template.spec.containers.map((container) => container.image));
-  const expectedImages = Object.values(lock.components).map((component) => component.image);
+  const expectedImages = BASE_RUNTIME_COMPONENTS.map((name) => lock.components[name].image);
   const missing = expectedImages.filter((image) => !liveImages.includes(image));
   const unexpected = liveImages.filter((image) => !expectedImages.includes(image));
   if (resources.length !== expectedImages.length || missing.length || unexpected.length) {

@@ -28,6 +28,29 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const RAW_ROOT = 'https://raw.githubusercontent.com/opensphere-platform/OpenSphere-console';
 const RUSTFS_ENDPOINT = 'https://backbone-rustfs.opensphere-backbone.svc.cluster.local:9000';
 const RUSTFS_DNS_NAME = 'backbone-rustfs.opensphere-backbone.svc.cluster.local';
+export const MANAGED_NAMESPACES = Object.freeze([
+  'opensphere-console-auth',
+  'opensphere-console',
+  'opensphere-backbone'
+]);
+export const MANAGED_CRDS = Object.freeze([
+  'backboneclaims.backbone.opensphere.io',
+  'uipluginpackages.plugins.opensphere.io',
+  'uipluginregistrations.plugins.opensphere.io'
+]);
+export const MANAGED_CLUSTER_RBAC = Object.freeze([
+  'clusterrolebinding/dupa-backbone-installer',
+  'clusterrolebinding/dupa-module-profile-installer',
+  'clusterrolebinding/opensphere-console-backend',
+  'clusterrolebinding/opensphere-console-oaa-gateway-environment-reader',
+  'clusterrolebinding/opensphere-console-oaa-gateway-controlled-operator',
+  'clusterrole/dupa-backbone-installer',
+  'clusterrole/opensphere-module-cluster-observer-v1',
+  'clusterrole/dupa-module-profile-installer',
+  'clusterrole/opensphere-console-backend',
+  'clusterrole/opensphere-console-oaa-gateway-environment-reader',
+  'clusterrole/opensphere-console-oaa-gateway-controlled-operator'
+]);
 
 const MANIFESTS = [
   { path: 'backend/identity/kanidm-image/deploy.yaml', replacements: [['ghcr.io/opensphere-platform/opensphere-console-kanidm:[^\\s]+', 'kanidm']] },
@@ -42,7 +65,6 @@ const MANIFESTS = [
   { path: 'backend/dupa-control/opensphere-console-dupa-controller.yaml', replacements: [['ghcr.io/opensphere-platform/opensphere-console-dupa-controller:[^\\s]+', 'dupaController']] },
   { path: 'backend/opensphere-console-backend/deploy.yaml', replacements: [['ghcr.io/opensphere-platform/opensphere-console-backend:[^\\s]+', 'backend']] },
   { path: 'backend/identity/opensphere-console-auth/deploy.yaml', replacements: [['ghcr.io/opensphere-platform/opensphere-console-auth:[^\\s]+', 'auth']] },
-  { path: 'backend/backbone/console-services.yaml', replacements: [['ghcr.io/opensphere-platform/opensphere-console-oaa-gateway:[^\\s]+', 'oaaGateway']] },
   { path: 'deploy/opensphere-console.yaml', replacements: [['ghcr.io/opensphere-platform/opensphere-console:[^\\s]+', 'console']] }
 ];
 
@@ -54,7 +76,6 @@ const CORE_ROLLOUTS = [
   ['opensphere-console', 'deployment/opensphere-console-auth', '600s'],
   ['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s'],
   ['opensphere-console', 'deployment/opensphere-console-backend', '600s'],
-  ['opensphere-backbone', 'deployment/opensphere-console-oaa-gateway', '600s'],
   ['opensphere-console', 'deployment/opensphere-console', '600s']
 ];
 
@@ -587,8 +608,100 @@ export async function migrateLegacyInstallationLock() {
 }
 
 export function existingOpenSphereNamespaces() {
-  return ['opensphere-console-auth', 'opensphere-console', 'opensphere-backbone']
+  return MANAGED_NAMESPACES
     .filter((name) => kubectl(['get', 'namespace', name, '--ignore-not-found', '-o', 'name'], { capture: true }));
+}
+
+function listManagedPersistentVolumes() {
+  const namespaces = new Set(MANAGED_NAMESPACES);
+  const volumes = JSON.parse(kubectl(['get', 'persistentvolumes', '-o', 'json'], { capture: true }));
+  return (volumes.items ?? [])
+    .filter((volume) => namespaces.has(volume.spec?.claimRef?.namespace))
+    .map((volume) => volume.metadata?.name)
+    .filter(Boolean);
+}
+
+function deleteManagedNamespace(namespace) {
+  kubectl(['delete', 'namespace', namespace, '--ignore-not-found', '--wait=false']);
+}
+
+function waitForManagedNamespaceDeletion(namespace) {
+  kubectl(['wait', '--for=delete', `namespace/${namespace}`, '--timeout=600s'], { capture: true });
+}
+
+function deleteManagedPersistentVolume(name) {
+  kubectl(['delete', 'persistentvolume', name, '--ignore-not-found', '--wait=true']);
+}
+
+function deleteManagedCrd(name) {
+  kubectl(['delete', 'customresourcedefinition', name, '--ignore-not-found', '--wait=true']);
+}
+
+function deleteManagedClusterRbac(resource) {
+  kubectl(['delete', resource, '--ignore-not-found', '--wait=true']);
+}
+
+// This image and its namespace resources appeared in a pre-approval staging
+// manifest. It must never remain after a base Console install or upgrade: AI
+// service lifecycle belongs to the signed Extension pipeline, not Setup.
+function removeOptionalOaaStaging() {
+  kubectl([
+    '-n', 'opensphere-backbone', 'delete',
+    'deployment/opensphere-console-oaa-gateway',
+    'service/opensphere-console-oaa-gateway',
+    'serviceaccount/opensphere-console-oaa-gateway',
+    'role/opensphere-console-oaa-gateway',
+    'rolebinding/opensphere-console-oaa-gateway',
+    '--ignore-not-found', '--wait=true'
+  ]);
+  for (const resource of MANAGED_CLUSTER_RBAC.filter((resource) => resource.includes('opensphere-console-oaa-gateway'))) {
+    deleteManagedClusterRbac(resource);
+  }
+}
+
+// Full removal is deliberately a data-destruction operation. A normal
+// bootstrap/upgrade must never infer this intent from a missing lock or a
+// changed channel. The command caller validates the explicit CLI confirmation
+// before it reaches here; this function independently refuses any unmanaged
+// namespace so it cannot become a generic namespace deletion primitive.
+export async function uninstallManagedInstallation({ runtime = {} } = {}) {
+  const operations = {
+    readInstallationLock,
+    existingOpenSphereNamespaces,
+    listManagedPersistentVolumes,
+    deleteManagedNamespace,
+    waitForManagedNamespaceDeletion,
+    deleteManagedPersistentVolume,
+    deleteManagedCrd,
+    deleteManagedClusterRbac,
+    ...runtime
+  };
+  const installed = operations.readInstallationLock();
+  const namespaces = operations.existingOpenSphereNamespaces();
+  if (!installed) {
+    if (namespaces.length) {
+      throw new Error(`Refusing to purge unmanaged OpenSphere namespaces: ${namespaces.join(', ')}`);
+    }
+    throw new Error('No managed OpenSphere installation lock was found');
+  }
+  if (namespaces.length !== MANAGED_NAMESPACES.length) {
+    throw new Error(`Managed installation is incomplete; refusing purge while namespaces are missing: ${MANAGED_NAMESPACES.filter((name) => !namespaces.includes(name)).join(', ')}`);
+  }
+  // Capture PV names before namespace deletion: Retain policies keep them
+  // cluster-scoped after their claims have disappeared.
+  const persistentVolumes = operations.listManagedPersistentVolumes();
+  for (const namespace of MANAGED_NAMESPACES) operations.deleteManagedNamespace(namespace);
+  for (const namespace of MANAGED_NAMESPACES) operations.waitForManagedNamespaceDeletion(namespace);
+  for (const volume of persistentVolumes) operations.deleteManagedPersistentVolume(volume);
+  for (const crd of MANAGED_CRDS) operations.deleteManagedCrd(crd);
+  for (const resource of MANAGED_CLUSTER_RBAC) operations.deleteManagedClusterRbac(resource);
+  return {
+    releaseDigest: installed.releaseDigest,
+    namespaces: [...MANAGED_NAMESPACES],
+    persistentVolumes,
+    customResourceDefinitions: [...MANAGED_CRDS],
+    clusterRbac: [...MANAGED_CLUSTER_RBAC]
+  };
 }
 
 function freePort() {
@@ -786,7 +899,7 @@ export async function bootstrap(lock, {
   const work = await mkdtemp(join(tmpdir(), 'opensphere-setup-'));
   try {
     console.log(`[완료] Kubernetes 연결 (${cluster.serverVersion}, ${cluster.nodeCount} nodes, StorageClass ${cluster.storageClass})`);
-    for (const namespace of ['opensphere-console-auth', 'opensphere-console', 'opensphere-backbone']) ensureNamespace(namespace);
+    for (const namespace of MANAGED_NAMESPACES) ensureNamespace(namespace);
     const externalShellTls = effectiveShellTls
       ? readSecret(effectiveShellTls.namespace, effectiveShellTls.name)
       : undefined;
@@ -843,6 +956,7 @@ export async function bootstrap(lock, {
       applyYaml(yaml);
       console.log(`[완료] ${spec.path}`);
     }
+    removeOptionalOaaStaging();
     console.log('[대기] Kanidm과 CBS rollout');
     kubectl(['-n', 'opensphere-console-auth', 'rollout', 'status', 'statefulset/kanidm', '--timeout=360s']);
     console.log('[대기] PostgreSQL audit ownership boundary reconcile');
@@ -906,6 +1020,7 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     prepareBackupTarget,
     prepareUpgradePrerequisites,
     restartBackboneTrustConsumers,
+    removeOptionalOaaStaging,
     reconcileRollbackStatefulSets,
     waitForCoreRollouts,
     waitForBackboneBoundaryReconcile,
@@ -964,6 +1079,7 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     backupTarget = operations.prepareBackupTarget(targetLock.channel, requestedBackupTarget);
     console.log(`[준비] 감사 백업 대상 확인 (${backupTarget.mode})`);
     operations.applyRelease(targetRelease, '업그레이드');
+    operations.removeOptionalOaaStaging();
     console.log('[대기] PostgreSQL audit ownership boundary reconcile');
     operations.waitForBackboneBoundaryReconcile(targetLock);
     if (prerequisites.changed) operations.restartBackboneTrustConsumers();
@@ -981,6 +1097,7 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
     try {
       operations.applyRelease(rollbackRelease, '롤백');
+      operations.removeOptionalOaaStaging();
       operations.recordInstallationState(previousLock, effectiveStorageClass, initialAdmin, effectiveConsoleUrl, effectiveAuthEnvironment, storedConfig.shellTlsSecret);
       operations.reconcileRollbackStatefulSets();
       operations.waitForCoreRollouts();

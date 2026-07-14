@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   calculateReleaseDigest,
   calculateLegacyReleaseDigest,
+  BASE_RUNTIME_COMPONENTS,
   COMPONENTS,
   LEGACY_RELEASE_TRUST,
   migrateLegacyReleaseLock,
@@ -56,6 +57,13 @@ test('canonical baseline contains the promised nine repositories', () => {
     'opensphere-cbs-rustfs',
     'opensphere-cbs-gitea'
   ]);
+});
+
+test('base runtime excludes the optional OAA gateway package', () => {
+  assert.deepEqual(BASE_RUNTIME_COMPONENTS, [
+    'console', 'auth', 'backend', 'dupaController', 'kanidm', 'cbsPostgresql', 'cbsRustfs', 'cbsGitea'
+  ]);
+  assert.equal(BASE_RUNTIME_COMPONENTS.includes('oaaGateway'), false);
 });
 
 test('release baseline requires native manifests for every supported Linux platform', () => {

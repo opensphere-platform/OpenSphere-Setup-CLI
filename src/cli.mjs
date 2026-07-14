@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { bootstrap, existingOpenSphereNamespaces, migrateLegacyInstallationLock, readInstallationLock, rotateServiceCredentials, upgrade } from './bootstrap.mjs';
+import { bootstrap, existingOpenSphereNamespaces, migrateLegacyInstallationLock, readInstallationLock, rotateServiceCredentials, uninstallManagedInstallation, upgrade } from './bootstrap.mjs';
 import { installConsoleCli } from './install-cli.mjs';
 import { installConsoleCliFromCluster } from './cluster-cli-install.mjs';
 import { resolveChannel, validateChannel, validateLock } from './release.mjs';
@@ -67,6 +67,7 @@ Usage:
       [--backup-target-secret <namespace/name>] [--add-to-path]
   opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
   opensphere-setup rotate-service-credentials [--context <kube-context>]
+  opensphere-setup uninstall --purge-data --confirm DELETE-OPENSPHERE [--context <kube-context>]
   opensphere-setup install-cli [--console <url>] [--install-dir <directory>]
       [--insecure-skip-tls-verify] [--add-to-path]
   opensphere-setup status
@@ -231,6 +232,23 @@ async function main() {
     if (migrated) console.log(`[마이그레이션] 기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
     const result = await rotateServiceCredentials();
     console.log(`[완료] Console service credentials 회전 (${result.consoleUrl})`);
+    return;
+  }
+
+  if (command === 'uninstall') {
+    // Namespace deletion can remove PVCs and audit evidence. Keep both the
+    // destructive intent and the exact confirmation phrase in the CLI so a
+    // missing/obsolete release lock can never trigger cleanup implicitly.
+    if (!hasOption('--purge-data')) {
+      throw new Error('uninstall is destructive; specify --purge-data --confirm DELETE-OPENSPHERE');
+    }
+    if (option('--confirm', '') !== 'DELETE-OPENSPHERE') {
+      throw new Error('uninstall requires --confirm DELETE-OPENSPHERE');
+    }
+    assertKubectl();
+    const result = await uninstallManagedInstallation();
+    console.log(`[완료] OpenSphere ${result.releaseDigest} 제거: ${result.namespaces.length} namespaces, ${result.persistentVolumes.length} retained PVs, ${result.customResourceDefinitions.length} CRDs`);
+    console.log('[주의] 외부 CA·S3 백업 Secret은 사용자가 소유한 namespace에 남겨 두었습니다.');
     return;
   }
 
