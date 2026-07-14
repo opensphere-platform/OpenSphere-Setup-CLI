@@ -2,7 +2,7 @@
 
 - 작성일: 2026-07-14
 - 요청 범위: 2026-07-14 통합 기술감사(`INT-AUD-001`~`016`)의 P0/P1 시정 기준선
-- 구현 기준선: `OpenSphere-console@4c44bbb`, `OpenSphere-Setup-CLI@b0261be`
+- 구현 기준선: `OpenSphere-console@4c44bbb`, `OpenSphere-Setup-CLI@8ad7c8d`
 - 대상 채널: `edge` (개발·검증 채널)
 - 판정 요청: 시정 항목의 독립 재검증. 이 문서는 `candidate` 승격이나 운영 사용 승인이 아니다.
 
@@ -21,12 +21,12 @@
 |---|---|---|
 | Console 회귀·채널 발행 검증 | 91/91 통과 | extension uninstall 수렴, native CLI·인증 경계, 채널을 모든 불변 이미지가 준비된 뒤에만 전환하는 workflow 계약 |
 | Console publish run `29328006030` | 성공 | 9개 `linux/amd64,linux/arm64` 이미지, GitHub provenance와 SPDX SBOM, 마지막 `publish-edge` release 전환 |
-| Setup 단위·계약 테스트 | 70/70 통과 | provenance/SBOM, lock 무결성, 권한·백업·TLS·service credential 게이트, multi-arch, port-forward, redacted 증적 수집 |
-| GitHub Actions run `29327502987` (attempt 2) | 성공 | `edge` 해석, development/production 새 kind clean bootstrap, 과거 서명 lock → 현재 lock upgrade → 과거 lock rollback |
+| Setup 단위·계약 테스트 | 73/73 통과 | provenance/SBOM, lock 무결성, 권한·백업·TLS·service credential 게이트, promotion read-only preflight, multi-arch, port-forward, redacted 증적 수집 |
+| GitHub Actions run `29331152762` | 성공 | `edge` 해석, development/production 새 kind clean bootstrap, 과거 서명 lock → 현재 lock upgrade → 과거 lock rollback |
 | clean-cluster 라이브 결과 | 성공 | 모든 설치 경로에서 12 Pod / 11 Service, digest lock, PostgreSQL backup 및 비파괴 restore drill 완료 |
 | 보존 증적 | 성공 | 90일 GitHub Actions artifact에 release inventory, 명시적 ClusterRole/Binding, network policy, endpoint, redacted PostgreSQL 권한 경계 보존 |
 
-검증 실행 링크: <https://github.com/opensphere-platform/OpenSphere-console/actions/runs/29328006030>, <https://github.com/opensphere-platform/OpenSphere-Setup-CLI/actions/runs/29327502987>
+검증 실행 링크: <https://github.com/opensphere-platform/OpenSphere-console/actions/runs/29328006030>, <https://github.com/opensphere-platform/OpenSphere-Setup-CLI/actions/runs/29331152762>
 
 ## 3. 감사 지적별 시정 상태
 
@@ -35,7 +35,7 @@
 | `INT-AUD-001` P0 | 구현 및 clean-cluster 라이브 검증 완료 | 보존 artifact에서 런타임 `console` role의 `superuser=false`, `bypassrls=false`, audit writer 권한 false를 직접 확인 |
 | `INT-AUD-002` P1 | 구현 및 CI 검증 완료 | 9개 이미지 모두 OCI-bound provenance와 SPDX SBOM을 fail-closed로 검증하고, complete release가 되기 전 `edge`를 전환하지 않는지 확인 |
 | `INT-AUD-003` P1 | 구현·회귀 테스트 완료 | `/api/identity`를 포함한 관리 표면이 매 요청 introspection 결과의 활성 상태·현재 역할을 쓰는지, 강등/폐기 직후 거부되는지 실증 |
-| `INT-AUD-004` P1 | edge backup/restore drill 구현·CI 검증 완료; 승격 채널 외부 저장소 증거는 미제출 | candidate/stable에서 외부 S3 대상, CA trust, backup 및 restore drill을 실제 운영 엔드포인트로 검증 |
+| `INT-AUD-004` P1 | edge backup/restore drill과 candidate/stable 읽기 전용 preflight 구현·CI 검증 완료; 승격 채널 외부 저장소 증거는 미제출 | candidate/stable에서 외부 S3 대상, CA trust, backup 및 restore drill을 실제 운영 엔드포인트로 검증 |
 | `INT-AUD-005` P1 | 구현·clean kind 검증 완료 | Service port-forward 기반 verify와 `linux/amd64`, `linux/arm64` 검증; 기본 runtime은 12 Pod/11 Service이며, 별도 원격 지원 K8s에서 독립 재현 권고 |
 | `INT-AUD-006` P1 | 구현·회귀 테스트 완료 | service credential TTL, Secret의 stdin 전달, 만료 전 rotate 명령 및 실제 회전 후 구 자격 폐기를 검증 |
 | `INT-AUD-008` P2 | 승격 채널 gate 구현·회귀 테스트 완료 | candidate/stable이 production 인증 프로파일(TOTP 강제) 외 값을 거부하는지 확인 |
@@ -59,6 +59,8 @@
 ```powershell
 opensphere-setup bootstrap --release candidate --backup-target-secret platform-secrets/opensphere-audit-backup --shell-tls-secret platform-secrets/opensphere-console-public-tls
 ```
+
+클러스터 변경 전에는 [`PROMOTION-OPERATIONAL-PREFLIGHT.md`](PROMOTION-OPERATIONAL-PREFLIGHT.md)의 읽기 전용 `opensphere-setup preflight`로 remote Kubernetes·StorageClass·외부 TLS·S3 Secret 계약을 검증한다. 이 검증은 외부 S3의 실제 restore를 대체하지 않으며, bootstrap recovery drill과 독립 재감사가 여전히 필요하다.
 
 ## 5. 아직 미시정인 UI·접근성 범위
 
