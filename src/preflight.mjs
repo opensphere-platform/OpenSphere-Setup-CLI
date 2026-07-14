@@ -1,4 +1,5 @@
 import { assertKubectl, kubectl } from './process.mjs';
+import { assertStorageProfile } from './storage-profile.mjs';
 
 function versionTuple(version) {
   const match = String(version).match(/^v?(\d+)\.(\d+)/);
@@ -34,19 +35,19 @@ function selectStorageClass(requested) {
     if (!classes.some((entry) => entry.metadata.name === requested)) {
       throw new Error(`StorageClass does not exist: ${requested}`);
     }
-    return requested;
+    return classes.find((entry) => entry.metadata.name === requested);
   }
   const defaults = classes.filter((entry) =>
     entry.metadata.annotations?.['storageclass.kubernetes.io/is-default-class'] === 'true' ||
     entry.metadata.annotations?.['storageclass.beta.kubernetes.io/is-default-class'] === 'true'
   );
-  if (defaults.length === 1) return defaults[0].metadata.name;
+  if (defaults.length === 1) return defaults[0];
   if (defaults.length > 1) throw new Error('Multiple default StorageClasses exist; use --storage-class');
-  if (classes.length === 1) return classes[0].metadata.name;
+  if (classes.length === 1) return classes[0];
   throw new Error('No unambiguous StorageClass is available; use --storage-class');
 }
 
-export function preflight({ storageClass } = {}) {
+export function preflight({ storageClass, channel = 'edge' } = {}) {
   const versions = assertKubectl();
   const serverVersion = versions.cluster.serverVersion.gitVersion;
   if (!atLeast(serverVersion, 1, 30)) {
@@ -66,6 +67,6 @@ export function preflight({ storageClass } = {}) {
     versions,
     serverVersion,
     nodeCount: nodes.length,
-    storageClass: selectStorageClass(storageClass)
+    storageClass: assertStorageProfile(selectStorageClass(storageClass), channel).name
   };
 }

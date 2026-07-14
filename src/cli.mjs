@@ -60,6 +60,7 @@ Usage:
        [--auth-environment <development|production>] [--backup-target-secret <namespace/name>] [--no-open-browser]
   opensphere-setup upgrade --release <edge|candidate|stable> [--lock <verified-lock-file>]
       [--context <kube-context>] [--storage-class <name>] [--console <https-origin>]
+      [--backup-target-secret <namespace/name>]
   opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
   opensphere-setup rotate-service-credentials [--context <kube-context>]
   opensphere-setup install-cli [--console <url>] [--install-dir <directory>]
@@ -187,7 +188,8 @@ async function main() {
     }
     const result = await upgrade(installed, target, {
       storageClass: option('--storage-class', undefined),
-      consoleUrl: suppliedConsoleUrl
+      consoleUrl: suppliedConsoleUrl,
+      backupTargetSecret: hasOption('--backup-target-secret') ? option('--backup-target-secret', '') : undefined
     });
     const installedCli = await installConsoleCli({
       consoleUrl: result.consoleUrl ?? suppliedConsoleUrl ?? 'https://localhost:8090',

@@ -90,6 +90,7 @@ function readSecret(namespace, name) {
 // use --from-literal: process listings and captured command errors must never
 // disclose an external backup credential.
 function prepareBackupTarget(channel, sourceRef) {
+  const snapshot = readSecretSnapshot('opensphere-backbone', 'backbone-postgres-backup-target');
   let source;
   if (sourceRef) {
     source = readSecret(sourceRef.namespace, sourceRef.name);
@@ -114,7 +115,15 @@ function prepareBackupTarget(channel, sourceRef) {
     apiVersion: 'v1', kind: 'Secret', metadata: { name: 'backbone-postgres-backup-target', namespace: 'opensphere-backbone' },
     type: 'Opaque', data: backupTargetData(source)
   })}\n`);
-  return { mode: target.inCluster ? 'in-cluster-rustfs' : 'external-s3', endpoint: target.endpoint, bucket: target.bucket };
+  return {
+    mode: target.inCluster ? 'in-cluster-rustfs' : 'external-s3',
+    endpoint: target.endpoint,
+    bucket: target.bucket,
+    // A failed channel upgrade must not leave an external backup endpoint
+    // configured for a release that has rolled back. Bootstrap intentionally
+    // retains the target, while upgrade invokes this restore after rollback.
+    restore: () => restoreSecretSnapshot(snapshot)
+  };
 }
 
 function ensureTlsSecret(namespace, name, cert, key, { replace = false } = {}) {
@@ -703,7 +712,7 @@ export async function bootstrap(lock, {
   }
   const requestedBackupTarget = backupTargetSecret ? parseBackupTargetSecretRef(backupTargetSecret) : undefined;
   const effectiveAdmin = installed ? (readInitialAdmin() ?? storedConfig.initialAdmin) : initialAdmin;
-  const cluster = preflight({ storageClass: storedConfig?.storageClass ?? storageClass });
+  const cluster = preflight({ storageClass: storedConfig?.storageClass ?? storageClass, channel: lock.channel });
   const work = await mkdtemp(join(tmpdir(), 'opensphere-setup-'));
   try {
     console.log(`[완료] Kubernetes 연결 (${cluster.serverVersion}, ${cluster.nodeCount} nodes, StorageClass ${cluster.storageClass})`);
@@ -798,7 +807,7 @@ export async function bootstrap(lock, {
   }
 }
 
-export async function upgrade(previousLock, targetLock, { storageClass, consoleUrl, runtime = {} } = {}) {
+export async function upgrade(previousLock, targetLock, { storageClass, consoleUrl, backupTargetSecret, runtime = {} } = {}) {
   const operations = {
     readInstallationLock,
     readInstallationConfig,
@@ -807,6 +816,7 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     materializeRelease,
     applyRelease,
     recordInstallationState,
+    prepareBackupTarget,
     prepareUpgradePrerequisites,
     restartBackboneTrustConsumers,
     reconcileRollbackStatefulSets,
@@ -842,6 +852,8 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
   }
 
   const effectiveStorageClass = storedConfig.storageClass;
+  preflight({ storageClass: effectiveStorageClass, channel: targetLock.channel });
+  const requestedBackupTarget = backupTargetSecret ? parseBackupTargetSecretRef(backupTargetSecret) : undefined;
   const initialAdmin = operations.readInitialAdmin() ?? storedConfig.initialAdmin;
   if (!initialAdmin) throw new Error('Managed installation has no initial administrator metadata');
   operations.assertPostgresUpgradeBoundary();
@@ -855,9 +867,12 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
   ]);
 
   let prerequisites;
+  let backupTarget;
   try {
     prerequisites = await operations.prepareUpgradePrerequisites(effectiveConsoleUrl);
     if (prerequisites.changed) console.log('[준비] 기존 설치에 RustFS TLS와 CA trust bundle 추가');
+    backupTarget = operations.prepareBackupTarget(targetLock.channel, requestedBackupTarget);
+    console.log(`[준비] 감사 백업 대상 확인 (${backupTarget.mode})`);
     operations.applyRelease(targetRelease, '업그레이드');
     console.log('[대기] PostgreSQL audit ownership boundary reconcile');
     operations.waitForBackboneBoundaryReconcile(targetLock);
@@ -886,6 +901,7 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
       // running again. Removing them before its StatefulSet has reconciled can
       // leave rollback stuck behind a target Pod with a Secret volume.
       if (typeof prerequisites?.restore === 'function') prerequisites.restore();
+      if (typeof backupTarget?.restore === 'function') backupTarget.restore();
     } catch (rollbackError) {
       throw new Error(`Upgrade failed (${upgradeError.message}); rollback also failed (${rollbackError.message})`);
     }

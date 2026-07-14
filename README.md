@@ -20,7 +20,7 @@ opensphere-setup.cmd bootstrap --release stable --backup-target-secret platform-
 opensphere-setup.cmd upgrade --release edge
 ```
 
-`edge`는 개발용 in-cluster RustFS를 감사 백업 대상으로 사용한다. `candidate`와 `stable`은 반드시 외부 S3 호환 백업 Secret을 지정해야 하며, 같은 클러스터의 RustFS·localhost·Service DNS는 거부된다. Secret에는 `endpoint`, `bucket`, `access_key`, `secret_key`, `ca.crt`, 선택 `region`이 필요하다. 승격 채널은 자동으로 `production` 인증 정책(TOTP 강제)을 사용하며 `development`로 완화할 수 없다.
+`edge`는 개발용 in-cluster RustFS를 감사 백업 대상으로 사용한다. `candidate`와 `stable`은 반드시 외부 S3 호환 백업 Secret을 지정해야 하며, 같은 클러스터의 RustFS·localhost·Service DNS는 거부된다. Secret에는 `endpoint`, `bucket`, `access_key`, `secret_key`, `ca.crt`, 선택 `region`이 필요하다. 승격 채널은 자동으로 `production` 인증 정책(TOTP 강제)을 사용하며 `development`로 완화할 수 없다. 또한 승격용 StorageClass는 `opensphere.io/backbone-storage-profile=durable-v1`, `opensphere.io/encryption-at-rest=true`, `opensphere.io/failure-domain=multi-node|zone-redundant|region-redundant`, `reclaimPolicy=Retain`, `allowVolumeExpansion=true`을 모두 선언해야 한다. node-local provisioner는 거부된다.
 
 기본 최초 관리자 이름은 Kanidm 예약 계정 `admin`과 충돌하지 않는 `opensphere-admin`이다.
 다른 이름을 원하면 최초 설치 시 `--admin-username`, `--admin-display-name`, `--admin-email`을

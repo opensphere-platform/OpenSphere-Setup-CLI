@@ -50,6 +50,10 @@ function runtime(previous, events, { failTarget = false } = {}) {
       events.push('prepare-prerequisites');
       return { changed: true, restore: () => events.push('restore-prerequisites') };
     },
+    prepareBackupTarget: () => {
+      events.push('prepare-backup-target');
+      return { mode: 'in-cluster-rustfs', restore: () => events.push('restore-backup-target') };
+    },
     restartBackboneTrustConsumers: () => events.push('restart-backbone-trust-consumers'),
     reconcileRollbackStatefulSets: () => events.push('reconcile-rollback-statefulsets'),
     waitForCoreRollouts: () => events.push('wait'),
@@ -74,6 +78,7 @@ test('upgrade prefetches both releases before applying and verifies the target',
     `materialize:${target.sourceRevision}`,
     `materialize:${previous.sourceRevision}`,
     'prepare-prerequisites',
+    'prepare-backup-target',
     `apply:업그레이드:${target.sourceRevision}`,
     'boundary-reconcile',
     'restart-backbone-trust-consumers',
@@ -92,13 +97,14 @@ test('failed target verification restores and verifies the previous release', as
     upgrade(previous, target, { runtime: runtime(previous, events, { failTarget: true }) }),
     /previous release was restored: target is unhealthy/
   );
-  assert.deepEqual(events.slice(-6), [
+  assert.deepEqual(events.slice(-7), [
     `apply:롤백:${previous.sourceRevision}`,
     `record:${previous.sourceRevision}`,
     'reconcile-rollback-statefulsets',
     'wait',
     `verify:${previous.sourceRevision}`,
-    'restore-prerequisites'
+    'restore-prerequisites',
+    'restore-backup-target'
   ]);
 });
 
