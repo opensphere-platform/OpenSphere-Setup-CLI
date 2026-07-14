@@ -494,6 +494,10 @@ GUI 구성요소는 OpenSphere 통합 디자인 정책에 따라 Clarity v18을 
 
 Setup은 mutable tag만 신뢰해서 설치하지 않는다.
 
+현재 제품 이미지는 `linux/amd64`와 `linux/arm64` multi-platform manifest로
+발행한다. 혼합 Linux 노드도 지원하되, 다른 운영체제·아키텍처는 bootstrap 전에
+명시적으로 거부한다.
+
 필수 release metadata:
 
 - release version

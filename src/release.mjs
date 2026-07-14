@@ -41,6 +41,10 @@ export const COMPONENTS = Object.freeze({
   cbsGitea: 'opensphere-cbs-gitea'
 });
 
+// A resolved image is a multi-platform index.  Do not let a channel appear
+// installable on arm64 merely because its amd64 variant has the right label.
+export const RELEASE_PLATFORMS = Object.freeze(['linux/amd64', 'linux/arm64']);
+
 function ghToken() {
   if (process.env.GHCR_TOKEN) return process.env.GHCR_TOKEN;
   try {
@@ -70,6 +74,22 @@ async function registryToken(repository, fetchImpl) {
   return body.token;
 }
 
+export function requiredPlatformDescriptors(index, repository) {
+  if (!Array.isArray(index?.manifests)) {
+    throw new Error(`${repository} must publish a multi-platform image index`);
+  }
+  const found = new Map(index.manifests
+    .filter((entry) => entry?.platform?.os === 'linux' && typeof entry?.platform?.architecture === 'string')
+    .map((entry) => [`${entry.platform.os}/${entry.platform.architecture}`, entry]));
+  return RELEASE_PLATFORMS.map((platform) => {
+    const descriptor = found.get(platform);
+    if (!/^sha256:[a-f0-9]{64}$/.test(descriptor?.digest ?? '')) {
+      throw new Error(`${repository} is missing required ${platform} manifest`);
+    }
+    return descriptor;
+  });
+}
+
 export async function resolveImage(repository, channel, { fetchImpl = fetch } = {}) {
   const token = await registryToken(repository, fetchImpl);
   const base = `https://${REGISTRY}/v2/${OWNER}/${repository}`;
@@ -95,26 +115,27 @@ export async function resolveImage(repository, channel, { fetchImpl = fetch } = 
     throw new Error(`Invalid registry digest for ${repository}:${channel}`);
   }
   const document = await response.json();
-  let manifest = document;
-  if (Array.isArray(document.manifests)) {
-    const descriptor = document.manifests.find((entry) =>
-      entry.platform?.os === 'linux' && entry.platform?.architecture === 'amd64'
-    );
-    if (!descriptor?.digest) throw new Error(`${repository}:${channel} has no linux/amd64 manifest`);
+  const descriptors = requiredPlatformDescriptors(document, repository);
+  const manifests = await Promise.all(descriptors.map(async (descriptor) => {
     const platformResponse = await fetchWithRetry(`${base}/manifests/${descriptor.digest}`, { headers }, { fetchImpl });
     if (!platformResponse.ok) throw new Error(`Platform manifest unavailable for ${repository}: HTTP ${platformResponse.status}`);
-    manifest = await platformResponse.json();
+    return platformResponse.json();
+  }));
+  const configs = await Promise.all(manifests.map(async (manifest) => {
+    if (!/^sha256:[a-f0-9]{64}$/.test(manifest.config?.digest ?? '')) {
+      throw new Error(`Image config descriptor missing for ${repository}:${channel}`);
+    }
+    const configResponse = await fetchWithRetry(`${base}/blobs/${manifest.config.digest}`, {
+      headers: { authorization: `Bearer ${token}` }
+    }, { fetchImpl });
+    if (!configResponse.ok) throw new Error(`Image config unavailable for ${repository}: HTTP ${configResponse.status}`);
+    return configResponse.json();
+  }));
+  const revisions = new Set(configs.map((config) => config.config?.Labels?.['io.opensphere.source-revision']));
+  if (revisions.size !== 1 || !/^[a-f0-9]{40}$/.test([...revisions][0] ?? '')) {
+    throw new Error(`Source revision labels differ across required platforms for ${repository}:${channel}`);
   }
-  if (!manifest.config?.digest) throw new Error(`Image config descriptor missing for ${repository}:${channel}`);
-  const configResponse = await fetchWithRetry(`${base}/blobs/${manifest.config.digest}`, {
-    headers: { authorization: `Bearer ${token}` }
-  }, { fetchImpl });
-  if (!configResponse.ok) throw new Error(`Image config unavailable for ${repository}: HTTP ${configResponse.status}`);
-  const config = await configResponse.json();
-  const sourceRevision = config.config?.Labels?.['io.opensphere.source-revision'];
-  if (!/^[a-f0-9]{40}$/.test(sourceRevision ?? '')) {
-    throw new Error(`Source revision label missing for ${repository}:${channel}`);
-  }
+  const [sourceRevision] = revisions;
   return { image: `${REGISTRY}/${OWNER}/${repository}@${digest}`, sourceRevision };
 }
 

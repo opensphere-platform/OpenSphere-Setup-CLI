@@ -7,6 +7,7 @@ import {
   LEGACY_RELEASE_TRUST,
   migrateLegacyReleaseLock,
   RELEASE_API_VERSION,
+  RELEASE_PLATFORMS,
   RELEASE_TRUST,
   SOURCE,
   validateChannel,
@@ -14,7 +15,8 @@ import {
   verifyImageProvenance,
   verifyImageSbom,
   verifyReleaseProvenance,
-  resolveChannel
+  resolveChannel,
+  requiredPlatformDescriptors
 } from '../src/release.mjs';
 
 const REVISION = '1'.repeat(40);
@@ -53,6 +55,19 @@ test('canonical baseline contains the promised nine repositories', () => {
     'opensphere-cbs-rustfs',
     'opensphere-cbs-gitea'
   ]);
+});
+
+test('release baseline requires native manifests for every supported Linux platform', () => {
+  assert.deepEqual(RELEASE_PLATFORMS, ['linux/amd64', 'linux/arm64']);
+  const index = {
+    manifests: RELEASE_PLATFORMS.map((platform, index) => {
+      const [os, architecture] = platform.split('/');
+      return { digest: `sha256:${String(index + 1).repeat(64)}`, platform: { os, architecture } };
+    })
+  };
+  assert.equal(requiredPlatformDescriptors(index, 'opensphere-console').length, 2);
+  index.manifests.pop();
+  assert.throws(() => requiredPlatformDescriptors(index, 'opensphere-console'), /missing required linux\/arm64 manifest/);
 });
 
 test('only governed release channels are accepted', () => {

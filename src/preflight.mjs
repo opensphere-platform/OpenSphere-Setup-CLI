@@ -1,6 +1,8 @@
 import { assertKubectl, kubectl } from './process.mjs';
 import { assertStorageProfile } from './storage-profile.mjs';
 
+export const SUPPORTED_NODE_PLATFORMS = Object.freeze(new Set(['linux/amd64', 'linux/arm64']));
+
 function versionTuple(version) {
   const match = String(version).match(/^v?(\d+)\.(\d+)/);
   if (!match) throw new Error(`Unrecognized Kubernetes version: ${version}`);
@@ -47,6 +49,14 @@ function selectStorageClass(requested) {
   throw new Error('No unambiguous StorageClass is available; use --storage-class');
 }
 
+export function assertSupportedNodePlatform(node) {
+  const platform = `${node?.status?.nodeInfo?.operatingSystem}/${node?.status?.nodeInfo?.architecture}`;
+  if (!SUPPORTED_NODE_PLATFORMS.has(platform)) {
+    throw new Error(`Unsupported node platform ${node?.metadata?.name}: ${platform}`);
+  }
+  return platform;
+}
+
 export function preflight({ storageClass, channel = 'edge' } = {}) {
   const versions = assertKubectl();
   const serverVersion = versions.cluster.serverVersion.gitVersion;
@@ -58,9 +68,7 @@ export function preflight({ storageClass, channel = 'edge' } = {}) {
   for (const node of nodes) {
     const ready = node.status.conditions?.find((condition) => condition.type === 'Ready');
     if (ready?.status !== 'True') throw new Error(`Kubernetes node is not Ready: ${node.metadata.name}`);
-    if (node.status.nodeInfo?.architecture !== 'amd64' || node.status.nodeInfo?.operatingSystem !== 'linux') {
-      throw new Error(`Unsupported node platform ${node.metadata.name}: ${node.status.nodeInfo?.operatingSystem}/${node.status.nodeInfo?.architecture}`);
-    }
+    assertSupportedNodePlatform(node);
   }
   ensurePermissions();
   return {
