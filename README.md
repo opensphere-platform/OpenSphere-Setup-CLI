@@ -524,8 +524,10 @@ Setup은 mutable tag만 신뢰해서 설치하지 않는다.
 - 고정된 `opensphere-platform/OpenSphere-console` 발행 workflow, OIDC issuer,
   보호된 `refs/heads/main` source ref
 
-Setup은 `gh attestation verify`로 두 predicate를 각각 확인한 뒤에만 lock을
-기록한다. 하나라도 없거나 signer가 다르면 설치·승격은 `Blocked`다. 과거 v1
+Setup은 `gh attestation verify --bundle-from-oci`로 GHCR의 immutable image
+digest에 결박된 두 predicate를 각각 확인한 뒤에만 lock을 기록한다. GitHub API
+색인 지연은 설치 신뢰 판단에 사용하지 않는다. 하나라도 없거나 signer가 다르면
+설치·승격은 `Blocked`다. 과거 v1
 attestation lock은 이미 설치된 `edge`의 rollback 호환성에만 읽을 수 있으며,
 새 `edge` 해석 및 모든 `candidate`/`stable` 해석에는 사용할 수 없다.
 

@@ -175,6 +175,11 @@ function canonicalTrust(candidate) {
 function attestationArgs(image, predicateType) {
   return [
     'attestation', 'verify', `oci://${image}`,
+    // `actions/attest` publishes the signed bundle alongside the immutable
+    // subject in GHCR.  Resolve it there rather than through the GitHub API:
+    // package-attestation API indexing is asynchronous and must not decide
+    // whether a newly published, otherwise valid release is installable.
+    '--bundle-from-oci',
     '--repo', RELEASE_TRUST.repository,
     '--signer-workflow', RELEASE_TRUST.signerWorkflow,
     '--cert-oidc-issuer', RELEASE_TRUST.oidcIssuer,
@@ -219,10 +224,11 @@ function verifyImageAttestation(image, predicateType, subjectError, failureLabel
   throw lastError;
 }
 
-// `gh attestation verify` verifies the certificate chain, OIDC issuer, workflow
-// path, repository and source ref. Its non-zero exit is intentionally fatal: an
-// unsigned image must never become an installation lock merely because its tag
-// resolved to a syntactically valid digest.
+// `gh attestation verify --bundle-from-oci` verifies the registry-bound
+// certificate chain, OIDC issuer, workflow path, repository and source ref.
+// Its non-zero exit is intentionally fatal: an unsigned image must never become
+// an installation lock merely because its tag resolved to a syntactically valid
+// digest.
 export function verifyImageProvenance(image, options = {}) {
   return verifyImageAttestation(
     image,
