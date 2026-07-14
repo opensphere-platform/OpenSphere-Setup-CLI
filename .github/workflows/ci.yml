@@ -26,6 +26,7 @@ jobs:
         shell: pwsh
         run: |
           Get-ChildItem src/*.mjs | ForEach-Object { node --check $_.FullName }
+          node --check scripts/e2e-resolve-source-revision.mjs
           [void][scriptblock]::Create((Get-Content -Raw scripts/e2e-clean-install.ps1))
       # candidate/stable must remain unavailable or fail closed until an
       # explicit promotion publishes a complete dual-architecture release.
@@ -89,5 +90,51 @@ jobs:
           node src/cli.mjs verify --context kind-opensphere-e2e --console https://console.e2e.invalid --require-zero-restarts
           actual_auth_environment="$(kubectl --context kind-opensphere-e2e -n opensphere-console get deployment opensphere-console-auth -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="AUTH_ENVIRONMENT")].value}')"
           test "$actual_auth_environment" = "${{ matrix.auth-environment }}"
+          test -x "$RUNNER_TEMP/opensphere-bin/os"
+          "$RUNNER_TEMP/opensphere-bin/os" --version
+
+  clean-kubernetes-edge-upgrade-rollback:
+    # Exercise a real image-set transition and a deliberate return to the
+    # prior signed digest lock. This supplements the unit-level automatic
+    # failure rollback test with a full clean-cluster operational rollback.
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PREVIOUS_CONSOLE_REVISION: dc272f4c4b5eb69fbc924048611f0dbe38689062
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: helm/kind-action@v1.14.0
+        with:
+          cluster_name: opensphere-upgrade-e2e
+          kubectl_version: v1.36.1
+      - name: Install disposable dynamic storage
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.32/deploy/local-path-storage.yaml
+          kubectl -n local-path-storage wait --for=condition=Available deployment/local-path-provisioner --timeout=180s
+      - name: Bootstrap previous signed edge, upgrade, and explicitly roll back
+        env:
+          OPENSPHERE_OS_INSTALL_DIR: ${{ runner.temp }}/opensphere-bin
+        run: |
+          set -euo pipefail
+          node scripts/e2e-resolve-source-revision.mjs "$PREVIOUS_CONSOLE_REVISION" "$RUNNER_TEMP/previous-edge-lock.json"
+          node src/cli.mjs resolve --release edge --lock "$RUNNER_TEMP/current-edge-lock.json"
+          node src/cli.mjs bootstrap --release edge --lock "$RUNNER_TEMP/previous-edge-lock.json" \
+            --context kind-opensphere-upgrade-e2e --storage-class local-path \
+            --console https://upgrade.e2e.invalid --auth-environment development \
+            --admin-username e2e-admin --admin-display-name 'OpenSphere E2E Administrator' \
+            --admin-email e2e-admin@opensphere.local --no-open-browser
+          node src/cli.mjs verify --context kind-opensphere-upgrade-e2e --console https://upgrade.e2e.invalid --require-zero-restarts
+          node src/cli.mjs upgrade --release edge --lock "$RUNNER_TEMP/current-edge-lock.json" \
+            --context kind-opensphere-upgrade-e2e --console https://upgrade.e2e.invalid
+          node src/cli.mjs verify --context kind-opensphere-upgrade-e2e --console https://upgrade.e2e.invalid --require-zero-restarts
+          node src/cli.mjs upgrade --release edge --lock "$RUNNER_TEMP/previous-edge-lock.json" \
+            --context kind-opensphere-upgrade-e2e --console https://upgrade.e2e.invalid
+          node src/cli.mjs verify --context kind-opensphere-upgrade-e2e --console https://upgrade.e2e.invalid --require-zero-restarts
+          installed_revision="$(kubectl --context kind-opensphere-upgrade-e2e -n opensphere-console get configmap opensphere-installation-lock -o jsonpath='{.data.release\.json}' | node -e 'let body=""; process.stdin.on("data", (chunk) => { body += chunk; }); process.stdin.on("end", () => { process.stdout.write(JSON.parse(body).sourceRevision); });')"
+          test "$installed_revision" = "$PREVIOUS_CONSOLE_REVISION"
           test -x "$RUNNER_TEMP/opensphere-bin/os"
           "$RUNNER_TEMP/opensphere-bin/os" --version

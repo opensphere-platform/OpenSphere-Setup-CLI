@@ -9,6 +9,7 @@ import {
   RELEASE_API_VERSION,
   RELEASE_PLATFORMS,
   RELEASE_TRUST,
+  resolveSourceRevision,
   SOURCE,
   validateChannel,
   validateLock,
@@ -291,4 +292,38 @@ test('channel resolution does not accept a persistently mixed publish window', a
     atomicResolutionRetryMs: 0,
     delay: () => {}
   }), /not atomic/);
+});
+
+test('a historical source-revision tag becomes a verified explicit rollback lock only when all images match', async () => {
+  const calls = [];
+  const resolved = await resolveSourceRevision(REVISION, {
+    async resolveImageFn(repository, tag) {
+      calls.push({ repository, tag });
+      return { image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`, sourceRevision: REVISION };
+    },
+    verifyImage() {},
+    verifySbom() {}
+  });
+  assert.equal(resolved.channel, 'edge');
+  assert.equal(resolved.sourceRevision, REVISION);
+  assert.equal(resolved.releaseDigest, calculateReleaseDigest('edge', resolved.components));
+  assert.deepEqual(calls, Object.values(COMPONENTS).map((repository) => ({ repository, tag: `sha-${REVISION.slice(0, 7)}` })));
+});
+
+test('a historical source-revision resolver rejects a short-tag collision or mixed image set before attestation acceptance', async () => {
+  let provenanceChecks = 0;
+  await assert.rejects(
+    resolveSourceRevision(REVISION, {
+      async resolveImageFn(repository) {
+        return {
+          image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
+          sourceRevision: repository === COMPONENTS.console ? REVISION : 'b'.repeat(40)
+        };
+      },
+      verifyImage() { provenanceChecks += 1; },
+      verifySbom() { provenanceChecks += 1; }
+    }),
+    /does not resolve to one exact governed release/
+  );
+  assert.equal(provenanceChecks, 0);
 });

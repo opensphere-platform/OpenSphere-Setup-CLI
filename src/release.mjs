@@ -368,3 +368,41 @@ export async function resolveChannel(channel, {
   }
   throw new Error(`Channel ${channel} is not atomic: component source revisions differ after ${atomicResolutionAttempts} observations`);
 }
+
+// Historical revisions are not install channels.  This narrow resolver exists
+// for the clean-cluster upgrade/rollback evidence harness: it turns the
+// immutable short-SHA image tags emitted by the publisher into the same
+// provenance-verified lock used by normal Setup operations.  The image config
+// label must still prove the complete requested commit, so a short-tag
+// collision or a substituted image cannot become a rollback target.
+export async function resolveSourceRevision(sourceRevision, {
+  resolveImageFn = resolveImage,
+  verifyImage = verifyImageProvenance,
+  verifySbom = verifyImageSbom
+} = {}) {
+  if (!/^[a-f0-9]{40}$/.test(sourceRevision ?? '')) {
+    throw new Error('Source revision must be a full 40-character lowercase Git commit');
+  }
+  const tag = `sha-${sourceRevision.slice(0, 7)}`;
+  const resolved = await Promise.all(Object.entries(COMPONENTS).map(async ([name, repository]) => [
+    name,
+    { repository, ...await resolveImageFn(repository, tag) }
+  ]));
+  const components = Object.fromEntries(resolved);
+  const actualRevisions = new Set(Object.values(components).map((component) => component.sourceRevision));
+  if (actualRevisions.size !== 1 || actualRevisions.has(sourceRevision) === false) {
+    throw new Error(`Source revision tag ${tag} does not resolve to one exact governed release`);
+  }
+  const lock = {
+    apiVersion: RELEASE_API_VERSION,
+    kind: 'OpenSphereReleaseLock',
+    channel: 'edge',
+    releaseDigest: calculateReleaseDigest('edge', components),
+    resolvedAt: new Date().toISOString(),
+    source: SOURCE,
+    sourceRevision,
+    trust: RELEASE_TRUST,
+    components
+  };
+  return verifyReleaseProvenance(lock, { verifyImage, verifySbom });
+}
