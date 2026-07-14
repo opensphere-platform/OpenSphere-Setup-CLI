@@ -116,6 +116,20 @@ function readSecretSnapshot(namespace, name) {
   }
 }
 
+function assertPostgresUpgradeBoundary() {
+  const consoleSuperuser = kubectl([
+    '-n', 'opensphere-backbone', 'exec', 'deployment/backbone-postgres', '--',
+    'psql', '-U', 'console', '-d', 'console', '-Atc',
+    "SELECT rolsuper FROM pg_roles WHERE rolname = 'console'"
+  ], { capture: true });
+  // PostgreSQL 19 protects the original bootstrap superuser from self-demotion.
+  // An installer must not claim a P0 audit boundary after such a partial
+  // migration; a fresh setup (or an explicit future data migration) is needed.
+  if (consoleSuperuser === 't') {
+    throw new Error('Existing PostgreSQL uses console as the cluster bootstrap superuser; in-place upgrade is refused. Bootstrap a fresh OpenSphere edge installation or use an explicit data migration.');
+  }
+}
+
 function restoreSecretSnapshot(snapshot) {
   if (!snapshot.exists) {
     kubectl(['-n', snapshot.namespace, 'delete', 'secret', snapshot.name, '--ignore-not-found']);
@@ -159,7 +173,8 @@ async function prepareUpgradePrerequisites(consoleUrl) {
     readSecretSnapshot('opensphere-backbone', 'backbone-rustfs'),
     readSecretSnapshot('opensphere-backbone', 'backbone-postgres'),
     readSecretSnapshot('opensphere-backbone', 'backbone-postgres-tls'),
-    readSecretSnapshot('opensphere-backbone', 'backbone-rustfs-tls')
+    readSecretSnapshot('opensphere-backbone', 'backbone-rustfs-tls'),
+    readSecretSnapshot('opensphere-console', 'opensphere-console-auth-ca')
   ];
   let changed = setSecretLiteral('opensphere-backbone', 'backbone-rustfs', 'endpoint', RUSTFS_ENDPOINT);
   const needsPostgresTls = tlsSecretNeedsDnsName('opensphere-backbone', 'backbone-postgres-tls', 'backbone-postgres.opensphere-backbone.svc.cluster.local');
@@ -185,6 +200,10 @@ async function prepareUpgradePrerequisites(consoleUrl) {
     if (needsPostgresTls) ensureTlsSecret('opensphere-backbone', 'backbone-postgres-tls', cert, key, { replace: true });
     if (needsRustfsTls) ensureTlsSecret('opensphere-backbone', 'backbone-rustfs-tls', cert, key, { replace: true });
     appendCertificateAuthority('opensphere-backbone', 'backbone-postgres', ca);
+    // DUPA uses the Console trust bundle for both Kanidm and Backbone service
+    // calls. Keep the existing Kanidm CA and append the CBS CA so HTTPS S3
+    // verification never falls back to plaintext on an upgraded installation.
+    appendCertificateAuthority('opensphere-console', 'opensphere-console-auth-ca', ca);
     changed = true;
     return { changed, restore: () => snapshots.slice().reverse().forEach(restoreSecretSnapshot) };
   } catch (error) {
@@ -192,6 +211,20 @@ async function prepareUpgradePrerequisites(consoleUrl) {
     throw error;
   } finally {
     if (work) await rm(work, { recursive: true, force: true });
+  }
+}
+
+function restartBackboneTrustConsumers() {
+  // Secret volumes update asynchronously and Node TLS contexts are loaded at
+  // process start. A retry after a partially-applied release must therefore
+  // refresh the consumers rather than waiting forever on their old CA bundle.
+  for (const deployment of [
+    'opensphere-console-dupa-controller',
+    'opensphere-console-auth',
+    'opensphere-console-backend',
+    'opensphere-console'
+  ]) {
+    kubectl(['-n', 'opensphere-console', 'rollout', 'restart', `deployment/${deployment}`]);
   }
 }
 
@@ -213,9 +246,10 @@ async function fetchManifest(lock, spec, storageClass, consoleUrl = 'https://loc
   }
   yaml = yaml.replace(/storageClassName:\s*standard/g, `storageClassName: ${storageClass}`);
   yaml = yaml.replaceAll('__OPENSPHERE_CONSOLE_URL__', normalizeConsoleUrl(consoleUrl));
+  yaml = yaml.replaceAll('__OPENSPHERE_RELEASE_REVISION__', lock.sourceRevision);
   yaml = yaml.replaceAll('name: AUTH_ENVIRONMENT, value: "development"', `name: AUTH_ENVIRONMENT, value: "${validateAuthEnvironment(authEnvironment)}"`);
-  if (yaml.includes('__OPENSPHERE_CONSOLE_URL__')) {
-    throw new Error(`Manifest ${spec.path} has an unresolved Console URL placeholder`);
+  if (yaml.includes('__OPENSPHERE_CONSOLE_URL__') || yaml.includes('__OPENSPHERE_RELEASE_REVISION__')) {
+    throw new Error(`Manifest ${spec.path} has an unresolved Setup placeholder`);
   }
   for (const match of yaml.matchAll(/^[ \t]*image:[ \t]+["']?([^"'#\s]+)/gm)) {
     if (!/^ghcr\.io\/opensphere-platform\/[a-z0-9-]+@sha256:[a-f0-9]{64}$/.test(match[1])) {
@@ -335,6 +369,36 @@ function runBackboneRecoveryDrill() {
   kubectl(['-n', 'opensphere-backbone', 'create', 'job', restoreJob, '--from=cronjob/backbone-postgres-restore-drill']);
   kubectl(['-n', 'opensphere-backbone', 'wait', '--for=condition=complete', `job/${restoreJob}`, '--timeout=900s']);
   return { backupJob, restoreJob };
+}
+
+function waitForBackboneBoundaryReconcile(lock) {
+  const selector = `opensphere.io/boundary-reconcile=true,opensphere.io/release-revision=${lock.sourceRevision}`;
+  const deadline = Date.now() + 10 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const jobs = JSON.parse(kubectl([
+      '-n', 'opensphere-backbone', 'get', 'jobs', '-l', selector, '-o', 'json'
+    ], { capture: true })).items ?? [];
+    const job = jobs.sort((left, right) => String(right.metadata?.creationTimestamp ?? '')
+      .localeCompare(String(left.metadata?.creationTimestamp ?? '')))[0];
+    if (!job) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+      continue;
+    }
+    const conditions = job.status?.conditions ?? [];
+    if (conditions.some((condition) => condition.type === 'Complete' && condition.status === 'True')) {
+      return job.metadata.name;
+    }
+    if (conditions.some((condition) => condition.type === 'Failed' && condition.status === 'True')) {
+      throw new Error(`PostgreSQL boundary reconcile Job failed: ${job.metadata.name}`);
+    }
+    try {
+      kubectl(['-n', 'opensphere-backbone', 'wait', '--for=condition=complete', `job/${job.metadata.name}`, '--timeout=15s'], { capture: true });
+      return job.metadata.name;
+    } catch {
+      // A timed-out `kubectl wait` is expected while PostgreSQL is starting.
+    }
+  }
+  throw new Error('PostgreSQL boundary reconcile Job did not complete before timeout');
 }
 
 function recordInstallationState(lock, storageClass, initialAdmin, consoleUrl, authEnvironment = 'development') {
@@ -653,6 +717,8 @@ export async function bootstrap(lock, {
     }
     console.log('[대기] Kanidm과 CBS rollout');
     kubectl(['-n', 'opensphere-console-auth', 'rollout', 'status', 'statefulset/kanidm', '--timeout=360s']);
+    console.log('[대기] PostgreSQL audit ownership boundary reconcile');
+    waitForBackboneBoundaryReconcile(lock);
     const onboarding = await provisionInitialAdmin(effectiveAdmin, effectiveConsoleUrl, { authEnvironment: effectiveAuthEnvironment });
     const onboardingUrl = onboarding.onboardingUrl;
     recordInitialAdmin(effectiveAdmin);
@@ -696,12 +762,15 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     readInstallationLock,
     readInstallationConfig,
     readInitialAdmin,
+    assertPostgresUpgradeBoundary,
     materializeRelease,
     applyRelease,
     recordInstallationState,
     prepareUpgradePrerequisites,
+    restartBackboneTrustConsumers,
     reconcileRollbackStatefulSets,
     waitForCoreRollouts,
+    waitForBackboneBoundaryReconcile,
     runBackboneRecoveryDrill,
     verifyInstallation,
     ...runtime
@@ -730,6 +799,7 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
   const effectiveStorageClass = storedConfig.storageClass;
   const initialAdmin = operations.readInitialAdmin() ?? storedConfig.initialAdmin;
   if (!initialAdmin) throw new Error('Managed installation has no initial administrator metadata');
+  operations.assertPostgresUpgradeBoundary();
 
   // Both directions are downloaded and digest-policy checked before the first
   // cluster mutation. A registry/source outage therefore cannot strand rollback.
@@ -744,6 +814,9 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     prerequisites = await operations.prepareUpgradePrerequisites(effectiveConsoleUrl);
     if (prerequisites.changed) console.log('[준비] 기존 설치에 RustFS TLS와 CA trust bundle 추가');
     operations.applyRelease(targetRelease, '업그레이드');
+    console.log('[대기] PostgreSQL audit ownership boundary reconcile');
+    operations.waitForBackboneBoundaryReconcile(targetLock);
+    if (prerequisites.changed) operations.restartBackboneTrustConsumers();
     operations.recordInstallationState(targetLock, effectiveStorageClass, initialAdmin, effectiveConsoleUrl, effectiveAuthEnvironment);
     console.log('[대기] 대상 release rollout');
     operations.waitForCoreRollouts();

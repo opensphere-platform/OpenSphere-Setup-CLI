@@ -39,6 +39,7 @@ function runtime(previous, events, { failTarget = false } = {}) {
       initialAdmin: { username: 'opensphere-admin', displayName: 'OpenSphere Administrator', email: 'admin@opensphere.local' }
     }),
     readInitialAdmin: () => null,
+    assertPostgresUpgradeBoundary: () => events.push('assert-postgres-upgrade-boundary'),
     materializeRelease: async (release) => {
       events.push(`materialize:${release.sourceRevision}`);
       return [{ path: 'release.yaml', yaml: release.sourceRevision }];
@@ -49,8 +50,10 @@ function runtime(previous, events, { failTarget = false } = {}) {
       events.push('prepare-prerequisites');
       return { changed: true, restore: () => events.push('restore-prerequisites') };
     },
+    restartBackboneTrustConsumers: () => events.push('restart-backbone-trust-consumers'),
     reconcileRollbackStatefulSets: () => events.push('reconcile-rollback-statefulsets'),
     waitForCoreRollouts: () => events.push('wait'),
+    waitForBackboneBoundaryReconcile: () => events.push('boundary-reconcile'),
     runBackboneRecoveryDrill: () => events.push('recovery-drill'),
     verifyInstallation: async (release) => {
       events.push(`verify:${release.sourceRevision}`);
@@ -67,10 +70,13 @@ test('upgrade prefetches both releases before applying and verifies the target',
   const result = await upgrade(previous, target, { runtime: runtime(previous, events) });
   assert.equal(result.changed, true);
   assert.deepEqual(events, [
+    'assert-postgres-upgrade-boundary',
     `materialize:${target.sourceRevision}`,
     `materialize:${previous.sourceRevision}`,
     'prepare-prerequisites',
     `apply:업그레이드:${target.sourceRevision}`,
+    'boundary-reconcile',
+    'restart-backbone-trust-consumers',
     `record:${target.sourceRevision}`,
     'wait',
     'recovery-drill',

@@ -296,7 +296,9 @@ function verifyWorkloads(lock, { requireZeroRestarts }) {
   }
 
   const pods = getJson(['get', 'pods', '-A']).items
-    .filter((pod) => NAMESPACES.includes(pod.metadata.namespace));
+    .filter((pod) => NAMESPACES.includes(pod.metadata.namespace))
+    .filter((pod) => (pod.metadata.ownerReferences ?? []).some((owner) =>
+      owner.kind === 'ReplicaSet' || owner.kind === 'StatefulSet'));
   const desiredPodCount = resources.reduce((sum, resource) => sum + (resource.spec.replicas ?? 1), 0);
   if (pods.length !== desiredPodCount) {
     throw new Error(`OpenSphere pod set is not quiescent: expected ${desiredPodCount}, found ${pods.length}`);
