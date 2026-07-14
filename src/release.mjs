@@ -6,6 +6,16 @@ export const RELEASE_API_VERSION = 'release.opensphere.io/v1alpha1';
 export const REGISTRY = 'ghcr.io';
 export const OWNER = 'opensphere-platform';
 export const SOURCE = 'https://github.com/opensphere-platform/OpenSphere-console';
+// The CLI embeds the expected GitHub Actions identity. A digest is accepted only
+// after GitHub's Sigstore-backed provenance verification proves this workflow
+// produced it on the protected main branch. This is the Setup trust root.
+export const RELEASE_TRUST = Object.freeze({
+  type: 'github-actions-attestation/v1',
+  repository: 'opensphere-platform/OpenSphere-console',
+  signerWorkflow: 'opensphere-platform/OpenSphere-console/.github/workflows/publish-edge-images.yml',
+  oidcIssuer: 'https://token.actions.githubusercontent.com',
+  sourceRef: 'refs/heads/main'
+});
 
 export const COMPONENTS = Object.freeze({
   console: 'opensphere-console',
@@ -103,8 +113,41 @@ export function validateChannel(channel) {
 }
 
 export function calculateReleaseDigest(channel, components) {
-  const payload = JSON.stringify({ channel, components });
+  const payload = JSON.stringify({ channel, components, trust: RELEASE_TRUST });
   return `sha256:${createHash('sha256').update(payload).digest('hex')}`;
+}
+
+function canonicalImage(image) {
+  return new RegExp(`^${REGISTRY}/${OWNER}/opensphere-[a-z0-9-]+@sha256:[a-f0-9]{64}$`).test(image ?? '');
+}
+
+// `gh attestation verify` verifies the certificate chain, OIDC issuer, workflow
+// path, repository and source ref. Its non-zero exit is intentionally fatal: an
+// unsigned image must never become an installation lock merely because its tag
+// resolved to a syntactically valid digest.
+export function verifyImageProvenance(image, { execFile = execFileSync } = {}) {
+  if (!canonicalImage(image)) throw new Error('Attestation subject is not a governed digest-pinned image');
+  const args = [
+    'attestation', 'verify', `oci://${image}`,
+    '--repo', RELEASE_TRUST.repository,
+    '--signer-workflow', RELEASE_TRUST.signerWorkflow,
+    '--cert-oidc-issuer', RELEASE_TRUST.oidcIssuer,
+    '--source-ref', RELEASE_TRUST.sourceRef,
+    '--deny-self-hosted-runners'
+  ];
+  try {
+    execFile('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error) {
+    const detail = String(error?.stderr ?? error?.message ?? 'unknown failure').trim();
+    throw new Error(`Image provenance verification failed for ${image}: ${detail}`);
+  }
+  return { image, trust: RELEASE_TRUST };
+}
+
+export async function verifyReleaseProvenance(lock, { verifyImage = verifyImageProvenance } = {}) {
+  validateLock(lock);
+  await Promise.all(Object.values(lock.components).map(({ image }) => verifyImage(image)));
+  return { ...lock, provenanceVerifiedAt: new Date().toISOString() };
 }
 
 export function validateLock(lock) {
@@ -115,6 +158,14 @@ export function validateLock(lock) {
   if (lock.source !== SOURCE) throw new Error('Release lock source is not canonical');
   if (!/^[a-f0-9]{40}$/.test(lock.sourceRevision ?? '')) {
     throw new Error('Release lock source revision is invalid');
+  }
+  const trustKeys = Object.keys(RELEASE_TRUST);
+  if (
+    !lock.trust ||
+    Object.keys(lock.trust).length !== trustKeys.length ||
+    trustKeys.some((key) => lock.trust[key] !== RELEASE_TRUST[key])
+  ) {
+    throw new Error('Release lock trust root is not canonical');
   }
   const names = Object.keys(lock.components ?? {});
   const expectedNames = Object.keys(COMPONENTS);
@@ -141,11 +192,11 @@ export function validateLock(lock) {
   return lock;
 }
 
-export async function resolveChannel(channel) {
+export async function resolveChannel(channel, { resolveImageFn = resolveImage, verifyImage = verifyImageProvenance } = {}) {
   validateChannel(channel);
   const resolved = await Promise.all(Object.entries(COMPONENTS).map(async ([name, repository]) => [
     name,
-    { repository, ...await resolveImage(repository, channel) }
+    { repository, ...await resolveImageFn(repository, channel) }
   ]));
   const components = Object.fromEntries(resolved);
   const revisions = new Set(Object.values(components).map((component) => component.sourceRevision));
@@ -154,7 +205,7 @@ export async function resolveChannel(channel) {
   }
   const [sourceRevision] = revisions;
   const releaseDigest = calculateReleaseDigest(channel, components);
-  return {
+  const lock = {
     apiVersion: RELEASE_API_VERSION,
     kind: 'OpenSphereReleaseLock',
     channel,
@@ -162,6 +213,9 @@ export async function resolveChannel(channel) {
     resolvedAt: new Date().toISOString(),
     source: SOURCE,
     sourceRevision,
+    trust: RELEASE_TRUST,
     components
   };
+  await verifyReleaseProvenance(lock, { verifyImage });
+  return lock;
 }

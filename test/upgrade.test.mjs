@@ -5,6 +5,7 @@ import {
   calculateReleaseDigest,
   COMPONENTS,
   RELEASE_API_VERSION,
+  RELEASE_TRUST,
   SOURCE
 } from '../src/release.mjs';
 
@@ -25,6 +26,7 @@ function lock(revision, digestCharacter) {
     releaseDigest: calculateReleaseDigest('edge', components),
     source: SOURCE,
     sourceRevision: revision,
+    trust: RELEASE_TRUST,
     components
   };
 }

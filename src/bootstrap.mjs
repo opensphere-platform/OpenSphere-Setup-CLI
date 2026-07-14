@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
@@ -10,6 +11,7 @@ import { preflight } from './preflight.mjs';
 import { fetchWithRetry } from './http.mjs';
 import { validateLock } from './release.mjs';
 import { verifyInstallation } from './verify.mjs';
+import { normalizeConsoleUrl } from './console-url.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RAW_ROOT = 'https://raw.githubusercontent.com/opensphere-platform/OpenSphere-console';
@@ -57,15 +59,23 @@ function ensureNamespace(name) {
 }
 
 function ensureGenericSecret(namespace, name, literals = {}, files = {}) {
+  let existing = null;
   try {
-    kubectl(['-n', namespace, 'get', 'secret', name], { capture: true });
-    return;
+    existing = JSON.parse(kubectl(['-n', namespace, 'get', 'secret', name, '-o', 'json'], { capture: true }));
   } catch {}
-  const args = ['-n', namespace, 'create', 'secret', 'generic', name];
-  for (const [key, value] of Object.entries(literals)) args.push(`--from-literal=${key}=${value}`);
-  for (const [key, path] of Object.entries(files)) args.push(`--from-file=${key}=${path}`);
-  args.push('--dry-run=client', '-o', 'yaml');
-  applyYaml(kubectl(args, { capture: true }));
+  // Never place a secret in a process argument (`kubectl --from-literal` is
+  // observable by same-host processes). kubectl accepts JSON on stdin.
+  const data = {};
+  for (const [key, value] of Object.entries(literals)) data[key] = Buffer.from(String(value)).toString('base64');
+  for (const [key, path] of Object.entries(files)) data[key] = readFileSync(path).toString('base64');
+  const missing = Object.keys(data).some((key) => !existing?.data?.[key]);
+  if (existing && !missing) return;
+  // Preserve current credentials on resume/upgrade. This path only adds a newly
+  // required public CA or schema key; explicit rotation owns credential changes.
+  applyYaml(`${JSON.stringify({
+    apiVersion: 'v1', kind: 'Secret', metadata: { name, namespace }, type: existing?.type || 'Opaque',
+    data: { ...(existing?.data || {}), ...Object.fromEntries(Object.entries(data).filter(([key]) => !existing?.data?.[key])) }
+  })}\n`);
 }
 
 function ensureTlsSecret(namespace, name, cert, key) {
@@ -80,7 +90,27 @@ function ensureTlsSecret(namespace, name, cert, key) {
   applyYaml(yaml);
 }
 
-async function fetchManifest(lock, spec, storageClass) {
+// Endpoint and protocol are release configuration, not a credential. Keep the
+// keys that authenticate RustFS stable, while allowing a security upgrade from
+// HTTP to the verified HTTPS endpoint on an existing installation.
+function setSecretLiteral(namespace, name, key, value) {
+  const existing = JSON.parse(kubectl(['-n', namespace, 'get', 'secret', name, '-o', 'json'], { capture: true }));
+  const encoded = Buffer.from(String(value)).toString('base64');
+  if (existing.data?.[key] === encoded) return;
+  applyYaml(`${JSON.stringify({
+    apiVersion: 'v1', kind: 'Secret', metadata: { name, namespace }, type: existing.type || 'Opaque',
+    data: { ...(existing.data || {}), [key]: encoded }
+  })}\n`);
+}
+
+function validateAuthEnvironment(value) {
+  if (!['development', 'production'].includes(value)) {
+    throw new Error(`Unsupported authentication environment: ${value}`);
+  }
+  return value;
+}
+
+async function fetchManifest(lock, spec, storageClass, consoleUrl = 'https://localhost:8090', authEnvironment = 'development') {
   const url = `${RAW_ROOT}/${lock.sourceRevision}/${spec.path}`;
   const response = await fetchWithRetry(url);
   if (!response.ok) throw new Error(`Manifest download failed (${spec.path}): HTTP ${response.status}`);
@@ -90,6 +120,11 @@ async function fetchManifest(lock, spec, storageClass) {
     yaml = yaml.replace(new RegExp(pattern, 'g'), image);
   }
   yaml = yaml.replace(/storageClassName:\s*standard/g, `storageClassName: ${storageClass}`);
+  yaml = yaml.replaceAll('__OPENSPHERE_CONSOLE_URL__', normalizeConsoleUrl(consoleUrl));
+  yaml = yaml.replaceAll('name: AUTH_ENVIRONMENT, value: "development"', `name: AUTH_ENVIRONMENT, value: "${validateAuthEnvironment(authEnvironment)}"`);
+  if (yaml.includes('__OPENSPHERE_CONSOLE_URL__')) {
+    throw new Error(`Manifest ${spec.path} has an unresolved Console URL placeholder`);
+  }
   for (const match of yaml.matchAll(/^[ \t]*image:[ \t]+["']?([^"'#\s]+)/gm)) {
     if (!/^ghcr\.io\/opensphere-platform\/[a-z0-9-]+@sha256:[a-f0-9]{64}$/.test(match[1])) {
       throw new Error(`Manifest ${spec.path} contains an ungoverned image reference: ${match[1]}`);
@@ -98,10 +133,10 @@ async function fetchManifest(lock, spec, storageClass) {
   return yaml;
 }
 
-async function materializeRelease(lock, storageClass) {
+async function materializeRelease(lock, storageClass, consoleUrl, authEnvironment = 'development') {
   return Promise.all(MANIFESTS.map(async (spec) => ({
     path: spec.path,
-    yaml: await fetchManifest(lock, spec, storageClass)
+    yaml: await fetchManifest(lock, spec, storageClass, consoleUrl, authEnvironment)
   })));
 }
 
@@ -148,13 +183,29 @@ function waitForCoreRollouts() {
   }
 }
 
-function recordInstallationState(lock, storageClass, initialAdmin) {
+// A healthy Deployment does not prove that the durable audit record can be
+// recovered. Bootstrap therefore writes one recovery point and restores it into
+// an ephemeral database. The restore source CronJob is permanently suspended.
+function runBackboneRecoveryDrill() {
+  const suffix = hex(5);
+  const backupJob = `backbone-postgres-backup-bootstrap-${suffix}`;
+  const restoreJob = `backbone-postgres-restore-drill-${suffix}`;
+  kubectl(['-n', 'opensphere-backbone', 'create', 'job', backupJob, '--from=cronjob/backbone-postgres-backup']);
+  kubectl(['-n', 'opensphere-backbone', 'wait', '--for=condition=complete', `job/${backupJob}`, '--timeout=900s']);
+  kubectl(['-n', 'opensphere-backbone', 'create', 'job', restoreJob, '--from=cronjob/backbone-postgres-restore-drill']);
+  kubectl(['-n', 'opensphere-backbone', 'wait', '--for=condition=complete', `job/${restoreJob}`, '--timeout=900s']);
+  return { backupJob, restoreJob };
+}
+
+function recordInstallationState(lock, storageClass, initialAdmin, consoleUrl, authEnvironment = 'development') {
   const config = {
     apiVersion: 'bootstrap.opensphere.io/v1alpha1',
     kind: 'OpenSphereInstallationConfig',
     channel: lock.channel,
     releaseDigest: lock.releaseDigest,
     storageClass,
+    consoleUrl: normalizeConsoleUrl(consoleUrl),
+    authEnvironment: validateAuthEnvironment(authEnvironment),
     initialAdmin
   };
   const yaml = kubectl([
@@ -260,7 +311,7 @@ function openBrowser(url) {
   child.unref();
 }
 
-async function provisionInitialAdmin({ username, displayName, email }) {
+async function provisionInitialAdmin({ username, displayName, email }, consoleUrl, { rotateServiceCredentials = false, authEnvironment = 'development' } = {}) {
   let serviceCredentialsExist = true;
   for (const name of ['opensphere-identity-kanidm', 'opensphere-rolemgr-kanidm']) {
     try { kubectl(['-n', 'opensphere-console', 'get', 'secret', name], { capture: true }); }
@@ -290,7 +341,9 @@ async function provisionInitialAdmin({ username, displayName, email }) {
         OPENSPHERE_INITIAL_ADMIN: username,
         OPENSPHERE_INITIAL_ADMIN_DISPLAY: displayName,
         OPENSPHERE_INITIAL_ADMIN_EMAIL: email,
-        OPENSPHERE_SKIP_SERVICE_TOKENS: String(serviceCredentialsExist)
+        OPENSPHERE_SKIP_SERVICE_TOKENS: String(serviceCredentialsExist && !rotateServiceCredentials),
+        OPENSPHERE_SERVICE_TOKEN_TTL_DAYS: '30',
+        OPENSPHERE_AUTH_ENVIRONMENT: validateAuthEnvironment(authEnvironment)
       }
     });
     if (provision.status !== 0) {
@@ -304,16 +357,35 @@ async function provisionInitialAdmin({ username, displayName, email }) {
       return { onboardingUrl: null, serviceCredentialsCreated: false };
     }
     if (!result.resetToken) throw new Error('Initial admin reset token was not returned');
-    console.log(serviceCredentialsExist
-      ? '[재사용] Console service credential 유지, 최초 관리자 Wizard token 재발급'
-      : '[완료] 최초 관리자와 Console service credential 구성');
+    console.log(rotateServiceCredentials
+      ? '[완료] Console service credential 교체 및 만료일 갱신'
+      : serviceCredentialsExist
+        ? '[재사용] Console service credential 유지, 최초 관리자 Wizard token 재발급'
+        : '[완료] 최초 관리자와 Console service credential 구성');
     return {
-      onboardingUrl: `https://localhost:8090/ui/reset?token=${encodeURIComponent(result.resetToken)}`,
+      onboardingUrl: `${normalizeConsoleUrl(consoleUrl)}/ui/reset?token=${encodeURIComponent(result.resetToken)}`,
       serviceCredentialsCreated: !serviceCredentialsExist
     };
   } finally {
     forward.kill();
   }
+}
+
+export async function rotateServiceCredentials() {
+  const installed = readInstallationLock();
+  if (!installed) throw new Error('No managed OpenSphere installation lock was found');
+  const config = readInstallationConfig();
+  const initialAdmin = readInitialAdmin() ?? config?.initialAdmin;
+  if (!config || !initialAdmin) throw new Error('Managed installation has incomplete administrator metadata');
+  const consoleUrl = normalizeConsoleUrl(config.consoleUrl ?? 'https://localhost:8090');
+  const result = await provisionInitialAdmin(initialAdmin, consoleUrl, {
+    rotateServiceCredentials: true,
+    authEnvironment: config.authEnvironment ?? 'development'
+  });
+  kubectl(['-n', 'opensphere-console', 'rollout', 'restart', 'deployment/opensphere-console-auth', 'deployment/opensphere-console-backend']);
+  kubectl(['-n', 'opensphere-console', 'rollout', 'status', 'deployment/opensphere-console-auth', '--timeout=300s']);
+  kubectl(['-n', 'opensphere-console', 'rollout', 'status', 'deployment/opensphere-console-backend', '--timeout=300s']);
+  return { consoleUrl, serviceCredentialsRotated: true, onboardingUrl: result.onboardingUrl ?? null };
 }
 
 export async function bootstrap(lock, {
@@ -325,9 +397,14 @@ export async function bootstrap(lock, {
   },
   requireZeroRestarts = true,
   storageClass,
-  openOnboarding = true
+  consoleUrl = 'https://localhost:8090',
+  openOnboarding = true,
+  requireRecoveryDrill = true,
+  authEnvironment = 'development'
 } = {}) {
   validateLock(lock);
+  const requestedConsoleUrl = normalizeConsoleUrl(consoleUrl);
+  const requestedAuthEnvironment = validateAuthEnvironment(authEnvironment);
   const installed = readInstallationLock();
   const existingNamespaces = existingOpenSphereNamespaces();
   if (installed && installed.releaseDigest !== lock.releaseDigest) {
@@ -344,25 +421,37 @@ export async function bootstrap(lock, {
   if (storedConfig && storageClass && storedConfig.storageClass !== storageClass) {
     throw new Error(`Installation uses StorageClass ${storedConfig.storageClass}; changing it requires migration`);
   }
+  const storedConsoleUrl = storedConfig?.consoleUrl ?? 'https://localhost:8090';
+  const effectiveConsoleUrl = normalizeConsoleUrl(installed ? storedConsoleUrl : requestedConsoleUrl);
+  const effectiveAuthEnvironment = validateAuthEnvironment(storedConfig?.authEnvironment ?? requestedAuthEnvironment);
+  if (installed && requestedConsoleUrl !== effectiveConsoleUrl) {
+    throw new Error(`Installation uses Console URL ${effectiveConsoleUrl}; changing it requires an endpoint migration`);
+  }
+  if (installed && requestedAuthEnvironment !== effectiveAuthEnvironment) {
+    throw new Error(`Installation uses authentication environment ${effectiveAuthEnvironment}; changing it requires an authentication migration`);
+  }
   const effectiveAdmin = installed ? (readInitialAdmin() ?? storedConfig.initialAdmin) : initialAdmin;
   const cluster = preflight({ storageClass: storedConfig?.storageClass ?? storageClass });
   const work = await mkdtemp(join(tmpdir(), 'opensphere-setup-'));
   try {
     console.log(`[완료] Kubernetes 연결 (${cluster.serverVersion}, ${cluster.nodeCount} nodes, StorageClass ${cluster.storageClass})`);
     for (const namespace of ['opensphere-console-auth', 'opensphere-console', 'opensphere-backbone']) ensureNamespace(namespace);
-    recordInstallationState(lock, cluster.storageClass, effectiveAdmin);
+    recordInstallationState(lock, cluster.storageClass, effectiveAdmin, effectiveConsoleUrl, effectiveAuthEnvironment);
     console.log(`[완료] ${lock.channel} release lock 기록 (${lock.releaseDigest})`);
 
-    run('pwsh', ['-NoProfile', '-File', join(HERE, 'New-Certificates.ps1'), '-OutputDirectory', work]);
+    run('pwsh', [
+      '-NoProfile', '-File', join(HERE, 'New-Certificates.ps1'), '-OutputDirectory', work,
+      '-DnsNames', new URL(effectiveConsoleUrl).hostname
+    ]);
     const cert = join(work, 'tls.crt');
     const key = join(work, 'tls.key');
+    const ca = join(work, 'ca.crt');
     const sig = join(work, 'sig.key');
     ensureTlsSecret('opensphere-console-auth', 'kanidm-tls', cert, key);
     ensureTlsSecret('opensphere-console', 'kanidm-tls', cert, key);
     ensureTlsSecret('opensphere-console', 'shell-tls', cert, key);
-    // nginx currently addresses tls.crt while other consumers use the conventional ca.crt.
-    // Publish the same trust anchor under both stable keys during the compatibility window.
-    ensureGenericSecret('opensphere-console', 'opensphere-console-auth-ca', {}, { 'ca.crt': cert, 'tls.crt': cert });
+    // The root is a real CA; TLS leaves are never treated as trust anchors.
+    ensureGenericSecret('opensphere-console', 'opensphere-console-auth-ca', {}, { 'ca.crt': ca, 'tls.crt': cert });
     ensureGenericSecret('opensphere-console', 'opensphere-console-auth-sig', {}, { 'sig.key': sig });
     ensureGenericSecret('opensphere-backbone', 'backbone-postgres', {
       // `password` belongs to the constrained Console runtime role. PostgreSQL
@@ -370,12 +459,15 @@ export async function bootstrap(lock, {
       // begin life as the database superuser.
       password: hex(32),
       bootstrap_password: hex(32)
-    });
+    }, { 'ca.crt': ca });
+    ensureTlsSecret('opensphere-backbone', 'backbone-postgres-tls', cert, key);
+    ensureTlsSecret('opensphere-backbone', 'backbone-rustfs-tls', cert, key);
     ensureGenericSecret('opensphere-backbone', 'backbone-rustfs', {
       access_key: `os${hex(10)}`,
       secret_key: hex(32),
-      endpoint: 'http://backbone-rustfs.opensphere-backbone.svc.cluster.local:9000'
+      endpoint: 'https://backbone-rustfs.opensphere-backbone.svc.cluster.local:9000'
     });
+    setSecretLiteral('opensphere-backbone', 'backbone-rustfs', 'endpoint', 'https://backbone-rustfs.opensphere-backbone.svc.cluster.local:9000');
     ensureGenericSecret('opensphere-backbone', 'backbone-gitea', {
       db_password: hex(32),
       admin_user: 'opensphere-admin',
@@ -384,7 +476,7 @@ export async function bootstrap(lock, {
     console.log('[완료] Namespace와 bootstrap secret 준비');
 
     for (const spec of MANIFESTS) {
-      const yaml = await fetchManifest(lock, spec, cluster.storageClass);
+      const yaml = await fetchManifest(lock, spec, cluster.storageClass, effectiveConsoleUrl, effectiveAuthEnvironment);
       const file = join(work, spec.path.replaceAll('/', '-'));
       await writeFile(file, yaml, 'utf8');
       applyYaml(yaml);
@@ -392,7 +484,7 @@ export async function bootstrap(lock, {
     }
     console.log('[대기] Kanidm과 CBS rollout');
     kubectl(['-n', 'opensphere-console-auth', 'rollout', 'status', 'statefulset/kanidm', '--timeout=360s']);
-    const onboarding = await provisionInitialAdmin(effectiveAdmin);
+    const onboarding = await provisionInitialAdmin(effectiveAdmin, effectiveConsoleUrl, { authEnvironment: effectiveAuthEnvironment });
     const onboardingUrl = onboarding.onboardingUrl;
     recordInitialAdmin(effectiveAdmin);
     if (onboarding.serviceCredentialsCreated) {
@@ -404,8 +496,19 @@ export async function bootstrap(lock, {
     // is harmless and keeps bootstrap/upgrade rollout coverage identical.
     waitForCoreRollouts();
 
+    let recoveryDrill;
+    if (requireRecoveryDrill) {
+      console.log('[검증] Backbone PostgreSQL → RustFS backup 및 비파괴 restore drill');
+      recoveryDrill = runBackboneRecoveryDrill();
+      console.log(`[완료] recovery drill (${recoveryDrill.backupJob}, ${recoveryDrill.restoreJob})`);
+    }
+
     console.log('[검증] release lock, runtime image, Secret, 인증 및 Console endpoint');
-    const evidence = await verifyInstallation(lock, { requireZeroRestarts });
+    const evidence = await verifyInstallation(lock, {
+      requireZeroRestarts,
+      consoleUrl: effectiveConsoleUrl,
+      requireRecoveryDrill: Boolean(recoveryDrill)
+    });
     console.log(`[완료] OpenSphere Console ${lock.channel} 설치 검증 (${evidence.podCount} pods, ${evidence.serviceCount} services)`);
     if (onboardingUrl && openOnboarding) {
       openBrowser(onboardingUrl);
@@ -413,13 +516,13 @@ export async function bootstrap(lock, {
     } else if (onboardingUrl) {
       console.log('[완료] 최초 관리자 Wizard token이 생성됐으며 비대화형 검증을 위해 브라우저 열기는 생략했습니다.');
     }
-    return { lock, evidence, onboardingUrl, temporaryDirectory: keepTemporaryFiles ? work : undefined };
+    return { lock, evidence, consoleUrl: effectiveConsoleUrl, onboardingUrl, temporaryDirectory: keepTemporaryFiles ? work : undefined };
   } finally {
     if (!keepTemporaryFiles) await rm(work, { recursive: true, force: true });
   }
 }
 
-export async function upgrade(previousLock, targetLock, { storageClass, runtime = {} } = {}) {
+export async function upgrade(previousLock, targetLock, { storageClass, consoleUrl, runtime = {} } = {}) {
   const operations = {
     readInstallationLock,
     readInstallationConfig,
@@ -437,16 +540,21 @@ export async function upgrade(previousLock, targetLock, { storageClass, runtime 
   if (!installed || installed.releaseDigest !== previousLock.releaseDigest) {
     throw new Error('Cluster release lock changed before the upgrade transaction started');
   }
-  if (previousLock.releaseDigest === targetLock.releaseDigest) {
-    const evidence = await operations.verifyInstallation(previousLock, { requireZeroRestarts: false });
-    return { changed: false, lock: previousLock, evidence };
-  }
-
   const storedConfig = operations.readInstallationConfig();
   if (!storedConfig) throw new Error('Managed installation has no installation config');
   if (storageClass && storageClass !== storedConfig.storageClass) {
     throw new Error(`Installation uses StorageClass ${storedConfig.storageClass}; changing it requires migration`);
   }
+  const effectiveConsoleUrl = normalizeConsoleUrl(storedConfig.consoleUrl ?? 'https://localhost:8090');
+  const effectiveAuthEnvironment = validateAuthEnvironment(storedConfig.authEnvironment ?? 'development');
+  if (consoleUrl && normalizeConsoleUrl(consoleUrl) !== effectiveConsoleUrl) {
+    throw new Error(`Installation uses Console URL ${effectiveConsoleUrl}; changing it requires an endpoint migration`);
+  }
+  if (previousLock.releaseDigest === targetLock.releaseDigest) {
+    const evidence = await operations.verifyInstallation(previousLock, { requireZeroRestarts: false, consoleUrl: effectiveConsoleUrl });
+    return { changed: false, lock: previousLock, consoleUrl: effectiveConsoleUrl, evidence };
+  }
+
   const effectiveStorageClass = storedConfig.storageClass;
   const initialAdmin = operations.readInitialAdmin() ?? storedConfig.initialAdmin;
   if (!initialAdmin) throw new Error('Managed installation has no initial administrator metadata');
@@ -455,25 +563,25 @@ export async function upgrade(previousLock, targetLock, { storageClass, runtime 
   // cluster mutation. A registry/source outage therefore cannot strand rollback.
   console.log('[준비] 대상 release와 이전 release rollback manifest 검증');
   const [targetRelease, rollbackRelease] = await Promise.all([
-    operations.materializeRelease(targetLock, effectiveStorageClass),
-    operations.materializeRelease(previousLock, effectiveStorageClass)
+    operations.materializeRelease(targetLock, effectiveStorageClass, effectiveConsoleUrl, effectiveAuthEnvironment),
+    operations.materializeRelease(previousLock, effectiveStorageClass, effectiveConsoleUrl, effectiveAuthEnvironment)
   ]);
 
   try {
     operations.applyRelease(targetRelease, '업그레이드');
-    operations.recordInstallationState(targetLock, effectiveStorageClass, initialAdmin);
+    operations.recordInstallationState(targetLock, effectiveStorageClass, initialAdmin, effectiveConsoleUrl, effectiveAuthEnvironment);
     console.log('[대기] 대상 release rollout');
     operations.waitForCoreRollouts();
-    const evidence = await operations.verifyInstallation(targetLock, { requireZeroRestarts: false });
+    const evidence = await operations.verifyInstallation(targetLock, { requireZeroRestarts: false, consoleUrl: effectiveConsoleUrl });
     console.log(`[완료] ${previousLock.releaseDigest} → ${targetLock.releaseDigest}`);
-    return { changed: true, lock: targetLock, evidence };
+    return { changed: true, lock: targetLock, consoleUrl: effectiveConsoleUrl, evidence };
   } catch (upgradeError) {
     console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
     try {
       operations.applyRelease(rollbackRelease, '롤백');
-      operations.recordInstallationState(previousLock, effectiveStorageClass, initialAdmin);
+      operations.recordInstallationState(previousLock, effectiveStorageClass, initialAdmin, effectiveConsoleUrl, effectiveAuthEnvironment);
       operations.waitForCoreRollouts();
-      await operations.verifyInstallation(previousLock, { requireZeroRestarts: false });
+      await operations.verifyInstallation(previousLock, { requireZeroRestarts: false, consoleUrl: effectiveConsoleUrl });
     } catch (rollbackError) {
       throw new Error(`Upgrade failed (${upgradeError.message}); rollback also failed (${rollbackError.message})`);
     }

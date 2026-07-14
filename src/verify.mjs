@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import net from 'node:net';
 import { kubectl } from './process.mjs';
 import { validateLock } from './release.mjs';
+import { normalizeConsoleUrl, oidcIssuer } from './console-url.mjs';
 
 const NAMESPACES = [
   'opensphere-console-auth',
@@ -17,22 +18,25 @@ const REQUIRED_SECRETS = Object.freeze({
   'opensphere-console/shell-tls': ['tls.crt', 'tls.key'],
   'opensphere-console/opensphere-console-auth-ca': ['ca.crt', 'tls.crt'],
   'opensphere-console/opensphere-console-auth-sig': ['sig.key'],
-  'opensphere-console/opensphere-identity-kanidm': ['url', 'token'],
-  'opensphere-console/opensphere-rolemgr-kanidm': ['url', 'token'],
+  'opensphere-console/opensphere-identity-kanidm': ['url', 'token', 'expires_at'],
+  'opensphere-console/opensphere-rolemgr-kanidm': ['url', 'token', 'expires_at'],
   'opensphere-backbone/backbone-postgres': ['password', 'bootstrap_password'],
   'opensphere-backbone/backbone-rustfs': ['access_key', 'secret_key', 'endpoint'],
+  'opensphere-backbone/backbone-rustfs-tls': ['tls.crt', 'tls.key'],
   'opensphere-backbone/backbone-gitea': ['db_password', 'admin_user', 'admin_password']
 });
 
-const REQUIRED_URLS = [
-  ['https://localhost:8090/', 'text/html'],
-  ['https://localhost:8090/readyz', 'application/json'],
-  ['https://localhost:8090/oauth2/openid/opensphere-console/.well-known/openid-configuration', 'application/json'],
-  ['https://localhost:8090/bff/healthz', 'text/plain'],
-  ['https://localhost:8090/ui/reset', 'text/html'],
-  ['https://localhost:8090/api/v1/registry', 'application/json'],
-  ['https://localhost:8090/api/cli/index.json', 'application/json']
-];
+function requiredUrls(base) {
+  return [
+    [`${base}/`, 'text/html'],
+    [`${base}/readyz`, 'application/json'],
+    [`${base}/oauth2/openid/opensphere-console/.well-known/openid-configuration`, 'application/json'],
+    [`${base}/bff/healthz`, 'application/json'],
+    [`${base}/ui/reset`, 'text/html'],
+    [`${base}/api/v1/registry`, 'application/json'],
+    [`${base}/api/cli/index.json`, 'application/json']
+  ];
+}
 
 const REQUIRED_PVCS = [
   'opensphere-console-auth/data-kanidm-0',
@@ -98,9 +102,9 @@ function freePort() {
   });
 }
 
-function waitForForward(process, timeoutMs = 30_000) {
+function waitForForward(process, label, timeoutMs = 30_000) {
   return new Promise((resolveReady, reject) => {
-    const timer = setTimeout(() => reject(new Error('Kanidm verification tunnel timed out')), timeoutMs);
+    const timer = setTimeout(() => reject(new Error(`${label} verification tunnel timed out`)), timeoutMs);
     const inspect = (chunk) => {
       if (String(chunk).includes('Forwarding from 127.0.0.1:')) {
         clearTimeout(timer);
@@ -111,7 +115,7 @@ function waitForForward(process, timeoutMs = 30_000) {
     process.stderr.on('data', inspect);
     process.once('exit', (code) => {
       clearTimeout(timer);
-      reject(new Error(`Kanidm verification tunnel exited early (${code})`));
+      reject(new Error(`${label} verification tunnel exited early (${code})`));
     });
   });
 }
@@ -133,6 +137,12 @@ function verifySecrets() {
     for (const key of keys) {
       if (!secret.data?.[key]) throw new Error(`Required secret key is missing: ${reference}/${key}`);
     }
+    if (keys.includes('expires_at')) {
+      const expiry = new Date(Buffer.from(secret.data.expires_at, 'base64').toString('utf8'));
+      if (!Number.isFinite(expiry.getTime()) || expiry.getTime() < Date.now() + 24 * 60 * 60 * 1000) {
+        throw new Error(`Service credential must be rotated before expiry: ${reference}`);
+      }
+    }
   }
 }
 
@@ -151,6 +161,29 @@ function verifyPersistentStorage() {
   return claims.length;
 }
 
+function verifyRecovery({ requireRecoveryDrill = false } = {}) {
+  const backup = getJson(['-n', 'opensphere-backbone', 'get', 'cronjob', 'backbone-postgres-backup']);
+  const drill = getJson(['-n', 'opensphere-backbone', 'get', 'cronjob', 'backbone-postgres-restore-drill']);
+  if (backup.spec?.suspend === true || backup.spec?.concurrencyPolicy !== 'Forbid') {
+    throw new Error('PostgreSQL audit backup CronJob is not safely configured');
+  }
+  if (drill.spec?.suspend !== true) throw new Error('PostgreSQL restore drill CronJob must remain suspended');
+  const jobs = getJson(['-n', 'opensphere-backbone', 'get', 'jobs', '-l', 'opensphere.io/recovery=audit']).items || [];
+  const completed = jobs.filter((job) => (job.status?.conditions || [])
+    .some((condition) => condition.type === 'Complete' && condition.status === 'True'));
+  if (requireRecoveryDrill && !completed.some((job) => String(job.metadata?.name || '').startsWith('backbone-postgres-backup-'))) {
+    throw new Error('PostgreSQL backup recovery drill has no completed backup job');
+  }
+  if (requireRecoveryDrill && !completed.some((job) => String(job.metadata?.name || '').startsWith('backbone-postgres-restore-drill-'))) {
+    throw new Error('PostgreSQL backup recovery drill has no completed restore job');
+  }
+  return {
+    backupScheduled: backup.spec?.schedule,
+    restoreDrillSuspended: true,
+    completedJobs: completed.map((job) => job.metadata.name)
+  };
+}
+
 function verifyPostgresql() {
   const result = kubectl([
     '-n', 'opensphere-backbone', 'exec', 'deployment/backbone-postgres', '--',
@@ -166,6 +199,7 @@ function verifyPostgresql() {
       AND (SELECT rolsuper = true AND rolcanlogin = false FROM pg_roles WHERE rolname = 'opensphere_audit_owner')
       AND (SELECT rolsuper = true AND rolcanlogin = true FROM pg_roles WHERE rolname = 'opensphere_db_bootstrap')
       AND (SELECT pg_get_userbyid(relowner) = 'opensphere_audit_owner' FROM pg_class WHERE oid = 'public.audit_log'::regclass)
+      AND (SELECT attnotnull FROM pg_attribute WHERE attrelid = 'public.audit_log'::regclass AND attname = 'source' AND NOT attisdropped)
       AND (SELECT tgenabled = 'A' FROM pg_trigger WHERE tgrelid = 'public.audit_log'::regclass AND tgname = 'audit_log_append_only')
       AND has_table_privilege('console', 'public.audit_log', 'SELECT')
       AND has_table_privilege('console', 'public.audit_log', 'INSERT')
@@ -193,6 +227,15 @@ function verifyPostgresql() {
   return { vector: result, auditBoundary: 'sealed' };
 }
 
+function verifyRustfsTransport() {
+  const secret = getJson(['-n', 'opensphere-backbone', 'get', 'secret', 'backbone-rustfs']);
+  const endpoint = decodeSecretValue(secret, 'endpoint');
+  if (!endpoint.startsWith('https://backbone-rustfs.opensphere-backbone.svc.cluster.local:9000')) {
+    throw new Error(`RustFS endpoint is not the verified in-cluster HTTPS endpoint: ${endpoint}`);
+  }
+  return { endpoint, tls: 'verified-ca' };
+}
+
 function decodeSecretValue(secret, key) {
   const encoded = secret.data?.[key];
   if (!encoded) throw new Error(`Secret key missing during functional verification: ${key}`);
@@ -211,7 +254,7 @@ async function verifyIdentity() {
   ];
   const forward = spawn('kubectl', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
   try {
-    await waitForForward(forward);
+    await waitForForward(forward, 'Kanidm');
     const person = await httpsGetWithToken(
       `https://localhost:${port}/v1/person/${encodeURIComponent(admin.username)}`,
       decodeSecretValue(reader, 'token')
@@ -271,39 +314,56 @@ function verifyWorkloads(lock, { requireZeroRestarts }) {
   return { workloadCount: resources.length, podCount: pods.length };
 }
 
-async function verifyHttp() {
-  const results = [];
-  for (const [url, expectedContentType] of REQUIRED_URLS) {
-    const response = await eventually(async () => {
-      const current = await httpsGet(url);
-      if (current.status !== 200) throw new Error(`${url} returned HTTP ${current.status}`);
-      if (current.contentType !== expectedContentType) {
-        throw new Error(`${url} returned ${current.contentType}, expected ${expectedContentType}`);
-      }
-      return current;
-    });
-    results.push({ url, status: response.status, contentType: response.contentType });
+async function verifyHttp(consoleUrl) {
+  const port = await freePort();
+  const args = [
+    ...(process.env.OPENSPHERE_KUBE_CONTEXT ? ['--context', process.env.OPENSPHERE_KUBE_CONTEXT] : []),
+    '-n', 'opensphere-console', 'port-forward', 'svc/opensphere-console-ext', `${port}:8090`, '--address', '127.0.0.1'
+  ];
+  const forward = spawn('kubectl', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  const base = `https://localhost:${port}`;
+  try {
+    await waitForForward(forward, 'Console');
+    const required = requiredUrls(base);
+    const results = [];
+    for (const [url, expectedContentType] of required) {
+      const response = await eventually(async () => {
+        const current = await httpsGet(url);
+        if (current.status !== 200) throw new Error(`${url} returned HTTP ${current.status}`);
+        if (current.contentType !== expectedContentType) {
+          throw new Error(`${url} returned ${current.contentType}, expected ${expectedContentType}`);
+        }
+        return current;
+      });
+      results.push({ url, status: response.status, contentType: response.contentType });
+    }
+    const discovery = JSON.parse((await httpsGet(required[2][0])).body);
+    if (discovery.issuer !== oidcIssuer(consoleUrl)) {
+      throw new Error(`OIDC issuer is incorrect: ${discovery.issuer}`);
+    }
+    const bff = JSON.parse((await httpsGet(`${base}/bff/healthz`)).body);
+    if (bff.ready !== true || bff.credentialStore !== true || bff.authPolicy !== true) {
+      throw new Error('Console BFF dependency readiness is not healthy');
+    }
+    const registry = JSON.parse((await httpsGet(`${base}/api/v1/registry`)).body);
+    if (registry.version !== 3 || !Array.isArray(registry.plugins) || typeof registry.trustedKeys !== 'object') {
+      throw new Error('Console Registry contract is not ready');
+    }
+    const cli = JSON.parse((await httpsGet(`${base}/api/cli/index.json`)).body);
+    if (cli.ownership !== 'console-native' || !Array.isArray(cli.links) || cli.links.length === 0) {
+      throw new Error('Console-native CLI manifest is not ready');
+    }
+    for (const link of cli.links) {
+      const artifact = await httpsGet(new URL(link.href, `${base}/`));
+      if (artifact.status !== 200) throw new Error(`CLI artifact ${link.href} returned HTTP ${artifact.status}`);
+      if (artifact.buffer.length !== link.size) throw new Error(`CLI artifact ${link.href} size differs from its manifest`);
+      const digest = createHash('sha256').update(artifact.buffer).digest('hex');
+      if (digest !== link.sha256) throw new Error(`CLI artifact ${link.href} digest differs from its manifest`);
+    }
+    return results;
+  } finally {
+    forward.kill();
   }
-  const discovery = JSON.parse(results.length ? (await httpsGet(REQUIRED_URLS[2][0])).body : '{}');
-  if (discovery.issuer !== 'https://localhost:8444/oauth2/openid/opensphere-console') {
-    throw new Error(`OIDC issuer is incorrect: ${discovery.issuer}`);
-  }
-  const registry = JSON.parse((await httpsGet('https://localhost:8090/api/v1/registry')).body);
-  if (registry.version !== 3 || !Array.isArray(registry.plugins) || typeof registry.trustedKeys !== 'object') {
-    throw new Error('Console Registry contract is not ready');
-  }
-  const cli = JSON.parse((await httpsGet('https://localhost:8090/api/cli/index.json')).body);
-  if (cli.ownership !== 'console-native' || !Array.isArray(cli.links) || cli.links.length === 0) {
-    throw new Error('Console-native CLI manifest is not ready');
-  }
-  for (const link of cli.links) {
-    const artifact = await httpsGet(new URL(link.href, 'https://localhost:8090/'));
-    if (artifact.status !== 200) throw new Error(`CLI artifact ${link.href} returned HTTP ${artifact.status}`);
-    if (artifact.buffer.length !== link.size) throw new Error(`CLI artifact ${link.href} size differs from its manifest`);
-    const digest = createHash('sha256').update(artifact.buffer).digest('hex');
-    if (digest !== link.sha256) throw new Error(`CLI artifact ${link.href} digest differs from its manifest`);
-  }
-  return results;
 }
 
 function recordEvidence(lock, evidence) {
@@ -315,22 +375,29 @@ function recordEvidence(lock, evidence) {
   kubectl(['apply', '-f', '-'], { capture: true, input: yaml });
 }
 
-export async function verifyInstallation(lock, { requireZeroRestarts = true, record = true } = {}) {
+export async function verifyInstallation(lock, { requireZeroRestarts = true, record = true, consoleUrl, requireRecoveryDrill = false } = {}) {
   validateLock(lock);
   const installed = getJson(['-n', 'opensphere-console', 'get', 'configmap', 'opensphere-installation-lock']);
   const installedLock = validateLock(JSON.parse(installed.data?.['release.json'] ?? '{}'));
   if (installedLock.releaseDigest !== lock.releaseDigest) {
     throw new Error('Cluster release lock differs from the requested release');
   }
+  const installationConfig = JSON.parse(installed.data?.['config.json'] ?? '{}');
+  const configuredConsoleUrl = normalizeConsoleUrl(installationConfig.consoleUrl ?? 'https://localhost:8090');
+  if (consoleUrl && normalizeConsoleUrl(consoleUrl) !== configuredConsoleUrl) {
+    throw new Error(`Cluster Console URL differs from verification target: ${configuredConsoleUrl}`);
+  }
   verifySecrets();
   const pvcCount = verifyPersistentStorage();
   const postgresql = verifyPostgresql();
+  const rustfs = verifyRustfsTransport();
+  const recovery = verifyRecovery({ requireRecoveryDrill });
   const runtime = await eventually(
     async () => verifyWorkloads(lock, { requireZeroRestarts }),
     120_000,
     2_000
   );
-  const endpoints = await verifyHttp();
+  const endpoints = await verifyHttp(configuredConsoleUrl);
   const identity = await verifyIdentity();
   const services = getJson(['get', 'services', '-A']).items
     .filter((service) => NAMESPACES.includes(service.metadata.namespace));
@@ -340,6 +407,7 @@ export async function verifyInstallation(lock, { requireZeroRestarts = true, rec
     channel: lock.channel,
     releaseDigest: lock.releaseDigest,
     sourceRevision: lock.sourceRevision,
+    consoleUrl: configuredConsoleUrl,
     verifiedAt: new Date().toISOString(),
     namespaces: NAMESPACES,
     workloadCount: runtime.workloadCount,
@@ -349,6 +417,8 @@ export async function verifyInstallation(lock, { requireZeroRestarts = true, rec
     runtimeImagesMatchLock: true,
     requiredSecretsReady: true,
     postgresql,
+    rustfs,
+    recovery,
     identity,
     endpoints
   };

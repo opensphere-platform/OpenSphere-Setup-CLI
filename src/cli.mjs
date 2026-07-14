@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { bootstrap, existingOpenSphereNamespaces, readInstallationLock, upgrade } from './bootstrap.mjs';
+import { bootstrap, existingOpenSphereNamespaces, readInstallationLock, rotateServiceCredentials, upgrade } from './bootstrap.mjs';
 import { installConsoleCli } from './install-cli.mjs';
 import { resolveChannel, validateChannel, validateLock } from './release.mjs';
 import { assertKubectl, kubectl } from './process.mjs';
 import { verifyInstallation } from './verify.mjs';
+import { normalizeConsoleUrl } from './console-url.mjs';
 
 function option(names, fallback) {
   const aliases = Array.isArray(names) ? names : [names];
@@ -54,10 +55,12 @@ Usage:
   opensphere-setup bootstrap -r <channel> [--lock <verified-lock-file>]
       [--context <kube-context>] [--admin-username <name>]
       [--admin-display-name <name>] [--admin-email <email>]
-      [--storage-class <name>] [--no-open-browser]
+      [--storage-class <name>] [--console <https-origin>]
+      [--auth-environment <development|production>] [--no-open-browser]
   opensphere-setup upgrade --release <edge|candidate|stable> [--lock <verified-lock-file>]
-      [--context <kube-context>] [--storage-class <name>]
-  opensphere-setup verify [--context <kube-context>]
+      [--context <kube-context>] [--storage-class <name>] [--console <https-origin>]
+  opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
+  opensphere-setup rotate-service-credentials [--context <kube-context>]
   opensphere-setup install-cli [--console <url>] [--install-dir <directory>]
       [--insecure-skip-tls-verify]
   opensphere-setup status
@@ -74,6 +77,8 @@ async function main() {
   const lockPath = resolve(option('--lock', `.opensphere-setup/${channel}-release-lock.json`));
   const explicitLock = hasOption('--lock');
   const context = option('--context', '');
+  const suppliedConsoleUrl = hasOption('--console') ? normalizeConsoleUrl(option('--console', '')) : undefined;
+  const authEnvironment = option('--auth-environment', 'development');
   if (context) process.env.OPENSPHERE_KUBE_CONTEXT = context;
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
@@ -81,7 +86,7 @@ async function main() {
 
   if (command === 'install-cli') {
     const installed = await installConsoleCli({
-      consoleUrl: option('--console', 'https://localhost:8090'),
+      consoleUrl: suppliedConsoleUrl ?? 'https://localhost:8090',
       installDirectory: option('--install-dir', undefined),
       insecureSkipTlsVerify: hasOption('--insecure-skip-tls-verify')
     });
@@ -138,14 +143,16 @@ async function main() {
         console.log(`[완료] ${channel} 채널을 ${lock.releaseDigest}로 새로 잠금`);
       }
     }
-    await bootstrap(lock, {
+    const bootstrapResult = await bootstrap(lock, {
       initialAdmin,
       requireZeroRestarts: hasOption('--require-zero-restarts') || (!installed && !hasOption('--allow-restarts')),
       storageClass: option('--storage-class', undefined),
+      consoleUrl: suppliedConsoleUrl ?? 'https://localhost:8090',
+      authEnvironment,
       openOnboarding: !hasOption('--no-open-browser')
     });
     const installedCli = await installConsoleCli({
-      consoleUrl: option('--console', 'https://localhost:8090'),
+      consoleUrl: bootstrapResult.consoleUrl,
       installDirectory: option('--install-dir', undefined),
       // Bootstrap verifies the local Console endpoint and its artifacts first. The
       // bootstrap certificate is intentionally self-signed until an operator
@@ -171,9 +178,12 @@ async function main() {
       await writeLock(lockPath, target);
       console.log(`[완료] ${channel} target을 ${target.releaseDigest}로 잠금`);
     }
-    const result = await upgrade(installed, target, { storageClass: option('--storage-class', undefined) });
+    const result = await upgrade(installed, target, {
+      storageClass: option('--storage-class', undefined),
+      consoleUrl: suppliedConsoleUrl
+    });
     const installedCli = await installConsoleCli({
-      consoleUrl: option('--console', 'https://localhost:8090'),
+      consoleUrl: result.consoleUrl ?? suppliedConsoleUrl ?? 'https://localhost:8090',
       installDirectory: option('--install-dir', undefined),
       insecureSkipTlsVerify: true
     });
@@ -187,10 +197,18 @@ async function main() {
     const lock = readInstallationLock();
     if (!lock) throw new Error('No managed OpenSphere installation lock was found');
     const evidence = await verifyInstallation(lock, {
-      requireZeroRestarts: hasOption('--require-zero-restarts')
+      requireZeroRestarts: hasOption('--require-zero-restarts'),
+      consoleUrl: suppliedConsoleUrl
     });
     console.log(`[완료] ${evidence.channel} ${evidence.releaseDigest} 검증`);
     console.log(`${evidence.podCount} pods / ${evidence.serviceCount} services / runtime images locked`);
+    return;
+  }
+
+  if (command === 'rotate-service-credentials') {
+    assertKubectl();
+    const result = await rotateServiceCredentials();
+    console.log(`[완료] Console service credentials 회전 (${result.consoleUrl})`);
     return;
   }
 

@@ -9,8 +9,12 @@ const ADMIN_DISPLAY = process.env.OPENSPHERE_INITIAL_ADMIN_DISPLAY || 'OpenSpher
 const ADMIN_EMAIL = process.env.OPENSPHERE_INITIAL_ADMIN_EMAIL || 'admin@opensphere.local';
 const SKIP_SERVICE_TOKENS = process.env.OPENSPHERE_SKIP_SERVICE_TOKENS === 'true';
 const AUTH_ENVIRONMENT = process.env.OPENSPHERE_AUTH_ENVIRONMENT || 'development';
+const SERVICE_TOKEN_TTL_DAYS = Number.parseInt(process.env.OPENSPHERE_SERVICE_TOKEN_TTL_DAYS || '30', 10);
 
 if (!PASSWORD) throw new Error('KANIDM_ADMIN_PASSWORD is required');
+if (!Number.isInteger(SERVICE_TOKEN_TTL_DAYS) || SERVICE_TOKEN_TTL_DAYS < 1 || SERVICE_TOKEN_TTL_DAYS > 90) {
+  throw new Error('OPENSPHERE_SERVICE_TOKEN_TTL_DAYS must be between 1 and 90');
+}
 
 function request(method, path, body, token, sid) {
   return new Promise((resolve, reject) => {
@@ -79,25 +83,35 @@ async function serviceToken(token, account, displayName, readWrite) {
   await ensureEntry(token, `/v1/service_account/${account}`, {
     attrs: { name: [account], displayname: [displayName], entry_managed_by: ['idm_admin'] }
   });
+  const expiresAt = new Date(Date.now() + SERVICE_TOKEN_TTL_DAYS * 86400 * 1000).toISOString();
   const response = await request('POST', `/v1/service_account/${account}/_api_token`, {
-    label: 'opensphere-console-bootstrap', expiry: null, read_write: readWrite
+    // New credentials overlap the previous bounded token. A successful Secret
+    // replacement and rollout is therefore atomic from the workload view; old
+    // credentials naturally expire and cannot become permanent bootstrap keys.
+    label: `opensphere-console-${new Date().toISOString().slice(0, 10)}`,
+    expiry: expiresAt,
+    read_write: readWrite
   }, token);
   if (response.status >= 300 || typeof response.json !== 'string') {
     throw new Error(`API token generation failed for ${account}: HTTP ${response.status}`);
   }
-  return response.json;
+  return { token: response.json, expiresAt };
 }
 
-function applySecret(name, token) {
-  const create = spawnSync('kubectl', [
-    '-n', 'opensphere-console', 'create', 'secret', 'generic', name,
-    '--from-literal=url=https://kanidm.opensphere-console-auth.svc:8443',
-    `--from-literal=token=${token}`,
-    '--dry-run=client', '-o', 'yaml'
-  ], { encoding: 'utf8', windowsHide: true });
-  if (create.status !== 0) throw new Error(`Secret render failed: ${name}`);
+function applySecret(name, credential) {
+  // Never put bearer material in a command line: a failed child process can
+  // expose argv through process inspection or diagnostic output. Kubernetes
+  // accepts the Secret document on stdin, which keeps the token out of argv.
+  const data = Object.fromEntries(Object.entries({
+    url: 'https://kanidm.opensphere-console-auth.svc:8443',
+    token: credential.token,
+    expires_at: credential.expiresAt
+  }).map(([key, value]) => [key, Buffer.from(String(value)).toString('base64')]));
+  const manifest = JSON.stringify({
+    apiVersion: 'v1', kind: 'Secret', metadata: { name, namespace: 'opensphere-console' }, type: 'Opaque', data
+  });
   const apply = spawnSync('kubectl', ['apply', '-f', '-'], {
-    encoding: 'utf8', input: create.stdout, windowsHide: true, stdio: ['pipe', 'ignore', 'pipe']
+    encoding: 'utf8', input: `${manifest}\n`, windowsHide: true, stdio: ['pipe', 'ignore', 'pipe']
   });
   if (apply.status !== 0) throw new Error(`Secret apply failed: ${name}`);
 }

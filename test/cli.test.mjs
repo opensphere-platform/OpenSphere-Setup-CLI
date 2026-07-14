@@ -48,3 +48,21 @@ test('long and short release options cannot conflict', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /--release\/-r may only be specified once/);
 });
+
+test('Console endpoint must be an exact HTTPS origin before any bootstrap action', () => {
+  const result = spawnSync(process.execPath, [CLI, 'bootstrap', '--console', 'http://insecure.example.test'], {
+    encoding: 'utf8',
+    cwd: ROOT,
+    windowsHide: true
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--console must be an HTTPS origin/);
+});
+
+test('service credential rotation is an explicit supported maintenance command', () => {
+  const result = spawnSync(process.execPath, [CLI, 'help'], {
+    encoding: 'utf8', cwd: ROOT, windowsHide: true
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /rotate-service-credentials/);
+});
