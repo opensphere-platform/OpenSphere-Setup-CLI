@@ -185,6 +185,8 @@ function attestationArgs(image, predicateType) {
 }
 
 const RETRYABLE_ATTESTATION_STATUS = /\bHTTP\s+(?:408|425|429|500|502|503|504)\b/i;
+const ATOMIC_CHANNEL_RESOLUTION_ATTEMPTS = 12;
+const ATOMIC_CHANNEL_RESOLUTION_RETRY_MS = 5_000;
 
 function delaySync(milliseconds) {
   // `gh attestation verify` is a synchronous subprocess today. Keep its retry
@@ -320,30 +322,43 @@ export function validateLock(lock) {
 export async function resolveChannel(channel, {
   resolveImageFn = resolveImage,
   verifyImage = verifyImageProvenance,
-  verifySbom = verifyImageSbom
+  verifySbom = verifyImageSbom,
+  atomicResolutionAttempts = ATOMIC_CHANNEL_RESOLUTION_ATTEMPTS,
+  atomicResolutionRetryMs = ATOMIC_CHANNEL_RESOLUTION_RETRY_MS,
+  delay = delaySync
 } = {}) {
   validateChannel(channel);
-  const resolved = await Promise.all(Object.entries(COMPONENTS).map(async ([name, repository]) => [
-    name,
-    { repository, ...await resolveImageFn(repository, channel) }
-  ]));
-  const components = Object.fromEntries(resolved);
-  const revisions = new Set(Object.values(components).map((component) => component.sourceRevision));
-  if (revisions.size !== 1) {
-    throw new Error(`Channel ${channel} is not atomic: component source revisions differ`);
+  if (!Number.isInteger(atomicResolutionAttempts) || atomicResolutionAttempts < 1) {
+    throw new Error('atomicResolutionAttempts must be a positive integer');
   }
-  const [sourceRevision] = revisions;
-  const releaseDigest = calculateReleaseDigest(channel, components);
-  const lock = {
-    apiVersion: RELEASE_API_VERSION,
-    kind: 'OpenSphereReleaseLock',
-    channel,
-    releaseDigest,
-    resolvedAt: new Date().toISOString(),
-    source: SOURCE,
-    sourceRevision,
-    trust: RELEASE_TRUST,
-    components
-  };
-  return verifyReleaseProvenance(lock, { verifyImage, verifySbom });
+  for (let attempt = 1; attempt <= atomicResolutionAttempts; attempt += 1) {
+    const resolved = await Promise.all(Object.entries(COMPONENTS).map(async ([name, repository]) => [
+      name,
+      { repository, ...await resolveImageFn(repository, channel) }
+    ]));
+    const components = Object.fromEntries(resolved);
+    const revisions = new Set(Object.values(components).map((component) => component.sourceRevision));
+    if (revisions.size === 1) {
+      const [sourceRevision] = revisions;
+      const releaseDigest = calculateReleaseDigest(channel, components);
+      const lock = {
+        apiVersion: RELEASE_API_VERSION,
+        kind: 'OpenSphereReleaseLock',
+        channel,
+        releaseDigest,
+        resolvedAt: new Date().toISOString(),
+        source: SOURCE,
+        sourceRevision,
+        trust: RELEASE_TRUST,
+        components
+      };
+      return verifyReleaseProvenance(lock, { verifyImage, verifySbom });
+    }
+    // GHCR moves one repository tag at a time. During a release publish this
+    // short mixed-revision window is expected, but it must never be accepted
+    // as a release. Retry only the atomicity observation; signer/SBOM/trust
+    // failures remain terminal once an atomic image set is visible.
+    if (attempt < atomicResolutionAttempts) delay(atomicResolutionRetryMs);
+  }
+  throw new Error(`Channel ${channel} is not atomic: component source revisions differ after ${atomicResolutionAttempts} observations`);
 }

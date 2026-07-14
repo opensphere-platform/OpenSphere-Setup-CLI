@@ -254,3 +254,40 @@ test('release lock rejects missing or additional components', () => {
   extra.components.unknown = extra.components.console;
   assert.throws(() => validateLock(extra), /component set is not canonical/);
 });
+
+test('channel resolution waits for a publish to become atomic without accepting the mixed revision', async () => {
+  const names = Object.keys(COMPONENTS);
+  let calls = 0;
+  const delays = [];
+  const lock = await resolveChannel('edge', {
+    resolveImageFn: async (repository) => {
+      const firstObservation = calls < names.length;
+      const sourceRevision = firstObservation && calls === 0 ? '2'.repeat(40) : REVISION;
+      calls += 1;
+      return { image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`, sourceRevision };
+    },
+    verifyImage: async () => {},
+    verifySbom: async () => {},
+    atomicResolutionAttempts: 2,
+    atomicResolutionRetryMs: 7,
+    delay: (milliseconds) => delays.push(milliseconds)
+  });
+  assert.equal(lock.sourceRevision, REVISION);
+  assert.deepEqual(delays, [7]);
+  assert.equal(calls, names.length * 2);
+});
+
+test('channel resolution does not accept a persistently mixed publish window', async () => {
+  let calls = 0;
+  await assert.rejects(resolveChannel('edge', {
+    resolveImageFn: async (repository) => {
+      const sourceRevision = calls++ % 2 === 0 ? REVISION : '2'.repeat(40);
+      return { image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`, sourceRevision };
+    },
+    verifyImage: async () => {},
+    verifySbom: async () => {},
+    atomicResolutionAttempts: 2,
+    atomicResolutionRetryMs: 0,
+    delay: () => {}
+  }), /not atomic/);
+});
