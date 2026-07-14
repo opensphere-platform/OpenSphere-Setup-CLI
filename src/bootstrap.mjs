@@ -28,6 +28,12 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const RAW_ROOT = 'https://raw.githubusercontent.com/opensphere-platform/OpenSphere-console';
 const RUSTFS_ENDPOINT = 'https://backbone-rustfs.opensphere-backbone.svc.cluster.local:9000';
 const RUSTFS_DNS_NAME = 'backbone-rustfs.opensphere-backbone.svc.cluster.local';
+const RELEASE_INVENTORY_CONFIGMAP = 'opensphere-release-inventory';
+const PRUNABLE_MANIFEST_KINDS = new Set([
+  'ClusterRole', 'ClusterRoleBinding', 'ConfigMap', 'CronJob', 'Deployment',
+  'NetworkPolicy', 'PodDisruptionBudget', 'Role', 'RoleBinding', 'Service',
+  'ServiceAccount', 'StatefulSet'
+]);
 export const MANAGED_NAMESPACES = Object.freeze([
   'opensphere-console-auth',
   'opensphere-console',
@@ -114,6 +120,10 @@ function ensureGenericSecret(namespace, name, literals = {}, files = {}) {
 
 function readSecret(namespace, name) {
   return JSON.parse(kubectl(['-n', namespace, 'get', 'secret', name, '-o', 'json'], { capture: true }));
+}
+
+function readConfigMap(namespace, name) {
+  return JSON.parse(kubectl(['-n', namespace, 'get', 'configmap', name, '-o', 'json'], { capture: true }));
 }
 
 // Backup credentials are carried as Kubernetes Secret data on stdin.  Do not
@@ -372,6 +382,75 @@ function applyRelease(release, label) {
   for (const manifest of release) {
     applyYaml(manifest.yaml);
     console.log(`[${label}] ${manifest.path}`);
+  }
+}
+
+function inventoryKey(resource) {
+  return [resource.apiVersion, resource.kind, resource.namespace ?? '', resource.name].join('|');
+}
+
+// Use kubectl's client-side YAML decoder instead of a second YAML parser. The
+// operation is dry-run only and records no last-applied state in the cluster.
+// Secrets, PVCs, CRDs and namespaces are intentionally excluded: their
+// lifecycle requires explicit migration or destructive user confirmation.
+function releaseResourceInventory(release) {
+  const inventory = new Map();
+  for (const manifest of release) {
+    const decoded = JSON.parse(kubectl([
+      'apply', '--dry-run=client', '--validate=false', '-f', '-', '-o', 'json'
+    ], { capture: true, input: manifest.yaml }));
+    const items = decoded.kind === 'List' ? decoded.items ?? [] : [decoded];
+    for (const item of items) {
+      const kind = String(item.kind ?? '');
+      const name = String(item.metadata?.name ?? '');
+      if (!PRUNABLE_MANIFEST_KINDS.has(kind) || !name) continue;
+      const resource = {
+        apiVersion: String(item.apiVersion ?? ''),
+        kind,
+        name,
+        ...(item.metadata?.namespace ? { namespace: String(item.metadata.namespace) } : {})
+      };
+      inventory.set(inventoryKey(resource), resource);
+    }
+  }
+  return [...inventory.values()].sort((left, right) => inventoryKey(left).localeCompare(inventoryKey(right)));
+}
+
+function readReleaseInventory() {
+  try {
+    const configMap = readConfigMap('opensphere-console', RELEASE_INVENTORY_CONFIGMAP);
+    const raw = configMap.data?.['resources.json'];
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.some((resource) =>
+      !PRUNABLE_MANIFEST_KINDS.has(resource?.kind) || !resource?.name || !resource?.apiVersion)) {
+      throw new Error('stored release inventory is invalid');
+    }
+    return parsed;
+  } catch (error) {
+    if (/not found/i.test(String(error.message))) return null;
+    throw error;
+  }
+}
+
+function recordReleaseInventory(lock, inventory) {
+  applyYaml(`${JSON.stringify({
+    apiVersion: 'v1', kind: 'ConfigMap', metadata: { name: RELEASE_INVENTORY_CONFIGMAP, namespace: 'opensphere-console' },
+    data: {
+      'release-digest': lock.releaseDigest,
+      'resources.json': JSON.stringify(inventory)
+    }
+  })}\n`);
+}
+
+function pruneReleaseResources(fromInventory, targetInventory) {
+  const target = new Set(targetInventory.map(inventoryKey));
+  for (const resource of fromInventory) {
+    if (target.has(inventoryKey(resource))) continue;
+    kubectl([
+      ...(resource.namespace ? ['-n', resource.namespace] : []),
+      'delete', `${resource.kind}/${resource.name}`, '--ignore-not-found', '--wait=true'
+    ]);
   }
 }
 
@@ -949,11 +1028,13 @@ export async function bootstrap(lock, {
     console.log(`[완료] 감사 백업 대상 준비 (${backupTarget.mode})`);
     console.log('[완료] Namespace와 bootstrap secret 준비');
 
+    const release = [];
     for (const spec of BASE_MANIFESTS) {
       const yaml = await fetchManifest(lock, spec, cluster.storageClass, effectiveConsoleUrl, effectiveAuthEnvironment);
       const file = join(work, spec.path.replaceAll('/', '-'));
       await writeFile(file, yaml, 'utf8');
       applyYaml(yaml);
+      release.push({ path: spec.path, yaml });
       console.log(`[완료] ${spec.path}`);
     }
     removeOptionalOaaStaging();
@@ -986,6 +1067,7 @@ export async function bootstrap(lock, {
       consoleUrl: effectiveConsoleUrl,
       requireRecoveryDrill: Boolean(recoveryDrill)
     });
+    recordReleaseInventory(lock, releaseResourceInventory(release));
     console.log(`[완료] OpenSphere Console ${lock.channel} 설치 검증 (${evidence.podCount} pods, ${evidence.serviceCount} services)`);
     let savedOnboardingUrlFile;
     if (onboardingUrl && openOnboarding) {
@@ -1016,6 +1098,10 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     assertPostgresUpgradeBoundary,
     materializeRelease,
     applyRelease,
+    releaseResourceInventory,
+    readReleaseInventory,
+    recordReleaseInventory,
+    pruneReleaseResources,
     recordInstallationState,
     prepareBackupTarget,
     prepareUpgradePrerequisites,
@@ -1070,6 +1156,8 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     operations.materializeRelease(targetLock, effectiveStorageClass, effectiveConsoleUrl, effectiveAuthEnvironment),
     operations.materializeRelease(previousLock, effectiveStorageClass, effectiveConsoleUrl, effectiveAuthEnvironment)
   ]);
+  const targetInventory = operations.releaseResourceInventory(targetRelease);
+  const rollbackInventory = operations.readReleaseInventory() ?? operations.releaseResourceInventory(rollbackRelease);
 
   let prerequisites;
   let backupTarget;
@@ -1091,6 +1179,9 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     const evidence = await operations.verifyInstallation(targetLock, {
       requireZeroRestarts: false, consoleUrl: effectiveConsoleUrl, requireRecoveryDrill: Boolean(recoveryDrill)
     });
+    operations.pruneReleaseResources(rollbackInventory, targetInventory);
+    operations.recordReleaseInventory(targetLock, targetInventory);
+    await operations.verifyInstallation(targetLock, { requireZeroRestarts: false, consoleUrl: effectiveConsoleUrl });
     console.log(`[완료] ${previousLock.releaseDigest} → ${targetLock.releaseDigest}`);
     return { changed: true, lock: targetLock, consoleUrl: effectiveConsoleUrl, evidence };
   } catch (upgradeError) {
@@ -1098,12 +1189,14 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     try {
       operations.applyRelease(rollbackRelease, '롤백');
       operations.removeOptionalOaaStaging();
+      operations.pruneReleaseResources(targetInventory, rollbackInventory);
       operations.recordInstallationState(previousLock, effectiveStorageClass, initialAdmin, effectiveConsoleUrl, effectiveAuthEnvironment, storedConfig.shellTlsSecret);
       operations.reconcileRollbackStatefulSets();
       operations.waitForCoreRollouts();
       await operations.verifyInstallation(previousLock, {
         requireZeroRestarts: false, consoleUrl: effectiveConsoleUrl, record: false, mode: 'rollback'
       });
+      operations.recordReleaseInventory(previousLock, rollbackInventory);
       // Only remove compatibility prerequisites once the previous template is
       // running again. Removing them before its StatefulSet has reconciled can
       // leave rollback stuck behind a target Pod with a Secret volume.

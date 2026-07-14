@@ -45,6 +45,13 @@ function runtime(previous, events, { failTarget = false } = {}) {
       return [{ path: 'release.yaml', yaml: release.sourceRevision }];
     },
     applyRelease: (release, label) => events.push(`apply:${label}:${release[0].yaml}`),
+    releaseResourceInventory: (release) => {
+      events.push(`inventory:${release[0].yaml}`);
+      return [{ apiVersion: 'v1', kind: 'ConfigMap', namespace: 'opensphere-console', name: `release-${release[0].yaml}` }];
+    },
+    readReleaseInventory: () => null,
+    recordReleaseInventory: (release) => events.push(`record-inventory:${release.sourceRevision}`),
+    pruneReleaseResources: (from, to) => events.push(`prune:${from[0].name}->${to[0].name}`),
     recordInstallationState: (release) => events.push(`record:${release.sourceRevision}`),
     prepareUpgradePrerequisites: async () => {
       events.push('prepare-prerequisites');
@@ -79,6 +86,8 @@ test('upgrade prefetches both releases before applying and verifies the target',
     'assert-postgres-upgrade-boundary',
     `materialize:${target.sourceRevision}`,
     `materialize:${previous.sourceRevision}`,
+    `inventory:${target.sourceRevision}`,
+    `inventory:${previous.sourceRevision}`,
     'prepare-prerequisites',
     'prepare-backup-target',
     `apply:업그레이드:${target.sourceRevision}`,
@@ -88,6 +97,9 @@ test('upgrade prefetches both releases before applying and verifies the target',
     `record:${target.sourceRevision}`,
     'wait',
     'recovery-drill',
+    `verify:${target.sourceRevision}`,
+    `prune:release-${previous.sourceRevision}->release-${target.sourceRevision}`,
+    `record-inventory:${target.sourceRevision}`,
     `verify:${target.sourceRevision}`
   ]);
 });
@@ -100,13 +112,15 @@ test('failed target verification restores and verifies the previous release', as
     upgrade(previous, target, { runtime: runtime(previous, events, { failTarget: true }) }),
     /previous release was restored: target is unhealthy/
   );
-  assert.deepEqual(events.slice(-8), [
+  assert.deepEqual(events.slice(-10), [
     `apply:롤백:${previous.sourceRevision}`,
     'remove-optional-oaa-staging',
+    `prune:release-${target.sourceRevision}->release-${previous.sourceRevision}`,
     `record:${previous.sourceRevision}`,
     'reconcile-rollback-statefulsets',
     'wait',
     `verify:${previous.sourceRevision}`,
+    `record-inventory:${previous.sourceRevision}`,
     'restore-prerequisites',
     'restore-backup-target'
   ]);
