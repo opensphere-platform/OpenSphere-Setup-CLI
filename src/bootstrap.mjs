@@ -178,7 +178,10 @@ async function prepareUpgradePrerequisites(consoleUrl) {
     const cert = join(work, 'tls.crt');
     const key = join(work, 'tls.key');
     const ca = join(work, 'ca.crt');
-    ensureGenericSecret('opensphere-backbone', 'backbone-postgres', {}, { 'ca.crt': ca });
+    // Legacy installations lack the separate bootstrap operator credential.
+    // Add it only when absent; the existing Console runtime password is never
+    // rotated as part of an upgrade.
+    ensureGenericSecret('opensphere-backbone', 'backbone-postgres', { bootstrap_password: hex(32) }, { 'ca.crt': ca });
     if (needsPostgresTls) ensureTlsSecret('opensphere-backbone', 'backbone-postgres-tls', cert, key, { replace: true });
     if (needsRustfsTls) ensureTlsSecret('opensphere-backbone', 'backbone-rustfs-tls', cert, key, { replace: true });
     appendCertificateAuthority('opensphere-backbone', 'backbone-postgres', ca);
