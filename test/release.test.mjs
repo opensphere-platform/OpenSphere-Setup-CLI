@@ -4,6 +4,7 @@ import {
   calculateReleaseDigest,
   calculateLegacyReleaseDigest,
   COMPONENTS,
+  LEGACY_RELEASE_TRUST,
   migrateLegacyReleaseLock,
   RELEASE_API_VERSION,
   RELEASE_TRUST,
@@ -11,6 +12,7 @@ import {
   validateChannel,
   validateLock,
   verifyImageProvenance,
+  verifyImageSbom,
   verifyReleaseProvenance,
   resolveChannel
 } from '../src/release.mjs';
@@ -97,6 +99,17 @@ test('release lock rejects an absent or substituted trust root', () => {
   assert.throws(() => validateLock(substituted), /trust root is not canonical/);
 });
 
+test('an installed v1 edge lock remains rollback-compatible but cannot promote', () => {
+  const legacyTrusted = validLock('edge');
+  legacyTrusted.trust = LEGACY_RELEASE_TRUST;
+  legacyTrusted.releaseDigest = calculateReleaseDigest('edge', legacyTrusted.components, LEGACY_RELEASE_TRUST);
+  assert.doesNotThrow(() => validateLock(legacyTrusted));
+
+  legacyTrusted.channel = 'candidate';
+  legacyTrusted.releaseDigest = calculateReleaseDigest('candidate', legacyTrusted.components, LEGACY_RELEASE_TRUST);
+  assert.throws(() => validateLock(legacyTrusted), /require signed SBOM trust v2/);
+});
+
 test('a legacy lock receives the trust root only after its original digest is proven', () => {
   const legacy = validLock();
   delete legacy.trust;
@@ -132,20 +145,38 @@ test('image provenance verification binds GH attestation to the release workflow
       '--signer-workflow', 'opensphere-platform/OpenSphere-console/.github/workflows/publish-edge-images.yml',
       '--cert-oidc-issuer', 'https://token.actions.githubusercontent.com',
       '--source-ref', 'refs/heads/main',
-      '--deny-self-hosted-runners'
+      '--deny-self-hosted-runners',
+      '--predicate-type', 'https://slsa.dev/provenance/v1'
     ],
     options: { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }
   }]);
   assert.throws(() => verifyImageProvenance('ghcr.io/elsewhere/console:edge'), /governed digest-pinned image/);
 });
 
+test('image SBOM verification binds SPDX attestation to the release workflow', () => {
+  const image = `ghcr.io/opensphere-platform/opensphere-console@${DIGEST}`;
+  const calls = [];
+  assert.deepEqual(verifyImageSbom(image, {
+    execFile(command, args, options) {
+      calls.push({ command, args, options });
+    }
+  }), { image, trust: RELEASE_TRUST });
+  assert.deepEqual(calls[0].args.slice(-2), ['--predicate-type', 'https://spdx.dev/Document/v2.3']);
+  assert.throws(() => verifyImageSbom('ghcr.io/elsewhere/console:edge'), /governed digest-pinned image/);
+});
+
 test('release provenance verification requires every component image', async () => {
-  const seen = [];
-  await verifyReleaseProvenance(validLock(), {
-    verifyImage(image) { seen.push(image); }
+  const provenance = [];
+  const sboms = [];
+  const verified = await verifyReleaseProvenance(validLock(), {
+    verifyImage(image) { provenance.push(image); },
+    verifySbom(image) { sboms.push(image); }
   });
-  assert.equal(seen.length, Object.keys(COMPONENTS).length);
-  assert.deepEqual(new Set(seen), new Set(Object.values(validLock().components).map(({ image }) => image)));
+  assert.equal(provenance.length, Object.keys(COMPONENTS).length);
+  assert.deepEqual(new Set(provenance), new Set(Object.values(validLock().components).map(({ image }) => image)));
+  assert.deepEqual(new Set(sboms), new Set(provenance));
+  assert.match(verified.provenanceVerifiedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(verified.sbomVerifiedAt, verified.provenanceVerifiedAt);
 });
 
 test('channel resolution verifies all nine attestations before returning a lock', async () => {
@@ -158,9 +189,13 @@ test('channel resolution verifies all nine attestations before returning a lock'
     },
     verifyImage(image) {
       assert.match(image, /@sha256:a{64}$/);
+    },
+    verifySbom(image) {
+      assert.match(image, /@sha256:a{64}$/);
     }
   });
   assert.equal(resolved.trust, RELEASE_TRUST);
+  assert.match(resolved.sbomVerifiedAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.doesNotThrow(() => validateLock(resolved));
 });
 

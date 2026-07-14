@@ -507,7 +507,21 @@ Setup은 mutable tag만 신뢰해서 설치하지 않는다.
 
 설치 전에 signature와 digest를 검증한다. 검증 실패는 우회할 수 없는 `Blocked`다.
 
-### 12.1 배포 파일
+### 12.1 현재 채널 신뢰 게이트
+
+새 release lock(v2)은 각 9개 digest에 대해 다음을 모두 요구한다.
+
+- GitHub Actions의 Sigstore 서명 SLSA provenance (`https://slsa.dev/provenance/v1`)
+- 같은 digest에 결박된 서명 SPDX SBOM (`https://spdx.dev/Document/v2.3`)
+- 고정된 `opensphere-platform/OpenSphere-console` 발행 workflow, OIDC issuer,
+  보호된 `refs/heads/main` source ref
+
+Setup은 `gh attestation verify`로 두 predicate를 각각 확인한 뒤에만 lock을
+기록한다. 하나라도 없거나 signer가 다르면 설치·승격은 `Blocked`다. 과거 v1
+attestation lock은 이미 설치된 `edge`의 rollback 호환성에만 읽을 수 있으며,
+새 `edge` 해석 및 모든 `candidate`/`stable` 해석에는 사용할 수 없다.
+
+### 12.2 배포 파일
 
 ```text
 OpenSphere-Setup-windows-amd64.exe

@@ -6,15 +6,27 @@ export const RELEASE_API_VERSION = 'release.opensphere.io/v1alpha1';
 export const REGISTRY = 'ghcr.io';
 export const OWNER = 'opensphere-platform';
 export const SOURCE = 'https://github.com/opensphere-platform/OpenSphere-console';
-// The CLI embeds the expected GitHub Actions identity. A digest is accepted only
-// after GitHub's Sigstore-backed provenance verification proves this workflow
-// produced it on the protected main branch. This is the Setup trust root.
-export const RELEASE_TRUST = Object.freeze({
+// v1 locks predate the signed SBOM gate.  They are accepted only as an already
+// installed edge rollback baseline; no new channel resolution may produce one.
+export const LEGACY_RELEASE_TRUST = Object.freeze({
   type: 'github-actions-attestation/v1',
   repository: 'opensphere-platform/OpenSphere-console',
   signerWorkflow: 'opensphere-platform/OpenSphere-console/.github/workflows/publish-edge-images.yml',
   oidcIssuer: 'https://token.actions.githubusercontent.com',
   sourceRef: 'refs/heads/main'
+});
+
+// The CLI embeds the expected GitHub Actions identity and both predicates. A
+// new digest is accepted only after GitHub's Sigstore-backed provenance *and*
+// SPDX SBOM attestations prove this protected-main workflow produced it.
+export const RELEASE_TRUST = Object.freeze({
+  type: 'github-actions-attestation/v2',
+  repository: LEGACY_RELEASE_TRUST.repository,
+  signerWorkflow: LEGACY_RELEASE_TRUST.signerWorkflow,
+  oidcIssuer: LEGACY_RELEASE_TRUST.oidcIssuer,
+  sourceRef: LEGACY_RELEASE_TRUST.sourceRef,
+  provenancePredicate: 'https://slsa.dev/provenance/v1',
+  sbomPredicate: 'https://spdx.dev/Document/v2.3'
 });
 
 export const COMPONENTS = Object.freeze({
@@ -112,8 +124,8 @@ export function validateChannel(channel) {
   }
 }
 
-export function calculateReleaseDigest(channel, components) {
-  const payload = JSON.stringify({ channel, components, trust: RELEASE_TRUST });
+export function calculateReleaseDigest(channel, components, trust = RELEASE_TRUST) {
+  const payload = JSON.stringify({ channel, components, trust });
   return `sha256:${createHash('sha256').update(payload).digest('hex')}`;
 }
 
@@ -129,22 +141,36 @@ function canonicalImage(image) {
   return new RegExp(`^${REGISTRY}/${OWNER}/opensphere-[a-z0-9-]+@sha256:[a-f0-9]{64}$`).test(image ?? '');
 }
 
+function canonicalTrust(candidate) {
+  for (const trust of [RELEASE_TRUST, LEGACY_RELEASE_TRUST]) {
+    const keys = Object.keys(trust);
+    if (candidate && Object.keys(candidate).length === keys.length && keys.every((key) => candidate[key] === trust[key])) {
+      return trust;
+    }
+  }
+  return null;
+}
+
+function attestationArgs(image, predicateType) {
+  return [
+    'attestation', 'verify', `oci://${image}`,
+    '--repo', RELEASE_TRUST.repository,
+    '--signer-workflow', RELEASE_TRUST.signerWorkflow,
+    '--cert-oidc-issuer', RELEASE_TRUST.oidcIssuer,
+    '--source-ref', RELEASE_TRUST.sourceRef,
+    '--deny-self-hosted-runners',
+    ...(predicateType ? ['--predicate-type', predicateType] : [])
+  ];
+}
+
 // `gh attestation verify` verifies the certificate chain, OIDC issuer, workflow
 // path, repository and source ref. Its non-zero exit is intentionally fatal: an
 // unsigned image must never become an installation lock merely because its tag
 // resolved to a syntactically valid digest.
 export function verifyImageProvenance(image, { execFile = execFileSync } = {}) {
   if (!canonicalImage(image)) throw new Error('Attestation subject is not a governed digest-pinned image');
-  const args = [
-    'attestation', 'verify', `oci://${image}`,
-    '--repo', RELEASE_TRUST.repository,
-    '--signer-workflow', RELEASE_TRUST.signerWorkflow,
-    '--cert-oidc-issuer', RELEASE_TRUST.oidcIssuer,
-    '--source-ref', RELEASE_TRUST.sourceRef,
-    '--deny-self-hosted-runners'
-  ];
   try {
-    execFile('gh', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    execFile('gh', attestationArgs(image, RELEASE_TRUST.provenancePredicate), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
   } catch (error) {
     const detail = String(error?.stderr ?? error?.message ?? 'unknown failure').trim();
     throw new Error(`Image provenance verification failed for ${image}: ${detail}`);
@@ -152,10 +178,31 @@ export function verifyImageProvenance(image, { execFile = execFileSync } = {}) {
   return { image, trust: RELEASE_TRUST };
 }
 
-export async function verifyReleaseProvenance(lock, { verifyImage = verifyImageProvenance } = {}) {
-  validateLock(lock);
-  await Promise.all(Object.values(lock.components).map(({ image }) => verifyImage(image)));
-  return { ...lock, provenanceVerifiedAt: new Date().toISOString() };
+export function verifyImageSbom(image, { execFile = execFileSync } = {}) {
+  if (!canonicalImage(image)) throw new Error('SBOM subject is not a governed digest-pinned image');
+  try {
+    execFile('gh', attestationArgs(image, RELEASE_TRUST.sbomPredicate), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error) {
+    const detail = String(error?.stderr ?? error?.message ?? 'unknown failure').trim();
+    throw new Error(`Image SPDX SBOM verification failed for ${image}: ${detail}`);
+  }
+  return { image, trust: RELEASE_TRUST };
+}
+
+export async function verifyReleaseProvenance(lock, {
+  verifyImage = verifyImageProvenance,
+  verifySbom = verifyImageSbom
+} = {}) {
+  const validated = validateLock(lock);
+  if (canonicalTrust(validated.trust) !== RELEASE_TRUST) {
+    throw new Error('Legacy attestation trust cannot satisfy the signed SBOM release gate');
+  }
+  await Promise.all(Object.values(validated.components).map(async ({ image }) => {
+    await verifyImage(image);
+    await verifySbom(image);
+  }));
+  const verifiedAt = new Date().toISOString();
+  return { ...validated, provenanceVerifiedAt: verifiedAt, sbomVerifiedAt: verifiedAt };
 }
 
 // Legacy locks must never be accepted merely because they predate the trust
@@ -186,13 +233,12 @@ export function validateLock(lock) {
   if (!/^[a-f0-9]{40}$/.test(lock.sourceRevision ?? '')) {
     throw new Error('Release lock source revision is invalid');
   }
-  const trustKeys = Object.keys(RELEASE_TRUST);
-  if (
-    !lock.trust ||
-    Object.keys(lock.trust).length !== trustKeys.length ||
-    trustKeys.some((key) => lock.trust[key] !== RELEASE_TRUST[key])
-  ) {
+  const trust = canonicalTrust(lock.trust);
+  if (!trust) {
     throw new Error('Release lock trust root is not canonical');
+  }
+  if (lock.channel !== 'edge' && trust !== RELEASE_TRUST) {
+    throw new Error('candidate and stable release locks require signed SBOM trust v2');
   }
   const names = Object.keys(lock.components ?? {});
   const expectedNames = Object.keys(COMPONENTS);
@@ -212,14 +258,18 @@ export function validateLock(lock) {
       throw new Error(`Component ${name} source revision differs from the release`);
     }
   }
-  const expectedDigest = calculateReleaseDigest(lock.channel, lock.components);
+  const expectedDigest = calculateReleaseDigest(lock.channel, lock.components, trust);
   if (lock.releaseDigest !== expectedDigest) {
     throw new Error('Release lock digest does not match its component set');
   }
   return lock;
 }
 
-export async function resolveChannel(channel, { resolveImageFn = resolveImage, verifyImage = verifyImageProvenance } = {}) {
+export async function resolveChannel(channel, {
+  resolveImageFn = resolveImage,
+  verifyImage = verifyImageProvenance,
+  verifySbom = verifyImageSbom
+} = {}) {
   validateChannel(channel);
   const resolved = await Promise.all(Object.entries(COMPONENTS).map(async ([name, repository]) => [
     name,
@@ -243,6 +293,5 @@ export async function resolveChannel(channel, { resolveImageFn = resolveImage, v
     trust: RELEASE_TRUST,
     components
   };
-  await verifyReleaseProvenance(lock, { verifyImage });
-  return lock;
+  return verifyReleaseProvenance(lock, { verifyImage, verifySbom });
 }
