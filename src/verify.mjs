@@ -5,6 +5,7 @@ import net from 'node:net';
 import { kubectl } from './process.mjs';
 import { validateLock } from './release.mjs';
 import { normalizeConsoleUrl, oidcIssuer } from './console-url.mjs';
+import { assertReleaseBackupTarget, inspectBackupTarget } from './backup-target.mjs';
 
 const NAMESPACES = [
   'opensphere-console-auth',
@@ -22,6 +23,7 @@ const REQUIRED_SECRETS = Object.freeze({
   'opensphere-console/opensphere-rolemgr-kanidm': ['url', 'token', 'expires_at'],
   'opensphere-backbone/backbone-postgres': ['password', 'bootstrap_password'],
   'opensphere-backbone/backbone-rustfs': ['access_key', 'secret_key', 'endpoint'],
+  'opensphere-backbone/backbone-postgres-backup-target': ['endpoint', 'bucket', 'access_key', 'secret_key', 'ca.crt', 'region'],
   'opensphere-backbone/backbone-rustfs-tls': ['tls.crt', 'tls.key'],
   'opensphere-backbone/backbone-gitea': ['db_password', 'admin_user', 'admin_password']
 });
@@ -236,6 +238,11 @@ function verifyRustfsTransport() {
   return { endpoint, tls: 'verified-ca' };
 }
 
+function verifyAuditBackupTarget(lock) {
+  const secret = getJson(['-n', 'opensphere-backbone', 'get', 'secret', 'backbone-postgres-backup-target']);
+  return assertReleaseBackupTarget(inspectBackupTarget(secret), lock.channel);
+}
+
 function decodeSecretValue(secret, key) {
   const encoded = secret.data?.[key];
   if (!encoded) throw new Error(`Secret key missing during functional verification: ${key}`);
@@ -415,6 +422,7 @@ export async function verifyInstallation(lock, {
   }
   if (mode !== 'strict') throw new Error(`Unsupported installation verification mode: ${mode}`);
   verifySecrets();
+  verifyAuditBackupTarget(lock);
   const pvcCount = verifyPersistentStorage();
   const postgresql = verifyPostgresql();
   const rustfs = verifyRustfsTransport();

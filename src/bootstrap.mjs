@@ -12,6 +12,8 @@ import { fetchWithRetry } from './http.mjs';
 import { migrateLegacyReleaseLock, validateLock, verifyReleaseProvenance } from './release.mjs';
 import { verifyInstallation } from './verify.mjs';
 import { normalizeConsoleUrl } from './console-url.mjs';
+import { assertReleaseBackupTarget, backupTargetData, inspectBackupTarget, parseBackupTargetSecretRef } from './backup-target.mjs';
+import { selectAuthEnvironment } from './auth-environment.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RAW_ROOT = 'https://raw.githubusercontent.com/opensphere-platform/OpenSphere-console';
@@ -78,6 +80,41 @@ function ensureGenericSecret(namespace, name, literals = {}, files = {}) {
     apiVersion: 'v1', kind: 'Secret', metadata: { name, namespace }, type: existing?.type || 'Opaque',
     data: { ...(existing?.data || {}), ...Object.fromEntries(Object.entries(data).filter(([key]) => !existing?.data?.[key])) }
   })}\n`);
+}
+
+function readSecret(namespace, name) {
+  return JSON.parse(kubectl(['-n', namespace, 'get', 'secret', name, '-o', 'json'], { capture: true }));
+}
+
+// Backup credentials are carried as Kubernetes Secret data on stdin.  Do not
+// use --from-literal: process listings and captured command errors must never
+// disclose an external backup credential.
+function prepareBackupTarget(channel, sourceRef) {
+  let source;
+  if (sourceRef) {
+    source = readSecret(sourceRef.namespace, sourceRef.name);
+  } else {
+    // Edge keeps the historical in-cluster RustFS destination, but writes the
+    // complete generic S3 contract. RustFS credentials and the CBS CA live in
+    // separate Secrets, so compose their public contract without exposing a
+    // value on argv or stdout.
+    const rustfs = readSecret('opensphere-backbone', 'backbone-rustfs');
+    const postgres = readSecret('opensphere-backbone', 'backbone-postgres');
+    source = {
+      data: {
+        ...rustfs.data,
+        bucket: Buffer.from('backups').toString('base64'),
+        region: Buffer.from('us-east-1').toString('base64'),
+        'ca.crt': postgres.data?.['ca.crt']
+      }
+    };
+  }
+  const target = assertReleaseBackupTarget(inspectBackupTarget(source), channel);
+  applyYaml(`${JSON.stringify({
+    apiVersion: 'v1', kind: 'Secret', metadata: { name: 'backbone-postgres-backup-target', namespace: 'opensphere-backbone' },
+    type: 'Opaque', data: backupTargetData(source)
+  })}\n`);
+  return { mode: target.inCluster ? 'in-cluster-rustfs' : 'external-s3', endpoint: target.endpoint, bucket: target.bucket };
 }
 
 function ensureTlsSecret(namespace, name, cert, key, { replace = false } = {}) {
@@ -229,10 +266,7 @@ function restartBackboneTrustConsumers() {
 }
 
 function validateAuthEnvironment(value) {
-  if (!['development', 'production'].includes(value)) {
-    throw new Error(`Unsupported authentication environment: ${value}`);
-  }
-  return value;
+  return selectAuthEnvironment('edge', value);
 }
 
 async function fetchManifest(lock, spec, storageClass, consoleUrl = 'https://localhost:8090', authEnvironment = 'development') {
@@ -633,11 +667,12 @@ export async function bootstrap(lock, {
   consoleUrl = 'https://localhost:8090',
   openOnboarding = true,
   requireRecoveryDrill = true,
-  authEnvironment = 'development'
+  authEnvironment,
+  backupTargetSecret
 } = {}) {
   validateLock(lock);
   const requestedConsoleUrl = normalizeConsoleUrl(consoleUrl);
-  const requestedAuthEnvironment = validateAuthEnvironment(authEnvironment);
+  const requestedAuthEnvironment = selectAuthEnvironment(lock.channel, authEnvironment);
   const installed = readInstallationLock();
   const existingNamespaces = existingOpenSphereNamespaces();
   if (installed && installed.releaseDigest !== lock.releaseDigest) {
@@ -656,13 +691,17 @@ export async function bootstrap(lock, {
   }
   const storedConsoleUrl = storedConfig?.consoleUrl ?? 'https://localhost:8090';
   const effectiveConsoleUrl = normalizeConsoleUrl(installed ? storedConsoleUrl : requestedConsoleUrl);
-  const effectiveAuthEnvironment = validateAuthEnvironment(storedConfig?.authEnvironment ?? requestedAuthEnvironment);
+  const effectiveAuthEnvironment = selectAuthEnvironment(lock.channel, storedConfig?.authEnvironment ?? requestedAuthEnvironment);
   if (installed && requestedConsoleUrl !== effectiveConsoleUrl) {
     throw new Error(`Installation uses Console URL ${effectiveConsoleUrl}; changing it requires an endpoint migration`);
   }
   if (installed && requestedAuthEnvironment !== effectiveAuthEnvironment) {
     throw new Error(`Installation uses authentication environment ${effectiveAuthEnvironment}; changing it requires an authentication migration`);
   }
+  if (installed && backupTargetSecret) {
+    throw new Error('Changing the audit backup target requires a dedicated migration; bootstrap will not replace it');
+  }
+  const requestedBackupTarget = backupTargetSecret ? parseBackupTargetSecretRef(backupTargetSecret) : undefined;
   const effectiveAdmin = installed ? (readInitialAdmin() ?? storedConfig.initialAdmin) : initialAdmin;
   const cluster = preflight({ storageClass: storedConfig?.storageClass ?? storageClass });
   const work = await mkdtemp(join(tmpdir(), 'opensphere-setup-'));
@@ -706,6 +745,8 @@ export async function bootstrap(lock, {
       admin_user: 'opensphere-admin',
       admin_password: hex(24)
     });
+    const backupTarget = prepareBackupTarget(lock.channel, requestedBackupTarget);
+    console.log(`[완료] 감사 백업 대상 준비 (${backupTarget.mode})`);
     console.log('[완료] Namespace와 bootstrap secret 준비');
 
     for (const spec of MANIFESTS) {
@@ -788,6 +829,10 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
   }
   const effectiveConsoleUrl = normalizeConsoleUrl(storedConfig.consoleUrl ?? 'https://localhost:8090');
   const effectiveAuthEnvironment = validateAuthEnvironment(storedConfig.authEnvironment ?? 'development');
+  // An edge installation may not be promoted while its stored policy permits
+  // password-only authentication.  The migration needs an explicit operator
+  // workflow, not an accidental channel upgrade.
+  selectAuthEnvironment(targetLock.channel, effectiveAuthEnvironment);
   if (consoleUrl && normalizeConsoleUrl(consoleUrl) !== effectiveConsoleUrl) {
     throw new Error(`Installation uses Console URL ${effectiveConsoleUrl}; changing it requires an endpoint migration`);
   }

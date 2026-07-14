@@ -7,6 +7,7 @@ import { resolveChannel, validateChannel, validateLock } from './release.mjs';
 import { assertKubectl, kubectl } from './process.mjs';
 import { verifyInstallation } from './verify.mjs';
 import { normalizeConsoleUrl } from './console-url.mjs';
+import { selectAuthEnvironment } from './auth-environment.mjs';
 
 function option(names, fallback) {
   const aliases = Array.isArray(names) ? names : [names];
@@ -54,9 +55,9 @@ Usage:
   opensphere-setup bootstrap --release <channel> [--lock <verified-lock-file>]
   opensphere-setup bootstrap -r <channel> [--lock <verified-lock-file>]
       [--context <kube-context>] [--admin-username <name>]
-      [--admin-display-name <name>] [--admin-email <email>]
-      [--storage-class <name>] [--console <https-origin>]
-      [--auth-environment <development|production>] [--no-open-browser]
+       [--admin-display-name <name>] [--admin-email <email>]
+       [--storage-class <name>] [--console <https-origin>]
+       [--auth-environment <development|production>] [--backup-target-secret <namespace/name>] [--no-open-browser]
   opensphere-setup upgrade --release <edge|candidate|stable> [--lock <verified-lock-file>]
       [--context <kube-context>] [--storage-class <name>] [--console <https-origin>]
   opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
@@ -78,7 +79,7 @@ async function main() {
   const explicitLock = hasOption('--lock');
   const context = option('--context', '');
   const suppliedConsoleUrl = hasOption('--console') ? normalizeConsoleUrl(option('--console', '')) : undefined;
-  const authEnvironment = option('--auth-environment', 'development');
+  const authEnvironment = hasOption('--auth-environment') ? option('--auth-environment', '') : undefined;
   if (context) process.env.OPENSPHERE_KUBE_CONTEXT = context;
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
@@ -106,6 +107,7 @@ async function main() {
 
   if (command === 'bootstrap') {
     validateChannel(channel);
+    const selectedAuthEnvironment = selectAuthEnvironment(channel, authEnvironment);
     const migrated = await migrateLegacyInstallationLock();
     if (migrated) console.log(`[마이그레이션] 기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
     const initialAdmin = validateInitialAdmin({
@@ -150,7 +152,8 @@ async function main() {
       requireZeroRestarts: hasOption('--require-zero-restarts') || (!installed && !hasOption('--allow-restarts')),
       storageClass: option('--storage-class', undefined),
       consoleUrl: suppliedConsoleUrl ?? 'https://localhost:8090',
-      authEnvironment,
+      authEnvironment: selectedAuthEnvironment,
+      backupTargetSecret: hasOption('--backup-target-secret') ? option('--backup-target-secret', '') : undefined,
       openOnboarding: !hasOption('--no-open-browser')
     });
     const installedCli = await installConsoleCli({
