@@ -258,10 +258,44 @@ function terminalPodEventError(namespace, pods) {
       '-n', namespace, 'get', 'events', '--field-selector', `involvedObject.name=${pod.metadata?.name}`,
       '-o', 'json'
     ], { capture: true }));
-    const failedMount = (events.items ?? []).find((event) => event.type === 'Warning' && event.reason === 'FailedMount' && /secret .+ not found/.test(event.message ?? ''));
-    if (failedMount) return `${pod.metadata?.name}: ${failedMount.message}`;
+    for (const event of events.items ?? []) {
+      if (event.type !== 'Warning' || event.reason !== 'FailedMount') continue;
+      const match = String(event.message ?? '').match(/secret "([^"]+)" not found/);
+      if (!match) continue;
+      // Kubernetes retains FailedMount events after the referenced Secret has
+      // been restored. Treat the condition, not its historical event, as the
+      // terminal signal. Otherwise a retry can undo a repaired prerequisite
+      // before kubelet has a chance to mount it.
+      try {
+        kubectl(['-n', namespace, 'get', 'secret', match[1]], { capture: true });
+      } catch {
+        return `${pod.metadata?.name}: ${event.message}`;
+      }
+    }
   }
   return null;
+}
+
+// Ordered StatefulSets do not replace an unready Pod from a rejected target
+// revision. During rollback that can strand the previous template behind the
+// target Pod indefinitely. Deleting only Pods whose controller revision differs
+// from the now-desired revision is safe: the StatefulSet recreates the exact
+// rollback template and keeps its PVC intact.
+function reconcileRollbackStatefulSets() {
+  for (const [namespace, resource] of CORE_ROLLOUTS) {
+    if (!resource.startsWith('statefulset/')) continue;
+    const workload = JSON.parse(kubectl(['-n', namespace, 'get', resource, '-o', 'json'], { capture: true }));
+    const desiredRevision = workload.status?.updateRevision;
+    if (!desiredRevision) continue;
+    const selector = Object.entries(workload.spec?.selector?.matchLabels ?? {})
+      .map(([key, value]) => `${key}=${value}`).join(',');
+    if (!selector) continue;
+    const pods = JSON.parse(kubectl(['-n', namespace, 'get', 'pods', '-l', selector, '-o', 'json'], { capture: true }));
+    for (const pod of pods.items ?? []) {
+      if (pod.metadata?.labels?.['controller-revision-hash'] === desiredRevision) continue;
+      kubectl(['-n', namespace, 'delete', 'pod', pod.metadata.name, '--wait=false']);
+    }
+  }
 }
 
 function waitForCoreRollouts() {
@@ -666,6 +700,7 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     applyRelease,
     recordInstallationState,
     prepareUpgradePrerequisites,
+    reconcileRollbackStatefulSets,
     waitForCoreRollouts,
     runBackboneRecoveryDrill,
     verifyInstallation,
@@ -722,11 +757,17 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
   } catch (upgradeError) {
     console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
     try {
-      if (typeof prerequisites?.restore === 'function') prerequisites.restore();
       operations.applyRelease(rollbackRelease, '롤백');
       operations.recordInstallationState(previousLock, effectiveStorageClass, initialAdmin, effectiveConsoleUrl, effectiveAuthEnvironment);
+      operations.reconcileRollbackStatefulSets();
       operations.waitForCoreRollouts();
-      await operations.verifyInstallation(previousLock, { requireZeroRestarts: false, consoleUrl: effectiveConsoleUrl });
+      await operations.verifyInstallation(previousLock, {
+        requireZeroRestarts: false, consoleUrl: effectiveConsoleUrl, record: false, mode: 'rollback'
+      });
+      // Only remove compatibility prerequisites once the previous template is
+      // running again. Removing them before its StatefulSet has reconciled can
+      // leave rollback stuck behind a target Pod with a Secret volume.
+      if (typeof prerequisites?.restore === 'function') prerequisites.restore();
     } catch (rollbackError) {
       throw new Error(`Upgrade failed (${upgradeError.message}); rollback also failed (${rollbackError.message})`);
     }

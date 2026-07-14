@@ -375,7 +375,13 @@ function recordEvidence(lock, evidence) {
   kubectl(['apply', '-f', '-'], { capture: true, input: yaml });
 }
 
-export async function verifyInstallation(lock, { requireZeroRestarts = true, record = true, consoleUrl, requireRecoveryDrill = false } = {}) {
+export async function verifyInstallation(lock, {
+  requireZeroRestarts = true,
+  record = true,
+  consoleUrl,
+  requireRecoveryDrill = false,
+  mode = 'strict'
+} = {}) {
   validateLock(lock);
   const installed = getJson(['-n', 'opensphere-console', 'get', 'configmap', 'opensphere-installation-lock']);
   const installedLock = validateLock(JSON.parse(installed.data?.['release.json'] ?? '{}'));
@@ -387,6 +393,25 @@ export async function verifyInstallation(lock, { requireZeroRestarts = true, rec
   if (consoleUrl && normalizeConsoleUrl(consoleUrl) !== configuredConsoleUrl) {
     throw new Error(`Cluster Console URL differs from verification target: ${configuredConsoleUrl}`);
   }
+  // A release prior to the current bootstrap contract may not contain the
+  // modern audit/TLS resources. A failed upgrade must still prove that the
+  // exact previous image set is running before it reports rollback success;
+  // it must not manufacture a full current-release certificate for it.
+  if (mode === 'rollback') {
+    const runtime = await eventually(
+      async () => verifyWorkloads(lock, { requireZeroRestarts }),
+      120_000,
+      2_000
+    );
+    return {
+      releaseDigest: lock.releaseDigest,
+      sourceRevision: lock.sourceRevision,
+      rollbackVerified: true,
+      workloadCount: runtime.workloadCount,
+      podCount: runtime.podCount
+    };
+  }
+  if (mode !== 'strict') throw new Error(`Unsupported installation verification mode: ${mode}`);
   verifySecrets();
   const pvcCount = verifyPersistentStorage();
   const postgresql = verifyPostgresql();

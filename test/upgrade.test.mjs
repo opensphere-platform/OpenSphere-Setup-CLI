@@ -49,6 +49,7 @@ function runtime(previous, events, { failTarget = false } = {}) {
       events.push('prepare-prerequisites');
       return { changed: true, restore: () => events.push('restore-prerequisites') };
     },
+    reconcileRollbackStatefulSets: () => events.push('reconcile-rollback-statefulsets'),
     waitForCoreRollouts: () => events.push('wait'),
     runBackboneRecoveryDrill: () => events.push('recovery-drill'),
     verifyInstallation: async (release) => {
@@ -85,12 +86,13 @@ test('failed target verification restores and verifies the previous release', as
     upgrade(previous, target, { runtime: runtime(previous, events, { failTarget: true }) }),
     /previous release was restored: target is unhealthy/
   );
-  assert.deepEqual(events.slice(-5), [
-    'restore-prerequisites',
+  assert.deepEqual(events.slice(-6), [
     `apply:롤백:${previous.sourceRevision}`,
     `record:${previous.sourceRevision}`,
+    'reconcile-rollback-statefulsets',
     'wait',
-    `verify:${previous.sourceRevision}`
+    `verify:${previous.sourceRevision}`,
+    'restore-prerequisites'
   ]);
 });
 
