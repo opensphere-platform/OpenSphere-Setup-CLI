@@ -27,13 +27,15 @@ jobs:
         run: |
           Get-ChildItem src/*.mjs | ForEach-Object { node --check $_.FullName }
           [void][scriptblock]::Create((Get-Content -Raw scripts/e2e-clean-install.ps1))
-      - name: Live channel resolution contract
+      # candidate/stable must remain unavailable or fail closed until an
+      # explicit promotion publishes a complete dual-architecture release.
+      # Requiring their resolution here would incorrectly turn the current
+      # promotion HOLD into a CI failure of the edge installer.
+      - name: Live edge channel resolution contract
         shell: pwsh
         run: |
-          foreach ($channel in @('edge', 'candidate', 'stable')) {
-            node src/cli.mjs resolve --release $channel --lock "$env:RUNNER_TEMP/$channel-lock.json"
-            if ($LASTEXITCODE -ne 0) { throw "$channel channel resolution failed" }
-          }
+          node src/cli.mjs resolve --release edge --lock "$env:RUNNER_TEMP/edge-lock.json"
+          if ($LASTEXITCODE -ne 0) { throw 'edge channel resolution failed' }
       - name: Certificate generator smoke test
         shell: pwsh
         run: |
