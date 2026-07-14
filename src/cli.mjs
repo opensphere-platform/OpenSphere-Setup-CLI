@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { bootstrap, existingOpenSphereNamespaces, migrateLegacyInstallationLock, readInstallationLock, rotateServiceCredentials, upgrade } from './bootstrap.mjs';
 import { installConsoleCli } from './install-cli.mjs';
+import { installConsoleCliFromCluster } from './cluster-cli-install.mjs';
 import { resolveChannel, validateChannel, validateLock } from './release.mjs';
 import { assertKubectl, kubectl } from './process.mjs';
 import { verifyInstallation } from './verify.mjs';
@@ -161,13 +162,8 @@ async function main() {
       openOnboarding: !hasOption('--no-open-browser'),
       onboardingUrlFile: hasOption('--onboarding-url-file') ? option('--onboarding-url-file', '') : undefined
     });
-    const installedCli = await installConsoleCli({
-      consoleUrl: bootstrapResult.consoleUrl,
+    const installedCli = await installConsoleCliFromCluster({
       installDirectory: option('--install-dir', undefined),
-      // Bootstrap verifies the local Console endpoint and its artifacts first. The
-      // bootstrap certificate is intentionally self-signed until an operator
-      // supplies the production endpoint certificate.
-      insecureSkipTlsVerify: true,
       updatePath: hasOption('--add-to-path')
     });
     console.log(`[완료] Console-native os ${installedCli.version} 설치 (${installedCli.target})`);
@@ -197,10 +193,8 @@ async function main() {
       consoleUrl: suppliedConsoleUrl,
       backupTargetSecret: hasOption('--backup-target-secret') ? option('--backup-target-secret', '') : undefined
     });
-    const installedCli = await installConsoleCli({
-      consoleUrl: result.consoleUrl ?? suppliedConsoleUrl ?? 'https://localhost:8090',
+    const installedCli = await installConsoleCliFromCluster({
       installDirectory: option('--install-dir', undefined),
-      insecureSkipTlsVerify: true,
       updatePath: hasOption('--add-to-path')
     });
     console.log(result.changed ? '[완료] release upgrade 트랜잭션 검증' : '[재사용] 이미 요청 release가 설치됨');

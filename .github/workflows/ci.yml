@@ -7,6 +7,8 @@ on:
 
 permissions:
   contents: read
+  attestations: read
+  packages: read
 
 jobs:
   test:
@@ -37,3 +39,39 @@ jobs:
           if (-not (Test-Path "$env:RUNNER_TEMP/certs/tls.crt")) { throw 'tls.crt missing' }
           if (-not (Test-Path "$env:RUNNER_TEMP/certs/tls.key")) { throw 'tls.key missing' }
           if (-not (Test-Path "$env:RUNNER_TEMP/certs/sig.key")) { throw 'sig.key missing' }
+
+  clean-kubernetes-edge:
+    # This is deliberately not docker-desktop. It proves that Setup's embedded
+    # Service port-forward path completes bootstrap, verification and CLI
+    # installation before a public Console ingress/DNS endpoint exists.
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: helm/kind-action@v1.14.0
+        with:
+          cluster_name: opensphere-e2e
+          kubectl_version: v1.36.1
+      - name: Install disposable dynamic storage
+        run: |
+          kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.32/deploy/local-path-storage.yaml
+          kubectl -n local-path-storage wait --for=condition=Available deployment/local-path-provisioner --timeout=180s
+      - name: Resolve, bootstrap and verify a clean edge installation
+        env:
+          OPENSPHERE_OS_INSTALL_DIR: ${{ runner.temp }}/opensphere-bin
+        run: |
+          set -euo pipefail
+          node src/cli.mjs resolve --release edge --lock "$RUNNER_TEMP/edge-release-lock.json"
+          node src/cli.mjs bootstrap --release edge --lock "$RUNNER_TEMP/edge-release-lock.json" \
+            --context kind-opensphere-e2e --storage-class local-path \
+            --console https://console.e2e.invalid \
+            --admin-username e2e-admin \
+            --admin-display-name 'OpenSphere E2E Administrator' \
+            --admin-email e2e-admin@opensphere.local \
+            --no-open-browser
+          node src/cli.mjs verify --context kind-opensphere-e2e --console https://console.e2e.invalid --require-zero-restarts
+          test -x "$RUNNER_TEMP/opensphere-bin/os"
+          "$RUNNER_TEMP/opensphere-bin/os" --version
