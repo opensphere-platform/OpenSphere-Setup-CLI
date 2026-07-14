@@ -180,6 +180,37 @@ test('image SBOM verification binds SPDX attestation to the release workflow', (
   assert.throws(() => verifyImageSbom('ghcr.io/elsewhere/console:edge'), /governed digest-pinned image/);
 });
 
+test('attestation verification retries only transient GitHub metadata failures', () => {
+  const image = `ghcr.io/opensphere-platform/opensphere-console@${DIGEST}`;
+  let calls = 0;
+  const pauses = [];
+  assert.doesNotThrow(() => verifyImageProvenance(image, {
+    attempts: 3,
+    baseDelayMs: 1,
+    sleep(milliseconds) { pauses.push(milliseconds); },
+    execFile() {
+      calls += 1;
+      if (calls < 3) {
+        const error = new Error('metadata unavailable');
+        error.stderr = 'HTTP 503: trust-metadata-api service unavailable';
+        throw error;
+      }
+    }
+  }));
+  assert.equal(calls, 3);
+  assert.deepEqual(pauses, [1, 2]);
+
+  assert.throws(() => verifyImageProvenance(image, {
+    attempts: 3,
+    sleep() { throw new Error('must not retry an invalid attestation'); },
+    execFile() {
+      const error = new Error('invalid attestation');
+      error.stderr = 'no matching attestation found';
+      throw error;
+    }
+  }), /Image provenance verification failed/);
+});
+
 test('release provenance verification requires every component image', async () => {
   const provenance = [];
   const sboms = [];

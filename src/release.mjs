@@ -184,30 +184,61 @@ function attestationArgs(image, predicateType) {
   ];
 }
 
+const RETRYABLE_ATTESTATION_STATUS = /\bHTTP\s+(?:408|425|429|500|502|503|504)\b/i;
+
+function delaySync(milliseconds) {
+  // `gh attestation verify` is a synchronous subprocess today. Keep its retry
+  // boundary synchronous too: a metadata outage may delay a release, never
+  // weaken the signature, workflow, repository, or predicate checks.
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function verifyImageAttestation(image, predicateType, subjectError, failureLabel, {
+  execFile = execFileSync,
+  attempts = 4,
+  baseDelayMs = 500,
+  sleep = delaySync
+} = {}) {
+  if (!canonicalImage(image)) throw new Error(subjectError);
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      execFile('gh', attestationArgs(image, predicateType), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+      return { image, trust: RELEASE_TRUST };
+    } catch (error) {
+      lastError = error;
+      const detail = String(error?.stderr ?? error?.message ?? 'unknown failure').trim();
+      if (!RETRYABLE_ATTESTATION_STATUS.test(detail) || attempt === attempts) {
+        throw new Error(`${failureLabel} for ${image}: ${detail}`);
+      }
+      sleep(baseDelayMs * (2 ** (attempt - 1)));
+    }
+  }
+  throw lastError;
+}
+
 // `gh attestation verify` verifies the certificate chain, OIDC issuer, workflow
 // path, repository and source ref. Its non-zero exit is intentionally fatal: an
 // unsigned image must never become an installation lock merely because its tag
 // resolved to a syntactically valid digest.
-export function verifyImageProvenance(image, { execFile = execFileSync } = {}) {
-  if (!canonicalImage(image)) throw new Error('Attestation subject is not a governed digest-pinned image');
-  try {
-    execFile('gh', attestationArgs(image, RELEASE_TRUST.provenancePredicate), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  } catch (error) {
-    const detail = String(error?.stderr ?? error?.message ?? 'unknown failure').trim();
-    throw new Error(`Image provenance verification failed for ${image}: ${detail}`);
-  }
-  return { image, trust: RELEASE_TRUST };
+export function verifyImageProvenance(image, options = {}) {
+  return verifyImageAttestation(
+    image,
+    RELEASE_TRUST.provenancePredicate,
+    'Attestation subject is not a governed digest-pinned image',
+    'Image provenance verification failed',
+    options
+  );
 }
 
-export function verifyImageSbom(image, { execFile = execFileSync } = {}) {
-  if (!canonicalImage(image)) throw new Error('SBOM subject is not a governed digest-pinned image');
-  try {
-    execFile('gh', attestationArgs(image, RELEASE_TRUST.sbomPredicate), { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-  } catch (error) {
-    const detail = String(error?.stderr ?? error?.message ?? 'unknown failure').trim();
-    throw new Error(`Image SPDX SBOM verification failed for ${image}: ${detail}`);
-  }
-  return { image, trust: RELEASE_TRUST };
+export function verifyImageSbom(image, options = {}) {
+  return verifyImageAttestation(
+    image,
+    RELEASE_TRUST.sbomPredicate,
+    'SBOM subject is not a governed digest-pinned image',
+    'Image SPDX SBOM verification failed',
+    options
+  );
 }
 
 export async function verifyReleaseProvenance(lock, {
