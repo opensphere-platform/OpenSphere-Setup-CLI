@@ -127,7 +127,10 @@ export async function installConsoleCli({
   insecureSkipTlsVerify = false,
   platform = process.platform,
   arch = process.arch,
-  updatePath = true
+  // A CLI artifact installation must not mutate a user's shell environment
+  // unless the operator explicitly asks for it. The caller can opt in with
+  // `--add-to-path`; the returned target is always usable directly.
+  updatePath = false
 } = {}) {
   const base = new URL(consoleUrl);
   if (!['https:', 'http:'].includes(base.protocol)) throw new Error('Console URL must use HTTP or HTTPS');
@@ -165,8 +168,9 @@ export async function installConsoleCli({
   const filename = platform === 'win32' ? 'os.exe' : 'os';
   const target = join(directory, filename);
   await replaceAtomically(target, artifact.buffer);
-  if (updatePath) ensureUserPath(directory);
-  return { version: manifest.version, target, sha256: digest };
+  const pathUpdated = Boolean(updatePath && process.platform === 'win32');
+  if (pathUpdated) ensureUserPath(directory);
+  return { version: manifest.version, target, sha256: digest, pathUpdated };
 }
 
 export const testing = { defaultInstallDirectory, platformDescriptor, validateManifest };

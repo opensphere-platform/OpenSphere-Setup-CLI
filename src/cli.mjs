@@ -57,14 +57,15 @@ Usage:
       [--context <kube-context>] [--admin-username <name>]
        [--admin-display-name <name>] [--admin-email <email>]
        [--storage-class <name>] [--console <https-origin>]
-       [--auth-environment <development|production>] [--backup-target-secret <namespace/name>] [--no-open-browser]
+       [--auth-environment <development|production>] [--backup-target-secret <namespace/name>]
+       [--no-open-browser] [--onboarding-url-file <path>] [--add-to-path]
   opensphere-setup upgrade --release <edge|candidate|stable> [--lock <verified-lock-file>]
       [--context <kube-context>] [--storage-class <name>] [--console <https-origin>]
-      [--backup-target-secret <namespace/name>]
+      [--backup-target-secret <namespace/name>] [--add-to-path]
   opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
   opensphere-setup rotate-service-credentials [--context <kube-context>]
   opensphere-setup install-cli [--console <url>] [--install-dir <directory>]
-      [--insecure-skip-tls-verify]
+      [--insecure-skip-tls-verify] [--add-to-path]
   opensphere-setup status
   opensphere-setup version
 
@@ -90,10 +91,12 @@ async function main() {
     const installed = await installConsoleCli({
       consoleUrl: suppliedConsoleUrl ?? 'https://localhost:8090',
       installDirectory: option('--install-dir', undefined),
-      insecureSkipTlsVerify: hasOption('--insecure-skip-tls-verify')
+      insecureSkipTlsVerify: hasOption('--insecure-skip-tls-verify'),
+      updatePath: hasOption('--add-to-path')
     });
     console.log(`[완료] os ${installed.version} 무결성 검증 및 설치`);
     console.log(`Path: ${installed.target}`);
+    if (!installed.pathUpdated) console.log('[안내] 현재 PATH는 변경하지 않았습니다. 원하면 다음 설치에서 --add-to-path를 지정하세요.');
     return;
   }
 
@@ -155,7 +158,8 @@ async function main() {
       consoleUrl: suppliedConsoleUrl ?? 'https://localhost:8090',
       authEnvironment: selectedAuthEnvironment,
       backupTargetSecret: hasOption('--backup-target-secret') ? option('--backup-target-secret', '') : undefined,
-      openOnboarding: !hasOption('--no-open-browser')
+      openOnboarding: !hasOption('--no-open-browser'),
+      onboardingUrlFile: hasOption('--onboarding-url-file') ? option('--onboarding-url-file', '') : undefined
     });
     const installedCli = await installConsoleCli({
       consoleUrl: bootstrapResult.consoleUrl,
@@ -163,9 +167,11 @@ async function main() {
       // Bootstrap verifies the local Console endpoint and its artifacts first. The
       // bootstrap certificate is intentionally self-signed until an operator
       // supplies the production endpoint certificate.
-      insecureSkipTlsVerify: true
+      insecureSkipTlsVerify: true,
+      updatePath: hasOption('--add-to-path')
     });
     console.log(`[완료] Console-native os ${installedCli.version} 설치 (${installedCli.target})`);
+    if (!installedCli.pathUpdated) console.log('[안내] 현재 PATH는 변경하지 않았습니다. 원하면 --add-to-path를 지정하세요.');
     return;
   }
 
@@ -194,10 +200,12 @@ async function main() {
     const installedCli = await installConsoleCli({
       consoleUrl: result.consoleUrl ?? suppliedConsoleUrl ?? 'https://localhost:8090',
       installDirectory: option('--install-dir', undefined),
-      insecureSkipTlsVerify: true
+      insecureSkipTlsVerify: true,
+      updatePath: hasOption('--add-to-path')
     });
     console.log(result.changed ? '[완료] release upgrade 트랜잭션 검증' : '[재사용] 이미 요청 release가 설치됨');
     console.log(`[완료] Console-native os ${installedCli.version} 설치 (${installedCli.target})`);
+    if (!installedCli.pathUpdated) console.log('[안내] 현재 PATH는 변경하지 않았습니다. 원하면 --add-to-path를 지정하세요.');
     return;
   }
 

@@ -47,6 +47,21 @@ const REQUIRED_PVCS = [
   'opensphere-backbone/backbone-gitea-data'
 ];
 
+const REQUIRED_SERVICES = Object.freeze([
+  'opensphere-console-auth/kanidm',
+  'opensphere-console-auth/kanidm-core',
+  'opensphere-console-auth/kanidm-ext',
+  'opensphere-console/opensphere-console-auth',
+  'opensphere-console/opensphere-console-auth-ext',
+  'opensphere-console/opensphere-console-backend',
+  'opensphere-console/opensphere-console-dupa-controller',
+  'opensphere-console/opensphere-console-ext',
+  'opensphere-backbone/backbone-postgres',
+  'opensphere-backbone/backbone-rustfs',
+  'opensphere-backbone/backbone-gitea',
+  'opensphere-backbone/opensphere-console-oaa-gateway'
+]);
+
 function getJson(args) {
   return JSON.parse(kubectl([...args, '-o', 'json'], { capture: true }));
 }
@@ -161,6 +176,26 @@ function verifyPersistentStorage() {
     }
   }
   return claims.length;
+}
+
+export function verifyRequiredServiceEndpoints(services, endpointSlices) {
+  const serviceByReference = new Map(services.map((service) => [`${service.metadata.namespace}/${service.metadata.name}`, service]));
+  const evidence = [];
+  for (const reference of REQUIRED_SERVICES) {
+    const service = serviceByReference.get(reference);
+    if (!service) throw new Error(`Required Service is missing: ${reference}`);
+    if (!service.spec?.selector || Object.keys(service.spec.selector).length === 0) {
+      throw new Error(`Required Service has no workload selector: ${reference}`);
+    }
+    const [namespace, name] = reference.split('/');
+    const endpoints = endpointSlices
+      .filter((slice) => slice.metadata?.namespace === namespace && slice.metadata?.labels?.['kubernetes.io/service-name'] === name)
+      .flatMap((slice) => slice.endpoints ?? []);
+    const ready = endpoints.filter((endpoint) => endpoint.conditions?.ready === true);
+    if (ready.length === 0) throw new Error(`Required Service has no ready EndpointSlice endpoint: ${reference}`);
+    evidence.push({ reference, readyEndpoints: ready.length });
+  }
+  return evidence;
 }
 
 function verifyRecovery({ requireRecoveryDrill = false } = {}) {
@@ -436,6 +471,9 @@ export async function verifyInstallation(lock, {
   const identity = await verifyIdentity();
   const services = getJson(['get', 'services', '-A']).items
     .filter((service) => NAMESPACES.includes(service.metadata.namespace));
+  const endpointSlices = getJson(['get', 'endpointslice', '-A']).items
+    .filter((slice) => NAMESPACES.includes(slice.metadata.namespace));
+  const requiredServiceEndpoints = verifyRequiredServiceEndpoints(services, endpointSlices);
   const evidence = {
     apiVersion: 'release.opensphere.io/v1alpha1',
     kind: 'OpenSphereInstallationEvidence',
@@ -448,6 +486,7 @@ export async function verifyInstallation(lock, {
     workloadCount: runtime.workloadCount,
     podCount: runtime.podCount,
     serviceCount: services.length,
+    requiredServiceEndpoints,
     pvcCount,
     runtimeImagesMatchLock: true,
     requiredSecretsReady: true,

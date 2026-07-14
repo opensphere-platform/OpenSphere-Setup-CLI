@@ -20,6 +20,8 @@ opensphere-setup.cmd bootstrap --release stable --backup-target-secret platform-
 opensphere-setup.cmd upgrade --release edge
 ```
 
+`os`는 검증된 사용자 설치 경로에 놓이지만, Setup은 사용자의 `PATH`를 자동 변경하지 않는다. 새 터미널에서 명령으로 등록하려면 명시적으로 `--add-to-path`를 지정한다. `--no-open-browser` bootstrap은 one-time Wizard URL을 stdout에 남기지 않고 사용자 전용 URL 파일에 기록한다. 필요하면 `--onboarding-url-file <path>`로 위치를 지정한다.
+
 `edge`는 개발용 in-cluster RustFS를 감사 백업 대상으로 사용한다. `candidate`와 `stable`은 반드시 외부 S3 호환 백업 Secret을 지정해야 하며, 같은 클러스터의 RustFS·localhost·Service DNS는 거부된다. Secret에는 `endpoint`, `bucket`, `access_key`, `secret_key`, `ca.crt`, 선택 `region`이 필요하다. 승격 채널은 자동으로 `production` 인증 정책(TOTP 강제)을 사용하며 `development`로 완화할 수 없다. 또한 승격용 StorageClass는 `opensphere.io/backbone-storage-profile=durable-v1`, `opensphere.io/encryption-at-rest=true`, `opensphere.io/failure-domain=multi-node|zone-redundant|region-redundant`, `reclaimPolicy=Retain`, `allowVolumeExpansion=true`을 모두 선언해야 한다. node-local provisioner는 거부된다.
 
 기본 최초 관리자 이름은 Kanidm 예약 계정 `admin`과 충돌하지 않는 `opensphere-admin`이다.

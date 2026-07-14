@@ -1,10 +1,10 @@
 import { randomBytes, X509Certificate } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
-import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { kubectl, run } from './process.mjs';
 import { preflight } from './preflight.mjs';
@@ -318,11 +318,15 @@ function applyRelease(release, label) {
 
 export function terminalPodError(pods) {
   const immediate = new Set(['CreateContainerConfigError', 'CreateContainerError', 'InvalidImageName']);
+  const unrecoverableImagePull = /manifest unknown|not found|pull access denied|repository .* does not exist|authorization failed/i;
   for (const pod of pods.items ?? []) {
     for (const status of pod.status?.containerStatuses ?? []) {
       const waiting = status.state?.waiting;
       if (waiting && immediate.has(waiting.reason)) {
         return `${pod.metadata?.name}/${status.name}: ${waiting.reason}${waiting.message ? ` (${waiting.message})` : ''}`;
+      }
+      if (waiting && ['ErrImagePull', 'ImagePullBackOff'].includes(waiting.reason) && unrecoverableImagePull.test(String(waiting.message ?? ''))) {
+        return `${pod.metadata?.name}/${status.name}: ${waiting.reason} (${waiting.message})`;
       }
     }
   }
@@ -587,6 +591,23 @@ function openBrowser(url) {
   child.unref();
 }
 
+function defaultOnboardingUrlFile() {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  return join(homedir(), '.opensphere', 'onboarding', `initial-admin-${stamp}.url`);
+}
+
+// Do not print the one-time onboarding URL: its reset token is a credential.
+// A headless bootstrap receives the URL through a new user-private file instead.
+export async function writeOnboardingUrl(url, target = defaultOnboardingUrlFile()) {
+  const destination = resolve(target);
+  await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+  await writeFile(destination, `${url}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  // chmod is meaningful on POSIX; on Windows the user profile ACL remains the
+  // access boundary. Never fall back to stdout if a private file cannot be made.
+  await chmod(destination, 0o600).catch(() => {});
+  return destination;
+}
+
 async function provisionInitialAdmin({ username, displayName, email }, consoleUrl, { rotateServiceCredentials = false, authEnvironment = 'development' } = {}) {
   let serviceCredentialsExist = true;
   for (const name of ['opensphere-identity-kanidm', 'opensphere-rolemgr-kanidm']) {
@@ -677,7 +698,8 @@ export async function bootstrap(lock, {
   openOnboarding = true,
   requireRecoveryDrill = true,
   authEnvironment,
-  backupTargetSecret
+  backupTargetSecret,
+  onboardingUrlFile
 } = {}) {
   validateLock(lock);
   const requestedConsoleUrl = normalizeConsoleUrl(consoleUrl);
@@ -795,13 +817,22 @@ export async function bootstrap(lock, {
       requireRecoveryDrill: Boolean(recoveryDrill)
     });
     console.log(`[완료] OpenSphere Console ${lock.channel} 설치 검증 (${evidence.podCount} pods, ${evidence.serviceCount} services)`);
+    let savedOnboardingUrlFile;
     if (onboardingUrl && openOnboarding) {
       openBrowser(onboardingUrl);
       console.log('[필요] 최초 관리자 Wizard가 브라우저에 열렸습니다. 비밀번호 설정 후 Console 로그인을 완료하세요.');
     } else if (onboardingUrl) {
-      console.log('[완료] 최초 관리자 Wizard token이 생성됐으며 비대화형 검증을 위해 브라우저 열기는 생략했습니다.');
+      savedOnboardingUrlFile = await writeOnboardingUrl(onboardingUrl, onboardingUrlFile);
+      console.log(`[필요] 최초 관리자 Wizard URL을 사용자 전용 파일에 저장했습니다: ${savedOnboardingUrlFile}`);
     }
-    return { lock, evidence, consoleUrl: effectiveConsoleUrl, onboardingUrl, temporaryDirectory: keepTemporaryFiles ? work : undefined };
+    return {
+      lock,
+      evidence,
+      consoleUrl: effectiveConsoleUrl,
+      onboardingUrl,
+      onboardingUrlFile: savedOnboardingUrlFile,
+      temporaryDirectory: keepTemporaryFiles ? work : undefined
+    };
   } finally {
     if (!keepTemporaryFiles) await rm(work, { recursive: true, force: true });
   }

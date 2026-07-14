@@ -122,3 +122,24 @@ test('terminal pod configuration errors are detected before rollout timeout', ()
     items: [{ status: { containerStatuses: [{ state: { waiting: { reason: 'ContainerCreating' } } }] } }]
   }), null);
 });
+
+test('unrecoverable image pull errors fail before the rollout timeout', () => {
+  assert.match(terminalPodError({
+    items: [{
+      metadata: { name: 'console-abc' },
+      status: { containerStatuses: [{
+        name: 'console',
+        state: { waiting: { reason: 'ImagePullBackOff', message: 'manifest unknown: manifest unknown' } }
+      }] }
+    }]
+  }), /console-abc\/console: ImagePullBackOff.*manifest unknown/);
+  assert.equal(terminalPodError({
+    items: [{
+      metadata: { name: 'console-abc' },
+      status: { containerStatuses: [{
+        name: 'console',
+        state: { waiting: { reason: 'ErrImagePull', message: 'dial tcp: temporary network failure' } }
+      }] }
+    }]
+  }), null);
+});

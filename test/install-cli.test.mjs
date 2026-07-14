@@ -44,10 +44,10 @@ test('installs the Console-owned artifact only after size and digest verificatio
       consoleUrl: source.url,
       installDirectory: directory,
       platform: 'win32',
-      arch: 'x64',
-      updatePath: false
+      arch: 'x64'
     });
     assert.equal(installed.version, '0.4.0');
+    assert.equal(installed.pathUpdated, false);
     assert.deepEqual(await readFile(join(directory, 'os.exe')), bytes);
   } finally {
     await source.close();
