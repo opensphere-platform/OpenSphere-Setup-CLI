@@ -861,8 +861,10 @@ function recordInstallationState(lock, storageClass, initialAdmin, consoleUrl, a
 }
 
 function recordInitialAdmin(initialAdmin, setupRequired) {
-  const existing = readConfigMap('opensphere-console', 'opensphere-initial-admin');
-  const state = setupRequired === undefined ? (existing?.data?.state || 'complete') : (setupRequired ? 'required' : 'complete');
+  // A clean bootstrap has no metadata ConfigMap yet. Reuse the optional read
+  // path so first installation creates it instead of failing on NotFound.
+  const existing = readInitialAdmin();
+  const state = setupRequired === undefined ? (existing?.state || 'complete') : (setupRequired ? 'required' : 'complete');
   const yaml = kubectl([
     '-n', 'opensphere-console', 'create', 'configmap', 'opensphere-initial-admin',
     `--from-literal=username=${initialAdmin.username}`,
@@ -884,7 +886,7 @@ function readInitialAdmin() {
   if (!data.username || !data.displayName || !data.email) {
     throw new Error('Existing initial administrator metadata is incomplete');
   }
-  return { username: data.username, displayName: data.displayName, email: data.email };
+  return { username: data.username, displayName: data.displayName, email: data.email, state: data.state || 'complete' };
 }
 
 function readInstallationConfig() {

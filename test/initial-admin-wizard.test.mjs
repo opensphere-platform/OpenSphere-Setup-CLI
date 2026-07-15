@@ -11,6 +11,8 @@ test('clean bootstrap delegates human credentials to the Console first-access Wi
   assert.match(bootstrap, /browserSetup:\s*!installed/);
   assert.match(provision, /The Console first-access Wizard owns the one-time credential-update session/);
   assert.doesNotMatch(provision, /_credential\/_update_intent\/3600/);
+  assert.match(bootstrap, /function recordInitialAdmin[\s\S]{0,500}const existing = readInitialAdmin\(\)/);
+  assert.match(bootstrap, /opensphere-initial-admin'[\s\S]{0,120}'--ignore-not-found'/);
 });
 
 test('Setup never prints or persists a credential-reset URL', () => {
