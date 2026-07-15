@@ -645,10 +645,42 @@ function runBackboneRecoveryDrill() {
   const backupJob = `backbone-postgres-backup-bootstrap-${suffix}`;
   const restoreJob = `backbone-postgres-restore-drill-${suffix}`;
   kubectl(['-n', 'opensphere-backbone', 'create', 'job', backupJob, '--from=cronjob/backbone-postgres-backup']);
-  kubectl(['-n', 'opensphere-backbone', 'wait', '--for=condition=complete', `job/${backupJob}`, '--timeout=900s']);
+  waitForJobCompletion('opensphere-backbone', backupJob);
   kubectl(['-n', 'opensphere-backbone', 'create', 'job', restoreJob, '--from=cronjob/backbone-postgres-restore-drill']);
-  kubectl(['-n', 'opensphere-backbone', 'wait', '--for=condition=complete', `job/${restoreJob}`, '--timeout=900s']);
+  waitForJobCompletion('opensphere-backbone', restoreJob);
   return { backupJob, restoreJob };
+}
+
+// `kubectl wait --for=condition=complete` ignores a Job's Failed condition and
+// therefore consumed the full 15-minute recovery timeout after a deterministic
+// restore error. Poll both terminal conditions so bootstrap and CI fail immediately,
+// and include the pod log in the error without leaking it on a successful path.
+export function waitForJobCompletion(namespace, jobName, {
+  timeoutMs = 900_000,
+  intervalMs = 2_000,
+  kubectlFn = kubectl,
+  now = Date.now,
+  sleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds)
+} = {}) {
+  const deadline = now() + timeoutMs;
+  while (true) {
+    const job = JSON.parse(kubectlFn(['-n', namespace, 'get', 'job', jobName, '-o', 'json'], { capture: true }));
+    const conditions = job.status?.conditions ?? [];
+    if (conditions.some((condition) => condition.type === 'Complete' && condition.status === 'True')) return job;
+    const failed = conditions.find((condition) => condition.type === 'Failed' && condition.status === 'True');
+    if (failed) {
+      let logs = '';
+      try {
+        logs = kubectlFn(['-n', namespace, 'logs', `job/${jobName}`, '--all-containers=true'], { capture: true });
+      } catch {
+        // The terminal Job condition is authoritative even if log collection races TTL cleanup.
+      }
+      const reason = [failed.reason, failed.message].filter(Boolean).join(': ') || 'Job failed';
+      throw new Error(`${namespace}/job/${jobName} failed: ${reason}${logs ? `\n${logs}` : ''}`);
+    }
+    if (now() >= deadline) throw new Error(`${namespace}/job/${jobName} did not complete within ${Math.ceil(timeoutMs / 1000)}s`);
+    sleep(intervalMs);
+  }
 }
 
 function readOptionalBackboneResource(kind, name) {

@@ -464,6 +464,15 @@ test('verifyRecovery fails closed on the backup CronJob credential, the ConfigMa
 function historicalScriptsConfigMap() {
   const configMap = backupScriptsConfigMap({ script: CONSOLE_BACKUP_SH });
   configMap.data['verify.sh'] = 'psql -U console -d console -Atc "SELECT count(*) FROM audit_log"';
+  configMap.data['restore-drill.sh'] = [
+    '#!/bin/sh',
+    'set -eu',
+    ': "${PGPASSWORD:?PGPASSWORD is required}"',
+    ': "${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}"',
+    'PGPASSWORD="$POSTGRES_PASSWORD" createdb -U opensphere_db_bootstrap scratch',
+    'PGPASSWORD="$POSTGRES_PASSWORD" pg_restore -U opensphere_db_bootstrap -d scratch /tmp/restore.dump',
+    'PGPASSWORD="$POSTGRES_PASSWORD" dropdb -U opensphere_db_bootstrap scratch'
+  ].join('\n');
   return configMap;
 }
 
@@ -476,6 +485,19 @@ test('deriveDedicatedBackupScripts rewrites every console-role pg_dump/psql to o
   // ...but the -d console DATABASE argument is never touched.
   assert.match(dedicated.data['backup.sh'], /-d console\b/);
   assert.doesNotMatch(dedicated.data['backup.sh'], /-U console\b/);
+  // The historical restore script no longer demands the removed Console
+  // PGPASSWORD; all database commands remain pinned to POSTGRES_PASSWORD inline.
+  assert.doesNotMatch(dedicated.data['restore-drill.sh'], /PGPASSWORD:\?PGPASSWORD is required/);
+  assert.match(dedicated.data['restore-drill.sh'], /PGPASSWORD="\$POSTGRES_PASSWORD" createdb/);
+});
+
+test('deriveDedicatedBackupScripts fails closed when a legacy restore script still consumes ambient PGPASSWORD', () => {
+  const configMap = historicalScriptsConfigMap();
+  configMap.data['restore-drill.sh'] += '\npsql -U opensphere_db_bootstrap -d scratch "$PGPASSWORD"';
+  assert.throws(
+    () => deriveDedicatedBackupScripts(configMap),
+    /restore drill still consumes PGPASSWORD outside the sealed bootstrap override/
+  );
 });
 
 test('deriveDedicatedBackupScripts handles the --username=console and --username console forms', () => {

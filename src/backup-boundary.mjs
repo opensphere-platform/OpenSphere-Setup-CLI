@@ -243,6 +243,27 @@ function rewriteBackbonePostgresRefs(cronJob, mapKey) {
 // (-d console) is deliberately NOT matched, so only the authenticating role is rewritten.
 const CONSOLE_ROLE_FLAG = /((?:-U|--username[=\s])\s*)console\b/g;
 
+// dc272f4 and other early signed releases exported a Console PGPASSWORD into the
+// restore-drill Job only to satisfy this guard. Every database client invocation in
+// the same script already overrides it inline with the sealed bootstrap credential:
+// `PGPASSWORD="$POSTGRES_PASSWORD" createdb|pg_restore|psql|dropdb ...`. Once the
+// compatibility overlay removes the exposed Console credential, that obsolete guard
+// must be removed as well or the hardened Job exits before doing any work.
+const LEGACY_RESTORE_PGPASSWORD_GUARD = /^\s*:\s*"\$\{PGPASSWORD:\?PGPASSWORD is required\}"\s*$/gm;
+
+function removeLegacyRestorePgPasswordGuard(script) {
+  if (!LEGACY_RESTORE_PGPASSWORD_GUARD.test(script)) return script;
+  LEGACY_RESTORE_PGPASSWORD_GUARD.lastIndex = 0;
+  const transformed = script.replace(LEGACY_RESTORE_PGPASSWORD_GUARD, '');
+  const unsafeReference = transformed
+    .split('\n')
+    .find((line) => /\bPGPASSWORD\b/.test(line) && !/PGPASSWORD="\$POSTGRES_PASSWORD"/.test(line));
+  if (unsafeReference) {
+    throw new Error(`Cannot derive dedicated ${BACKUP_SCRIPTS_CONFIGMAP_RESOURCE}: restore drill still consumes PGPASSWORD outside the sealed bootstrap override`);
+  }
+  return transformed.replace(/\n{3,}/g, '\n\n');
+}
+
 // backbone-postgres-backup-scripts: rewrite every console-role pg_dump/psql invocation
 // in every script value to the dedicated read-only opensphere_backup role. Fails closed
 // (rather than injecting a flag into shell text) if the result does not run pg_dump as
@@ -255,7 +276,11 @@ export function deriveDedicatedBackupScripts(configMap) {
     throw new Error(`Cannot derive dedicated ${BACKUP_SCRIPTS_CONFIGMAP_RESOURCE}: no script data to transform`);
   }
   for (const [key, value] of Object.entries(data)) {
-    if (typeof value === 'string') data[key] = value.replace(CONSOLE_ROLE_FLAG, (_match, flag) => `${flag}opensphere_backup`);
+    if (typeof value !== 'string') continue;
+    const roleRewritten = value.replace(CONSOLE_ROLE_FLAG, (_match, flag) => `${flag}opensphere_backup`);
+    data[key] = key === 'restore-drill.sh'
+      ? removeLegacyRestorePgPasswordGuard(roleRewritten)
+      : roleRewritten;
   }
   if (!backupScriptUsesDedicatedRole(clone)) {
     throw new Error(`Cannot derive dedicated ${BACKUP_SCRIPTS_CONFIGMAP_RESOURCE}: script does not run pg_dump as opensphere_backup after transformation`);
