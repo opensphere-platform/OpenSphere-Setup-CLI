@@ -110,6 +110,25 @@ function ensureNamespace(name) {
   applyYaml(yaml);
 }
 
+// Pure merge: existing Secret data always wins. Only keys absent from
+// `existingData` are taken from `candidateData`, so a value generated fresh on
+// every invocation (e.g. `hex(32)`) is applied once on creation and never
+// rotates an already-installed credential on a resume/upgrade re-run.
+// Exported (rather than inlined) so preservation semantics can be asserted
+// directly against representative fixtures instead of via source-text
+// pattern matching alone.
+export function mergeSecretData(existingData = {}, candidateData = {}) {
+  return {
+    ...existingData,
+    ...Object.fromEntries(Object.entries(candidateData).filter(([key]) => !existingData?.[key]))
+  };
+}
+
+// Returns true when the Secret was created or a previously-absent key was added, false when
+// every requested key was already present (a pure no-op). Callers that must restart consumers
+// after a credential first becomes available (e.g. a Deployment env var sourced from a
+// secretKeyRef, which Kubernetes never live-refreshes) rely on this to decide whether a restart
+// is required.
 function ensureGenericSecret(namespace, name, literals = {}, files = {}) {
   let existing = null;
   try {
@@ -121,13 +140,14 @@ function ensureGenericSecret(namespace, name, literals = {}, files = {}) {
   for (const [key, value] of Object.entries(literals)) data[key] = Buffer.from(String(value)).toString('base64');
   for (const [key, path] of Object.entries(files)) data[key] = readFileSync(path).toString('base64');
   const missing = Object.keys(data).some((key) => !existing?.data?.[key]);
-  if (existing && !missing) return;
+  if (existing && !missing) return false;
   // Preserve current credentials on resume/upgrade. This path only adds a newly
   // required public CA or schema key; explicit rotation owns credential changes.
   applyYaml(`${JSON.stringify({
     apiVersion: 'v1', kind: 'Secret', metadata: { name, namespace }, type: existing?.type || 'Opaque',
-    data: { ...(existing?.data || {}), ...Object.fromEntries(Object.entries(data).filter(([key]) => !existing?.data?.[key])) }
+    data: mergeSecretData(existing?.data, data)
   })}\n`);
+  return true;
 }
 
 function readSecret(namespace, name) {
@@ -334,6 +354,15 @@ async function prepareUpgradePrerequisites(consoleUrl) {
   // that predates the Backbone-namespace mount must not stay unschedulable
   // just because its existing CBS TLS leaves need no migration.
   if (mirrorConsoleAuthCaToBackbone()) changed = true;
+  // A legacy/pre-OAA installation may lack the dedicated opensphere_oaa credential.
+  // console-services.yaml/backbone.yaml (CONSTITUTION-0004 §4.5 OAA bootstrap boundary) both
+  // require backbone-postgres/oaa_password to exist before applyRelease's Backbone boundary
+  // reconcile Job runs -- so this must be added here unconditionally, not only when a TLS DNS
+  // name migration also happens to be needed below. ensureGenericSecret only adds the key when
+  // absent; an already-installed OAA credential is never rotated by an upgrade.
+  if (ensureGenericSecret('opensphere-backbone', 'backbone-postgres', { oaa_password: hex(32) }, {})) {
+    changed = true;
+  }
   const needsPostgresTls = tlsSecretNeedsDnsName('opensphere-backbone', 'backbone-postgres-tls', 'backbone-postgres.opensphere-backbone.svc.cluster.local');
   const needsRustfsTls = tlsSecretNeedsDnsName('opensphere-backbone', 'backbone-rustfs-tls', RUSTFS_DNS_NAME);
   if (!needsPostgresTls && !needsRustfsTls) {
@@ -1041,7 +1070,15 @@ export async function bootstrap(lock, {
       // initialisation uses a distinct bootstrap operator so Console can never
       // begin life as the database superuser.
       password: hex(32),
-      bootstrap_password: hex(32)
+      bootstrap_password: hex(32),
+      // Dedicated, independently-generated credential for the OAA gateway's own
+      // least-privilege opensphere_oaa PostgreSQL role (CONSTITUTION-0004 §4.5 OAA
+      // bootstrap boundary) -- never the Console runtime `password` above. Consumed by
+      // both the empty-PVC init script and the idempotent boundary reconcile Job (see
+      // backend/backbone/bootstrap/backbone.yaml in OpenSphere-console). ensureGenericSecret
+      // only ever adds this key when absent, so a rerun/upgrade preserves the existing
+      // value rather than rotating it.
+      oaa_password: hex(32)
     }, { 'ca.crt': ca });
     ensureTlsSecret('opensphere-backbone', 'backbone-postgres-tls', cert, key);
     ensureTlsSecret('opensphere-backbone', 'backbone-rustfs-tls', cert, key);
