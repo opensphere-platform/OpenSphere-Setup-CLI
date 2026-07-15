@@ -15,6 +15,13 @@ import { normalizeConsoleUrl } from './console-url.mjs';
 import { assertReleaseBackupTarget, backupTargetData, inspectBackupTarget, parseBackupTargetSecretRef } from './backup-target.mjs';
 import { selectAuthEnvironment } from './auth-environment.mjs';
 import {
+  BACKUP_CRONJOB_RESOURCE,
+  BACKUP_SCRIPTS_CONFIGMAP_RESOURCE,
+  RESTORE_DRILL_CRONJOB_RESOURCE,
+  backupBoundaryFullyDedicated,
+  buildCompatibilityOverlaySet
+} from './backup-boundary.mjs';
+import {
   EXTERNAL_SHELL_TLS_ANNOTATION,
   EXTERNAL_SHELL_TLS_PROFILE,
   assertReleaseShellTlsReference,
@@ -639,6 +646,93 @@ function runBackboneRecoveryDrill() {
   return { backupJob, restoreJob };
 }
 
+function readOptionalBackboneResource(kind, name) {
+  const json = kubectl([
+    '-n', 'opensphere-backbone', 'get', kind, name, '--ignore-not-found', '-o', 'json'
+  ], { capture: true });
+  return json ? JSON.parse(json) : null;
+}
+
+// Flatten every document of every materialized release manifest into a single
+// list of decoded objects using kubectl's client-side YAML decoder (dry-run only,
+// no cluster state). A single manifest file (e.g. backbone.yaml) carries the
+// backup CronJob, its scripts ConfigMap and the restore-drill CronJob as separate
+// `---` documents, so kubectl returns a `List`; expand it so every required
+// resource is recognized regardless of how the manifests are bundled.
+function decodeReleaseItems(release) {
+  const items = [];
+  for (const manifest of release) {
+    const decoded = JSON.parse(kubectl([
+      'apply', '--dry-run=client', '--validate=false', '-f', '-', '-o', 'json'
+    ], { capture: true, input: manifest.yaml }));
+    items.push(...(decoded.kind === 'List' ? decoded.items ?? [] : [decoded]));
+  }
+  return items;
+}
+
+// Decode one resource of a given kind/name from materialized release manifests.
+// Used to decide whether the release being applied already provides the dedicated
+// backup boundary -- so a forward upgrade's own (equal-or-newer) backup manifests
+// are never clobbered by a preserved copy.
+function decodeReleaseResource(release, kind, name) {
+  return decodeReleaseItems(release).find((item) => item.kind === kind && item.metadata?.name === name) ?? null;
+}
+
+// The release itself provides the dedicated boundary only when ALL THREE of its
+// resources are on the boundary: the backup CronJob binds backup_password, its
+// backup-scripts ConfigMap runs pg_dump as opensphere_backup, AND its restore-drill
+// CronJob preserves the credential boundary -- POSTGRES_PASSWORD binds the sealed
+// bootstrap operator and no backup/console read credential is wired into PGPASSWORD.
+// Fails closed on any one: a release whose backup CronJob/script are dedicated but
+// whose restore drill still binds the console runtime `password` into PGPASSWORD is a
+// regression and must be overlaid, not trusted -- otherwise the regressed restore
+// drill would be applied and preserved as if it were on the boundary.
+function releaseProvidesDedicatedBackupBoundary(release) {
+  const cronJob = decodeReleaseResource(release, 'CronJob', BACKUP_CRONJOB_RESOURCE);
+  const configMap = decodeReleaseResource(release, 'ConfigMap', BACKUP_SCRIPTS_CONFIGMAP_RESOURCE);
+  const restoreDrill = decodeReleaseResource(release, 'CronJob', RESTORE_DRILL_CRONJOB_RESOURCE);
+  return backupBoundaryFullyDedicated({ cronJob, configMap, restoreDrill });
+}
+
+// Snapshot the live scheduled-backup CronJob, its scripts ConfigMap and the
+// restore-drill CronJob before a release apply overwrites them. `dedicated`
+// records whether the installation currently sits on the opensphere_backup
+// boundary across ALL THREE live resources -- the CronJob credential, the ConfigMap
+// script AND the restore-drill credential boundary (sealed bootstrap only, no exposed
+// backup/console read credential); only then is there a full boundary (including
+// restore drill) worth preserving across a regressive downgrade, and a live
+// installation whose restore drill has already regressed -- e.g. wiring the console
+// runtime `password` into PGPASSWORD -- is not treated as dedicated.
+function captureBackupBoundary() {
+  const cronJob = readOptionalBackboneResource('cronjob', BACKUP_CRONJOB_RESOURCE);
+  const configMap = readOptionalBackboneResource('configmap', BACKUP_SCRIPTS_CONFIGMAP_RESOURCE);
+  const restoreDrill = readOptionalBackboneResource('cronjob', RESTORE_DRILL_CRONJOB_RESOURCE);
+  return { dedicated: backupBoundaryFullyDedicated({ cronJob, configMap, restoreDrill }), cronJob, configMap, restoreDrill };
+}
+
+// Monotonic security-boundary compatibility: if the installation already had the
+// dedicated backup boundary and the just-applied release would regress either half
+// of it (its own backbone-postgres-backup still authenticates as the console
+// runtime role, OR its backbone-postgres-backup-scripts still runs
+// `pg_dump -U console`), re-apply the preserved ConfigMap and both CronJobs as an
+// annotated compatibility overlay, digest-pinned to the applied release's
+// cbsPostgresql image. This keeps the rolled-back installation's scheduled backup
+// authenticating as opensphere_backup so it can still read the forward `oaa` schema,
+// and keeps the restore drill on its credential boundary -- rebuilding an ephemeral
+// database with the sealed bootstrap operator alone and never re-exposing the console
+// runtime `password` (or the backup read credential) to the restore job -- without
+// re-granting console broad access or deleting forward data. The scripts ConfigMap is overlaid first so both CronJobs mount the
+// dedicated backup.sh. A no-op when nothing regresses.
+function reassertBackupBoundary(boundary, lock, release) {
+  if (!boundary?.dedicated || releaseProvidesDedicatedBackupBoundary(release)) {
+    return { overlaid: false, resources: [] };
+  }
+  const postgresImage = lock.components.cbsPostgresql.image;
+  const overlays = buildCompatibilityOverlaySet(boundary, lock, postgresImage);
+  for (const overlay of overlays) applyYaml(`${JSON.stringify(overlay)}\n`);
+  return { overlaid: overlays.length > 0, resources: overlays.map((overlay) => `${overlay.kind}/${overlay.metadata.name}`) };
+}
+
 function waitForBackboneBoundaryReconcile(lock) {
   const selector = `opensphere.io/boundary-reconcile=true,opensphere.io/release-revision=${lock.sourceRevision}`;
   const deadline = Date.now() + 10 * 60 * 1000;
@@ -1191,6 +1285,8 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     prepareUpgradePrerequisites,
     restartBackboneTrustConsumers,
     reconcileRollbackStatefulSets,
+    captureBackupBoundary,
+    reassertBackupBoundary,
     waitForCoreRollouts,
     waitForBackboneBoundaryReconcile,
     runBackboneRecoveryDrill,
@@ -1244,12 +1340,21 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
 
   let prerequisites;
   let backupTarget;
+  // Snapshot the live scheduled-backup boundary before any release apply so it can
+  // be preserved across both the target apply and, if verification fails, the
+  // rollback apply.
+  const backupBoundary = operations.captureBackupBoundary();
   try {
     prerequisites = await operations.prepareUpgradePrerequisites(effectiveConsoleUrl);
     if (prerequisites.changed) console.log('[준비] 기존 설치에 RustFS TLS와 CA trust bundle 추가');
     backupTarget = operations.prepareBackupTarget(targetLock.channel, requestedBackupTarget);
     console.log(`[준비] 감사 백업 대상 확인 (${backupTarget.mode})`);
     operations.applyRelease(targetRelease, '업그레이드');
+    // Reassert the dedicated backup boundary before the recovery drill runs: a
+    // downgrade target whose backbone-postgres-backup regresses to `pg_dump -U
+    // console` would otherwise fail on the forward `oaa` schema.
+    const overlay = operations.reassertBackupBoundary(backupBoundary, targetLock, targetRelease);
+    if (overlay.overlaid) console.log(`[준비] 전용 백업 경계 호환성 overlay 적용 (${overlay.resources.join(', ')})`);
     console.log('[대기] PostgreSQL audit ownership boundary reconcile');
     operations.waitForBackboneBoundaryReconcile(targetLock);
     if (prerequisites.changed) operations.restartBackboneTrustConsumers();
@@ -1270,6 +1375,10 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
     try {
       operations.applyRelease(rollbackRelease, '롤백');
+      // Preserve the dedicated backup boundary on the rollback target too: if the
+      // previous release's own backbone-postgres-backup would regress it, keep the
+      // installation authenticating as opensphere_backup.
+      operations.reassertBackupBoundary(backupBoundary, previousLock, rollbackRelease);
       operations.pruneReleaseResources(targetInventory, rollbackInventory);
       operations.recordInstallationState(previousLock, effectiveStorageClass, initialAdmin, effectiveConsoleUrl, effectiveAuthEnvironment, storedConfig.shellTlsSecret);
       operations.reconcileRollbackStatefulSets();

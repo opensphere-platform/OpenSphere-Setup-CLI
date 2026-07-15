@@ -63,6 +63,14 @@ function runtime(previous, events, { failTarget = false } = {}) {
     },
     restartBackboneTrustConsumers: () => events.push('restart-backbone-trust-consumers'),
     reconcileRollbackStatefulSets: () => events.push('reconcile-rollback-statefulsets'),
+    captureBackupBoundary: () => {
+      events.push('capture-backup-boundary');
+      return { dedicated: true };
+    },
+    reassertBackupBoundary: (boundary, lock) => {
+      events.push(`reassert-backup-boundary:${lock.sourceRevision}`);
+      return { overlaid: false, resources: [] };
+    },
     waitForCoreRollouts: () => events.push('wait'),
     waitForBackboneBoundaryReconcile: () => events.push('boundary-reconcile'),
     runBackboneRecoveryDrill: () => events.push('recovery-drill'),
@@ -87,9 +95,11 @@ test('upgrade prefetches both releases before applying and verifies the target',
     `materialize:${previous.sourceRevision}`,
     `inventory:${target.sourceRevision}`,
     `inventory:${previous.sourceRevision}`,
+    'capture-backup-boundary',
     'prepare-prerequisites',
     'prepare-backup-target',
     `apply:업그레이드:${target.sourceRevision}`,
+    `reassert-backup-boundary:${target.sourceRevision}`,
     'boundary-reconcile',
     'restart-backbone-trust-consumers',
     `record:${target.sourceRevision}`,
@@ -110,8 +120,9 @@ test('failed target verification restores and verifies the previous release', as
     upgrade(previous, target, { runtime: runtime(previous, events, { failTarget: true }) }),
     /previous release was restored: target is unhealthy/
   );
-  assert.deepEqual(events.slice(-9), [
+  assert.deepEqual(events.slice(-10), [
     `apply:롤백:${previous.sourceRevision}`,
+    `reassert-backup-boundary:${previous.sourceRevision}`,
     `prune:release-${target.sourceRevision}->release-${previous.sourceRevision}`,
     `record:${previous.sourceRevision}`,
     'reconcile-rollback-statefulsets',
@@ -121,6 +132,43 @@ test('failed target verification restores and verifies the previous release', as
     'restore-prerequisites',
     'restore-backup-target'
   ]);
+});
+
+test('a downgrade reasserts the once-captured dedicated backup boundary on both the target apply and the rollback, pinned to each release', async () => {
+  const previous = lock('1'.repeat(40), 'a');
+  const target = lock('2'.repeat(40), 'b');
+  const events = [];
+  const seen = [];
+  const base = runtime(previous, events, { failTarget: true });
+  const captured = { dedicated: true, marker: 'live-installation' };
+  base.captureBackupBoundary = () => { events.push('capture-backup-boundary'); return captured; };
+  base.reassertBackupBoundary = (boundary, appliedLock, release) => {
+    seen.push({ dedicated: boundary.dedicated, sameCapture: boundary === captured, lock: appliedLock.sourceRevision, release: release[0].yaml });
+    return { overlaid: true, resources: [
+      'ConfigMap/backbone-postgres-backup-scripts',
+      'CronJob/backbone-postgres-backup',
+      'CronJob/backbone-postgres-restore-drill'
+    ] };
+  };
+  await assert.rejects(upgrade(previous, target, { runtime: base }));
+  // Captured exactly once (before any apply), then reasserted on the target apply
+  // and again on the rollback apply -- each pinned to the release actually applied.
+  assert.equal(events.filter((event) => event === 'capture-backup-boundary').length, 1);
+  assert.equal(seen.length, 2);
+  assert.deepEqual(seen[0], { dedicated: true, sameCapture: true, lock: target.sourceRevision, release: target.sourceRevision });
+  assert.deepEqual(seen[1], { dedicated: true, sameCapture: true, lock: previous.sourceRevision, release: previous.sourceRevision });
+});
+
+test('the dedicated backup boundary is reasserted after the target apply but before the recovery drill', async () => {
+  const previous = lock('1'.repeat(40), 'a');
+  const target = lock('2'.repeat(40), 'b');
+  const events = [];
+  await upgrade(previous, target, { runtime: runtime(previous, events) });
+  const apply = events.indexOf(`apply:업그레이드:${target.sourceRevision}`);
+  const reassert = events.indexOf(`reassert-backup-boundary:${target.sourceRevision}`);
+  const drill = events.indexOf('recovery-drill');
+  assert.ok(apply < reassert && reassert < drill,
+    'the console→console downgrade must reassert the opensphere_backup boundary before pg_dump runs in the drill');
 });
 
 test('upgrade never calls an OAA staging-removal operation on the target apply or rollback path', async () => {

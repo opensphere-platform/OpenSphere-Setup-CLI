@@ -6,6 +6,14 @@ import { kubectl } from './process.mjs';
 import { BASE_RUNTIME_COMPONENTS, validateLock } from './release.mjs';
 import { normalizeConsoleUrl, oidcIssuer } from './console-url.mjs';
 import { assertReleaseBackupTarget, inspectBackupTarget } from './backup-target.mjs';
+import {
+  BACKUP_CRONJOB_RESOURCE,
+  BACKUP_SCRIPTS_CONFIGMAP_RESOURCE,
+  RESTORE_DRILL_CRONJOB_RESOURCE,
+  backupCronJobUsesDedicatedRole,
+  backupScriptUsesDedicatedRole,
+  restoreDrillPreservesCredentialBoundary
+} from './backup-boundary.mjs';
 
 const NAMESPACES = [
   'opensphere-console-auth',
@@ -206,10 +214,35 @@ export function verifyRequiredServiceEndpoints(services, endpointSlices) {
 }
 
 function verifyRecovery({ requireRecoveryDrill = false } = {}) {
-  const backup = getJson(['-n', 'opensphere-backbone', 'get', 'cronjob', 'backbone-postgres-backup']);
-  const drill = getJson(['-n', 'opensphere-backbone', 'get', 'cronjob', 'backbone-postgres-restore-drill']);
+  const backup = getJson(['-n', 'opensphere-backbone', 'get', 'cronjob', BACKUP_CRONJOB_RESOURCE]);
+  const backupScripts = getJson(['-n', 'opensphere-backbone', 'get', 'configmap', BACKUP_SCRIPTS_CONFIGMAP_RESOURCE]);
+  const drill = getJson(['-n', 'opensphere-backbone', 'get', 'cronjob', RESTORE_DRILL_CRONJOB_RESOURCE]);
   if (backup.spec?.suspend === true || backup.spec?.concurrencyPolicy !== 'Forbid') {
     throw new Error('PostgreSQL audit backup CronJob is not safely configured');
+  }
+  // This Setup version has established the dedicated opensphere_backup boundary
+  // (verifySecrets already requires backbone-postgres/backup_password). Fail closed
+  // if the scheduled backup would authenticate as the constrained Console runtime
+  // role instead: a regressed `pg_dump -U console` cannot read the forward `oaa`
+  // schema, and re-granting console that access would breach the audit boundary.
+  // The boundary is a resource set -- both the CronJob credential reference and the
+  // ConfigMap pg_dump script user must be dedicated, and either half regressing
+  // fails closed.
+  if (!backupCronJobUsesDedicatedRole(backup)) {
+    throw new Error('PostgreSQL audit backup CronJob does not authenticate as the dedicated opensphere_backup role (backup_password)');
+  }
+  if (!backupScriptUsesDedicatedRole(backupScripts)) {
+    throw new Error('PostgreSQL audit backup script does not run pg_dump as the dedicated opensphere_backup role (found -U console or missing -U opensphere_backup)');
+  }
+  // The suspended restore drill does not authenticate as opensphere_backup: it only
+  // rebuilds an ephemeral restore database using the sealed bootstrap operator
+  // (POSTGRES_PASSWORD=bootstrap_password, consumed inline as PGPASSWORD by the
+  // restore-drill.sh script). It must therefore expose NO Console/backup read
+  // credential -- PGPASSWORD must not be wired as a backbone-postgres credential
+  // (neither backup_password nor the console runtime `password`), and no other
+  // backbone-postgres env ref may fall back to `password`.
+  if (!restoreDrillPreservesCredentialBoundary(drill)) {
+    throw new Error('PostgreSQL restore drill CronJob does not preserve the credential boundary (must bind POSTGRES_PASSWORD=bootstrap_password and expose no backup/console read credential via PGPASSWORD)');
   }
   if (drill.spec?.suspend !== true) throw new Error('PostgreSQL restore drill CronJob must remain suspended');
   const jobs = getJson(['-n', 'opensphere-backbone', 'get', 'jobs', '-l', 'opensphere.io/recovery=audit']).items || [];
