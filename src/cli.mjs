@@ -7,7 +7,7 @@ import { installConsoleCliFromCluster } from './cluster-cli-install.mjs';
 import { resolveChannel, validateChannel, validateLock } from './release.mjs';
 import { assertKubectl, kubectl } from './process.mjs';
 import { verifyInstallation } from './verify.mjs';
-import { normalizeConsoleUrl } from './console-url.mjs';
+import { defaultConsoleUrl, normalizeConsoleUrl } from './console-url.mjs';
 import { selectAuthEnvironment } from './auth-environment.mjs';
 import { assertReleaseShellTlsReference, parseShellTlsSecretRef } from './shell-tls.mjs';
 import { preflightPromotion } from './promotion-preflight.mjs';
@@ -62,7 +62,7 @@ Usage:
   opensphere-setup bootstrap -r <channel> [--lock <verified-lock-file>]
       [--context <kube-context>] [--admin-username <name>]
        [--admin-display-name <name>] [--admin-email <email>]
-       [--storage-class <name>] [--console <https-origin>]
+       [--storage-class <name>] [--console <https-origin|loopback-http-origin>]
        [--auth-environment <development|production>] [--backup-target-secret <namespace/name>]
        [--shell-tls-secret <namespace/name>]
        [--no-open-browser] [--add-to-path]
@@ -194,7 +194,7 @@ async function main() {
       initialAdmin,
       requireZeroRestarts: hasOption('--require-zero-restarts') || (!installed && !hasOption('--allow-restarts')),
       storageClass: option('--storage-class', undefined),
-      consoleUrl: suppliedConsoleUrl ?? 'https://localhost:8090',
+      consoleUrl: suppliedConsoleUrl ?? defaultConsoleUrl(channel, selectedAuthEnvironment),
       authEnvironment: selectedAuthEnvironment,
       backupTargetSecret: hasOption('--backup-target-secret') ? option('--backup-target-secret', '') : undefined,
       shellTlsSecret: requestedShellTlsSecret,

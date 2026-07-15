@@ -59,4 +59,9 @@ test('promotion preflight rejects in-cluster backup endpoints and non-promotion 
   };
   assert.throws(() => preflightPromotion({ ...options, channel: 'candidate' }), /external S3-compatible/);
   assert.throws(() => preflightPromotion({ ...options, channel: 'edge' }), /only available for candidate or stable/);
+  assert.throws(() => preflightPromotion({
+    ...options,
+    channel: 'candidate',
+    consoleUrl: 'http://localhost:8090'
+  }), /requires --console <https-origin>/);
 });

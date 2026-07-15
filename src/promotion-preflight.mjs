@@ -1,4 +1,5 @@
 import { selectAuthEnvironment } from './auth-environment.mjs';
+import { normalizeConsoleUrl } from './console-url.mjs';
 import { assertReleaseBackupTarget, inspectBackupTarget, parseBackupTargetSecretRef } from './backup-target.mjs';
 import { preflight } from './preflight.mjs';
 import {
@@ -29,6 +30,9 @@ export function preflightPromotion({
     throw new Error('promotion preflight is only available for candidate or stable');
   }
   if (!consoleUrl) throw new Error('promotion preflight requires --console <https-origin>');
+  if (new URL(normalizeConsoleUrl(consoleUrl)).protocol !== 'https:') {
+    throw new Error('promotion preflight requires --console <https-origin>');
+  }
   if (typeof readSecret !== 'function') throw new Error('promotion preflight requires a Secret reader');
 
   const backupReference = parseBackupTargetSecretRef(backupTargetSecret);

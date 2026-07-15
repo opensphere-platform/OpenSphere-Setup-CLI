@@ -49,7 +49,7 @@ test('long and short release options cannot conflict', () => {
   assert.match(result.stderr, /--release\/-r may only be specified once/);
 });
 
-test('Console endpoint must be an exact HTTPS origin before any bootstrap action', () => {
+test('Console endpoint rejects remote HTTP before any bootstrap action', () => {
   const result = spawnSync(process.execPath, [CLI, 'bootstrap', '--console', 'http://insecure.example.test'], {
     encoding: 'utf8',
     cwd: ROOT,

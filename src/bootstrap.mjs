@@ -11,7 +11,7 @@ import { preflight } from './preflight.mjs';
 import { fetchWithRetry } from './http.mjs';
 import { migrateLegacyReleaseLock, validateLock, verifyReleaseProvenance } from './release.mjs';
 import { verifyInstallation } from './verify.mjs';
-import { normalizeConsoleUrl } from './console-url.mjs';
+import { configureShellServiceEndpoint, defaultConsoleUrl, normalizeConsoleUrl } from './console-url.mjs';
 import { assertReleaseBackupTarget, backupTargetData, inspectBackupTarget, parseBackupTargetSecretRef } from './backup-target.mjs';
 import { selectAuthEnvironment } from './auth-environment.mjs';
 import {
@@ -450,7 +450,9 @@ async function fetchManifest(lock, spec, storageClass, consoleUrl = 'https://loc
     yaml = yaml.replace(new RegExp(pattern, 'g'), image);
   }
   yaml = yaml.replace(/storageClassName:\s*standard/g, `storageClassName: ${storageClass}`);
-  yaml = yaml.replaceAll('__OPENSPHERE_CONSOLE_URL__', normalizeConsoleUrl(consoleUrl));
+  const normalizedConsoleUrl = normalizeConsoleUrl(consoleUrl);
+  yaml = yaml.replaceAll('__OPENSPHERE_CONSOLE_URL__', normalizedConsoleUrl);
+  yaml = configureShellServiceEndpoint(yaml, normalizedConsoleUrl);
   yaml = yaml.replaceAll('__OPENSPHERE_RELEASE_REVISION__', lock.sourceRevision);
   yaml = yaml.replaceAll('name: AUTH_ENVIRONMENT, value: "development"', `name: AUTH_ENVIRONMENT, value: "${validateAuthEnvironment(authEnvironment)}"`);
   if (yaml.includes('__OPENSPHERE_CONSOLE_URL__') || yaml.includes('__OPENSPHERE_RELEASE_REVISION__')) {
@@ -1145,7 +1147,7 @@ export async function bootstrap(lock, {
   },
   requireZeroRestarts = true,
   storageClass,
-  consoleUrl = 'https://localhost:8090',
+  consoleUrl,
   openOnboarding = true,
   requireRecoveryDrill = true,
   authEnvironment,
@@ -1153,8 +1155,10 @@ export async function bootstrap(lock, {
   shellTlsSecret,
 } = {}) {
   validateLock(lock);
-  const requestedConsoleUrl = normalizeConsoleUrl(consoleUrl);
   const requestedAuthEnvironment = selectAuthEnvironment(lock.channel, authEnvironment);
+  const requestedConsoleUrl = normalizeConsoleUrl(
+    consoleUrl ?? defaultConsoleUrl(lock.channel, requestedAuthEnvironment)
+  );
   const installed = readInstallationLock();
   const existingNamespaces = existingOpenSphereNamespaces();
   if (installed && installed.releaseDigest !== lock.releaseDigest) {
