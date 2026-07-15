@@ -1,10 +1,10 @@
 # OpenSphere Setup 릴리스 배포 및 버전 선택 구현 계획
 
-> **Status**: Implementation specification  
-> **Version**: 1.0.0  
-> **Date**: 2026-07-12  
-> **Applies to**: `opensphere-setup` online/offline bootstrap  
-> **Parent authority**: `_DOCS_/01-CONSTITUTION/CONSTITUTION-0005-OCI-IMAGE-CHANNEL-PROMOTION-INSTALLATION-POLICY.md`  
+> **Status**: Implementation specification
+> **Version**: 1.1.0
+> **Date**: 2026-07-15
+> **Applies to**: `opensphere-setup` online/offline bootstrap
+> **Parent authority**: `_DOCS_/01-CONSTITUTION/CONSTITUTION-0005-OCI-IMAGE-CHANNEL-PROMOTION-INSTALLATION-POLICY.md`
 > **Parent specification**: `OpenSphere-Setup-CLI/README.md`
 
 ---
@@ -76,9 +76,14 @@ Setup은 설치 직전에 통합 버전, 다운로드 크기, registry, 필수 �
 - Kanidm과 `opensphere-auth` 인증 기반
 - Console backend와 필수 controller
 - Console Backbone Service Stack(CBS): PostgreSQL, RustFS, Gitea
+- OAA Gateway — Console/Main Shell이 소유하는 CBS consumer 이미지. CBS 세 기둥이 Ready가 된 뒤 Main Shell bootstrap 중에 설치하며, 네 번째 CBS pillar, subShell 또는 PFS AI substrate가 아니다.
 - Main Shell 진입과 관리에 필요한 최소 gateway/RBAC/configuration
 
-subShell, plugin, Foundation Service Stack과 Base Service Stack workload는 초기 이미지 집합에 포함하지 않는다. Main Shell Ready 이후 Console Catalog에서 별도 버전 계약으로 설치한다.
+Manual은 별도 image를 추가하지 않는다. Manual은 `opensphere-console` 이미지에 컴파일되어 포함되며, UIPluginPackage, Consumer, 별도 Pod/Service/ServiceAccount/RBAC bundle 또는 Registry entry로 존재하지 않는다.
+
+domain subShell, plugin과 PFS(Platform Foundation Service Stack) workload는 초기 이미지 집합에 포함하지 않는다. domain subShell/plugin은 Main Shell Ready 이후 Console Catalog에서 별도 버전 계약으로 설치하며, PFS는 `CONSTITUTION-0004`가 정의하는 별도 Platform Support Profile/PFS Establishment 절차로 구성한다. OAA Gateway는 이 domain subShell 제외 규칙의 예외이며 Main Shell 필수 구성에 속한다.
+
+OAA와 Manual은 external/domain subShell 설치보다 먼저 사용 가능하며, native 진입점은 `/manual`, global OAA assistant, `/manage/oaa`이다. 외부 LLM provider/key는 선택 사항이다: key가 없거나 검증에 실패해도 OAA chat만 Degraded로 표시되고, Console 로그인·관리 기능과 Manual은 계속 제공된다. Cluster Manager Activated와 HIS Preflight Ready 이전 구간에서 OAA는 Manual/help/search와 명시적으로 안전한 read-only Console 조회 기능만 허용하며, Kubernetes mutation/action tool은 노출하지 않는다.
 
 ### 결정 6 — stable 채널의 CBS PostgreSQL major version은 19다
 
@@ -264,6 +269,10 @@ spec:
       source: opensphere-console
       image: registry.opensphere.example/platform/dupa-registry-controller@sha256:<digest>
       sbomDigest: sha256:<digest>
+    oaaGateway:
+      source: opensphere-console
+      image: registry.opensphere.example/platform/opensphere-console-oaa-gateway@sha256:<digest>
+      sbomDigest: sha256:<digest>
     backbonePostgresql:
       source: curated/postgresql
       productVersion: 19beta1
@@ -304,8 +313,10 @@ spec:
 - manifest archive digest 존재
 - 각 image의 SBOM과 provenance 연결
 - Keycloak 등 폐기된 identity stack이 초기 manifest에 포함되지 않음
-- subShell/plugin workload가 initial baseline에 포함되지 않음
+- `oaaGateway`를 제외한 domain subShell/plugin workload가 initial baseline에 포함되지 않음
+- `oaaGateway` component가 존재하고 digest-pinned image이며 SBOM/provenance가 연결됨
 - `stable` BOM의 `backbonePostgresql.majorVersion`이 `19`이고 PostgreSQL 18 이하로 fallback하지 않음
+- `backbonePostgresql`이 pgvector 확장을 제공함(OAA/Manual 벡터 검색이 의존)
 
 ---
 
@@ -674,6 +685,10 @@ Setup binary에는 승인된 release signing trust root와 key ID를 포함한�
 - [ ] 폐기·철회된 release 설치가 차단된다.
 - [ ] online과 offline 결과가 같은 BOM으로 재현된다.
 - [ ] Kanidm과 `opensphere-auth`가 필수 이미지로 설치된다.
+- [ ] OAA Gateway가 CBS Ready 이후 Main Shell bootstrap 중 base runtime component로 설치되며, 별도 subShell 승인 절차를 요구하지 않는다.
+- [ ] Manual이 별도 image 없이 `opensphere-console` 이미지에 포함되어 설치된다.
+- [ ] 외부 LLM key가 없거나 검증에 실패해도 OAA chat만 Degraded로 표시되고 Console 로그인·관리와 Manual은 정상 동작한다.
+- [ ] Cluster Manager Activated/HIS Preflight Ready 이전에는 OAA가 Manual/help/search와 안전한 read-only Console 기능만 제공하고 Kubernetes mutation/action tool을 노출하지 않는다.
 - [ ] `stable` 채널이 PostgreSQL 19 image만 사용하며 이전 major version으로 fallback하지 않는다.
 - [ ] 신규 Setup이 빈 PostgreSQL 19 data directory로 시작한다.
 - [ ] 기존 CBS를 발견한 Setup이 실행 중인 PostgreSQL을 변경하지 않는다.

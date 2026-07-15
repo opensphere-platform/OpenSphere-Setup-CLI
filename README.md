@@ -2,8 +2,8 @@
 
 > **Status**: Channel-aware bootstrap 0.3 implementation and clean-cluster E2E
 > **Version**: 0.3.0-edge.1
-> **Date**: 2026-07-12  
-> **Scope**: 기존 Kubernetes 환경에 OpenSphere Console을 최초 기동하는 독립 실행형 Setup CLI와 공통 bootstrap engine  
+> **Date**: 2026-07-15
+> **Scope**: 기존 Kubernetes 환경에 OpenSphere Console을 최초 기동하는 독립 실행형 Setup CLI와 공통 bootstrap engine
 > **Target users**: Kubernetes 전문 지식이 없는 설치 담당자와 자동화 운영자
 
 관련 구현 계약:
@@ -22,7 +22,7 @@ opensphere-setup.cmd upgrade --release edge
 
 `os`는 검증된 사용자 설치 경로에 놓이지만, Setup은 사용자의 `PATH`를 자동 변경하지 않는다. 새 터미널에서 명령으로 등록하려면 명시적으로 `--add-to-path`를 지정한다. `--no-open-browser` bootstrap은 one-time Wizard URL을 stdout에 남기지 않고 사용자 전용 URL 파일에 기록한다. 필요하면 `--onboarding-url-file <path>`로 위치를 지정한다.
 
-`opensphere-console-oaa-gateway` 이미지는 승인된 AI subShell이 소비할 수 있도록 release lock에서 서명·SBOM 검증한다. 그러나 **기본 Main Shell에는 배포하지 않는다**. OAA gateway의 설치와 제거는 Console Extensions의 승인된 subShell lifecycle이 소유한다.
+`opensphere-console-oaa-gateway` 이미지는 base runtime component 중 하나이며, CBS 세 기둥이 Ready가 된 뒤 Main Shell bootstrap 중에 설치한다. OAA Gateway는 보안·격리를 위한 별도 server-side workload이지만, 제품 소유권과 lifecycle은 Console/Main Shell native다. OAA Gateway는 CBS consumer이며 네 번째 CBS pillar, subShell 또는 PFS AI substrate가 아니다. clean bootstrap, upgrade와 uninstall이 OAA Gateway lifecycle을 소유하며, 정상 설치는 별도 post-install patch를 요구하지 않는다. Manual은 별도 image를 추가하지 않는다. Manual은 `opensphere-console` 이미지에 컴파일되어 포함되며 UIPluginPackage, Consumer, 별도 Pod/Service/ServiceAccount/RBAC bundle 또는 Registry entry로 존재하지 않는다. Manual과 OAA는 external/domain subShell 설치보다 먼저 사용 가능하며, native surface는 `/manual`, global OAA assistant, `/manage/oaa`이다. 외부 LLM provider/key는 선택 사항이다: key가 없거나 검증에 실패해도 OAA chat만 Degraded로 표시하고, Console 로그인·관리 기능과 Manual은 정상 제공한다. Cluster Manager Activated와 HIS Preflight Ready 이전 구간에서 OAA는 Manual/help/search와 명시적으로 안전한 read-only Console 기능만 허용하며, Kubernetes mutation/action tool은 제공하지 않는다.
 
 관리된 설치를 완전히 제거해야 할 때만 다음 명령을 사용한다. 이는 Console·CBS namespace와 해당 PVC/PV, OpenSphere CRD를 삭제하는 **데이터 파기** 작업이다. installation lock이 없는 namespace는 삭제하지 않으며, 외부 CA·S3 backup Secret은 사용자 소유 namespace에 남긴다.
 
@@ -755,7 +755,7 @@ Go를 기본 구현 언어로 권장한다.
 
 현재 개발용 `bring-up.sh`, `install-backbone`류 스크립트는 이 제품의 사용자 설치 interface가 아니다. 향후에는 내부 개발·진단 도구로만 유지하거나 Setup engine의 테스트 fixture로 격하한다.
 
-`CONSTITUTION-0004` v1.2.0은 초기 Console 기동과 HIS Preflight를 분리한다. Setup은 전체 HIS를 선행 검사하지 않고 Bootstrap Console과 CBS/Main Shell을 먼저 세운다. 첫 operational subShell인 Cluster Manager가 활성화된 뒤 그 live 진단 경로로 HIS를 검증한다.
+`CONSTITUTION-0004` v1.3.0은 초기 Console 기동과 HIS Preflight를 분리한다. Setup은 전체 HIS를 선행 검사하지 않고 Bootstrap Console과 CBS/Main Shell을 먼저 세운다. 첫 operational subShell인 Cluster Manager가 활성화된 뒤 그 live 진단 경로로 HIS를 검증한다.
 
 ```text
 Console Bootstrap Available

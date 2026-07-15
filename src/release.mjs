@@ -41,14 +41,16 @@ export const COMPONENTS = Object.freeze({
   cbsGitea: 'opensphere-cbs-gitea'
 });
 
-// The OAA image is a governed, attested package because an approved AI
-// subShell may use it later. It is intentionally not part of a fresh Main
-// Shell runtime: Console bootstrap must not pre-install a subShell service.
+// Per CONSTITUTION-0004 v1.3.0, OAA Core is Main Shell native required
+// runtime, not an optional AI subShell staging package. It is part of the
+// base Console runtime lifecycle (clean bootstrap, upgrade, rollback,
+// uninstall) alongside every other governed component.
 export const BASE_RUNTIME_COMPONENTS = Object.freeze([
   'console',
   'auth',
   'backend',
   'dupaController',
+  'oaaGateway',
   'kanidm',
   'cbsPostgresql',
   'cbsRustfs',

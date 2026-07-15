@@ -59,11 +59,11 @@ test('canonical baseline contains the promised nine repositories', () => {
   ]);
 });
 
-test('base runtime excludes the optional OAA gateway package', () => {
+test('base runtime requires OAA Core as native Main Shell runtime', () => {
   assert.deepEqual(BASE_RUNTIME_COMPONENTS, [
-    'console', 'auth', 'backend', 'dupaController', 'kanidm', 'cbsPostgresql', 'cbsRustfs', 'cbsGitea'
+    'console', 'auth', 'backend', 'dupaController', 'oaaGateway', 'kanidm', 'cbsPostgresql', 'cbsRustfs', 'cbsGitea'
   ]);
-  assert.equal(BASE_RUNTIME_COMPONENTS.includes('oaaGateway'), false);
+  assert.equal(BASE_RUNTIME_COMPONENTS.includes('oaaGateway'), true);
 });
 
 test('release baseline requires native manifests for every supported Linux platform', () => {

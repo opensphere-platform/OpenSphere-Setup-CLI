@@ -49,13 +49,11 @@ export const MANAGED_CLUSTER_RBAC = Object.freeze([
   'clusterrolebinding/dupa-module-profile-installer',
   'clusterrolebinding/opensphere-console-backend',
   'clusterrolebinding/opensphere-console-oaa-gateway-environment-reader',
-  'clusterrolebinding/opensphere-console-oaa-gateway-controlled-operator',
   'clusterrole/dupa-backbone-installer',
   'clusterrole/opensphere-module-cluster-observer-v1',
   'clusterrole/dupa-module-profile-installer',
   'clusterrole/opensphere-console-backend',
-  'clusterrole/opensphere-console-oaa-gateway-environment-reader',
-  'clusterrole/opensphere-console-oaa-gateway-controlled-operator'
+  'clusterrole/opensphere-console-oaa-gateway-environment-reader'
 ]);
 
 export const BASE_MANIFESTS = Object.freeze([
@@ -64,6 +62,9 @@ export const BASE_MANIFESTS = Object.freeze([
     ['opensphere-backbone-postgres@sha256:[a-f0-9]+', 'cbsPostgresql'],
     ['opensphere-backbone-rustfs@sha256:[a-f0-9]+', 'cbsRustfs'],
     ['opensphere-backbone-gitea@sha256:[a-f0-9]+', 'cbsGitea']
+  ] },
+  { path: 'backend/backbone/console-services.yaml', replacements: [
+    ['ghcr\\.io/opensphere-platform/opensphere-console-oaa-gateway@sha256:[^\\s]+', 'oaaGateway']
   ] },
   { path: 'backend/dupa-control/backboneclaim-crd.yaml' },
   { path: 'backend/dupa-control/ui-plugin-crds.yaml' },
@@ -79,6 +80,7 @@ const CORE_ROLLOUTS = [
   ['opensphere-backbone', 'deployment/backbone-postgres', '600s'],
   ['opensphere-backbone', 'statefulset/backbone-rustfs', '600s'],
   ['opensphere-backbone', 'deployment/backbone-gitea', '900s'],
+  ['opensphere-backbone', 'deployment/opensphere-console-oaa-gateway', '600s'],
   ['opensphere-console', 'deployment/opensphere-console-auth', '600s'],
   ['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s'],
   ['opensphere-console', 'deployment/opensphere-console-backend', '600s'],
@@ -280,6 +282,31 @@ function appendCertificateAuthority(namespace, name, caPath) {
   return true;
 }
 
+// The OAA gateway Deployment in opensphere-backbone mounts opensphere-backbone/
+// opensphere-console-auth-ca as its trust anchor (console-services.yaml), but
+// Setup has historically only maintained the Console-namespace copy. Mirror
+// only the public ca.crt -- never a private key or leaf certificate -- via
+// Kubernetes JSON on stdin so the trust anchor is never observable on argv or
+// in a captured command log. Unrelated keys already present on the target
+// Secret are preserved; only ca.crt is added or updated.
+function mirrorConsoleAuthCaToBackbone() {
+  const source = readSecret('opensphere-console', 'opensphere-console-auth-ca');
+  const sourceCa = source.data?.['ca.crt'];
+  if (!sourceCa) throw new Error('opensphere-console/opensphere-console-auth-ca has no ca.crt to mirror');
+  let existing = null;
+  try {
+    existing = readSecret('opensphere-backbone', 'opensphere-console-auth-ca');
+  } catch {}
+  if (existing?.data?.['ca.crt'] === sourceCa) return false;
+  applyYaml(`${JSON.stringify({
+    apiVersion: 'v1', kind: 'Secret',
+    metadata: { name: 'opensphere-console-auth-ca', namespace: 'opensphere-backbone' },
+    type: existing?.type || 'Opaque',
+    data: { ...(existing?.data || {}), 'ca.crt': sourceCa }
+  })}\n`);
+  return true;
+}
+
 // A legacy installation may lack CBS TLS leaves. Add only the required new
 // leaves and append their CA to the existing PostgreSQL trust bundle, without
 // replacing the current PostgreSQL/Kanidm trust root before target verification.
@@ -289,9 +316,14 @@ async function prepareUpgradePrerequisites(consoleUrl) {
     readSecretSnapshot('opensphere-backbone', 'backbone-postgres'),
     readSecretSnapshot('opensphere-backbone', 'backbone-postgres-tls'),
     readSecretSnapshot('opensphere-backbone', 'backbone-rustfs-tls'),
-    readSecretSnapshot('opensphere-console', 'opensphere-console-auth-ca')
+    readSecretSnapshot('opensphere-console', 'opensphere-console-auth-ca'),
+    readSecretSnapshot('opensphere-backbone', 'opensphere-console-auth-ca')
   ];
   let changed = setSecretLiteral('opensphere-backbone', 'backbone-rustfs', 'endpoint', RUSTFS_ENDPOINT);
+  // Mirror the OAA gateway's CA trust anchor unconditionally: an installation
+  // that predates the Backbone-namespace mount must not stay unschedulable
+  // just because its existing CBS TLS leaves need no migration.
+  if (mirrorConsoleAuthCaToBackbone()) changed = true;
   const needsPostgresTls = tlsSecretNeedsDnsName('opensphere-backbone', 'backbone-postgres-tls', 'backbone-postgres.opensphere-backbone.svc.cluster.local');
   const needsRustfsTls = tlsSecretNeedsDnsName('opensphere-backbone', 'backbone-rustfs-tls', RUSTFS_DNS_NAME);
   if (!needsPostgresTls && !needsRustfsTls) {
@@ -333,13 +365,16 @@ function restartBackboneTrustConsumers() {
   // Secret volumes update asynchronously and Node TLS contexts are loaded at
   // process start. A retry after a partially-applied release must therefore
   // refresh the consumers rather than waiting forever on their old CA bundle.
-  for (const deployment of [
-    'opensphere-console-dupa-controller',
-    'opensphere-console-auth',
-    'opensphere-console-backend',
-    'opensphere-console'
+  // The OAA gateway consumer runs in opensphere-backbone, not
+  // opensphere-console; do not assume a single namespace for all consumers.
+  for (const [namespace, deployment] of [
+    ['opensphere-console', 'opensphere-console-dupa-controller'],
+    ['opensphere-console', 'opensphere-console-auth'],
+    ['opensphere-console', 'opensphere-console-backend'],
+    ['opensphere-console', 'opensphere-console'],
+    ['opensphere-backbone', 'opensphere-console-oaa-gateway']
   ]) {
-    kubectl(['-n', 'opensphere-console', 'rollout', 'restart', `deployment/${deployment}`]);
+    kubectl(['-n', namespace, 'rollout', 'restart', `deployment/${deployment}`]);
   }
 }
 
@@ -720,24 +755,6 @@ function deleteManagedClusterRbac(resource) {
   kubectl(['delete', resource, '--ignore-not-found', '--wait=true']);
 }
 
-// This image and its namespace resources appeared in a pre-approval staging
-// manifest. It must never remain after a base Console install or upgrade: AI
-// service lifecycle belongs to the signed Extension pipeline, not Setup.
-function removeOptionalOaaStaging() {
-  kubectl([
-    '-n', 'opensphere-backbone', 'delete',
-    'deployment/opensphere-console-oaa-gateway',
-    'service/opensphere-console-oaa-gateway',
-    'serviceaccount/opensphere-console-oaa-gateway',
-    'role/opensphere-console-oaa-gateway',
-    'rolebinding/opensphere-console-oaa-gateway',
-    '--ignore-not-found', '--wait=true'
-  ]);
-  for (const resource of MANAGED_CLUSTER_RBAC.filter((resource) => resource.includes('opensphere-console-oaa-gateway'))) {
-    deleteManagedClusterRbac(resource);
-  }
-}
-
 // Full removal is deliberately a data-destruction operation. A normal
 // bootstrap/upgrade must never infer this intent from a missing lock or a
 // changed channel. The command caller validates the explicit CLI confirmation
@@ -1003,6 +1020,11 @@ export async function bootstrap(lock, {
     else ensureTlsSecret('opensphere-console', 'shell-tls', cert, key);
     // The root is a real CA; TLS leaves are never treated as trust anchors.
     ensureGenericSecret('opensphere-console', 'opensphere-console-auth-ca', {}, { 'ca.crt': ca, 'tls.crt': cert });
+    // console-services.yaml mounts this Secret in opensphere-backbone for the
+    // OAA gateway's trust anchor. Only the public ca.crt is mirrored here --
+    // never the private key or leaf certificate -- and it must exist before
+    // BASE_MANIFESTS is applied or a clean bootstrap leaves OAA unschedulable.
+    ensureGenericSecret('opensphere-backbone', 'opensphere-console-auth-ca', {}, { 'ca.crt': ca });
     ensureGenericSecret('opensphere-console', 'opensphere-console-auth-sig', {}, { 'sig.key': sig });
     ensureGenericSecret('opensphere-backbone', 'backbone-postgres', {
       // `password` belongs to the constrained Console runtime role. PostgreSQL
@@ -1037,7 +1059,6 @@ export async function bootstrap(lock, {
       release.push({ path: spec.path, yaml });
       console.log(`[완료] ${spec.path}`);
     }
-    removeOptionalOaaStaging();
     console.log('[대기] Kanidm과 CBS rollout');
     kubectl(['-n', 'opensphere-console-auth', 'rollout', 'status', 'statefulset/kanidm', '--timeout=360s']);
     console.log('[대기] PostgreSQL audit ownership boundary reconcile');
@@ -1106,7 +1127,6 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     prepareBackupTarget,
     prepareUpgradePrerequisites,
     restartBackboneTrustConsumers,
-    removeOptionalOaaStaging,
     reconcileRollbackStatefulSets,
     waitForCoreRollouts,
     waitForBackboneBoundaryReconcile,
@@ -1167,7 +1187,6 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     backupTarget = operations.prepareBackupTarget(targetLock.channel, requestedBackupTarget);
     console.log(`[준비] 감사 백업 대상 확인 (${backupTarget.mode})`);
     operations.applyRelease(targetRelease, '업그레이드');
-    operations.removeOptionalOaaStaging();
     console.log('[대기] PostgreSQL audit ownership boundary reconcile');
     operations.waitForBackboneBoundaryReconcile(targetLock);
     if (prerequisites.changed) operations.restartBackboneTrustConsumers();
@@ -1188,7 +1207,6 @@ export async function upgrade(previousLock, targetLock, { storageClass, consoleU
     console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
     try {
       operations.applyRelease(rollbackRelease, '롤백');
-      operations.removeOptionalOaaStaging();
       operations.pruneReleaseResources(targetInventory, rollbackInventory);
       operations.recordInstallationState(previousLock, effectiveStorageClass, initialAdmin, effectiveConsoleUrl, effectiveAuthEnvironment, storedConfig.shellTlsSecret);
       operations.reconcileRollbackStatefulSets();
