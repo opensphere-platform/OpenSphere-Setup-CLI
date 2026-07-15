@@ -27,6 +27,7 @@ jobs:
         run: |
           Get-ChildItem src/*.mjs | ForEach-Object { node --check $_.FullName }
           node --check scripts/e2e-resolve-source-revision.mjs
+          node --check scripts/e2e-first-admin.mjs
           [void][scriptblock]::Create((Get-Content -Raw scripts/e2e-clean-install.ps1))
       # candidate/stable must remain unavailable or fail closed until an
       # explicit promotion publishes a complete dual-architecture release.
@@ -81,15 +82,39 @@ jobs:
           node src/cli.mjs resolve --release edge --lock "$RUNNER_TEMP/edge-release-lock.json"
           node src/cli.mjs bootstrap --release edge --lock "$RUNNER_TEMP/edge-release-lock.json" \
             --context kind-opensphere-e2e --storage-class local-path \
-            --console https://console.e2e.invalid \
+            --console https://localhost:18090 \
             --auth-environment "${{ matrix.auth-environment }}" \
             --admin-username e2e-admin \
             --admin-display-name 'OpenSphere E2E Administrator' \
             --admin-email e2e-admin@opensphere.local \
             --no-open-browser
-          node src/cli.mjs verify --context kind-opensphere-e2e --console https://console.e2e.invalid --require-zero-restarts
+          node src/cli.mjs verify --context kind-opensphere-e2e --console https://localhost:18090 --require-zero-restarts
           actual_auth_environment="$(kubectl --context kind-opensphere-e2e -n opensphere-console get deployment opensphere-console-auth -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="AUTH_ENVIRONMENT")].value}')"
           test "$actual_auth_environment" = "${{ matrix.auth-environment }}"
+          kubectl --context kind-opensphere-e2e -n opensphere-console port-forward \
+            svc/opensphere-console-ext 18090:8090 --address 127.0.0.1 \
+            >"$RUNNER_TEMP/console-port-forward.log" 2>&1 &
+          port_forward_pid=$!
+          trap 'kill "$port_forward_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 60); do
+            if curl --silent --show-error --insecure --fail \
+              https://localhost:18090/bff/setup/status >/dev/null; then
+              break
+            fi
+            if ! kill -0 "$port_forward_pid" 2>/dev/null; then
+              cat "$RUNNER_TEMP/console-port-forward.log"
+              exit 1
+            fi
+            if test "$attempt" = 60; then
+              cat "$RUNNER_TEMP/console-port-forward.log"
+              exit 1
+            fi
+            sleep 2
+          done
+          OPENSPHERE_E2E_CONSOLE=https://localhost:18090 \
+            OPENSPHERE_E2E_AUTH_ENVIRONMENT="${{ matrix.auth-environment }}" \
+            node scripts/e2e-first-admin.mjs
+          node src/cli.mjs verify --context kind-opensphere-e2e --console https://localhost:18090 --require-zero-restarts
           test -x "$RUNNER_TEMP/opensphere-bin/os"
           "$RUNNER_TEMP/opensphere-bin/os" --version
       - name: Collect redacted audit evidence
