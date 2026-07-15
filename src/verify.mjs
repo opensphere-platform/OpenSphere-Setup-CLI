@@ -341,6 +341,19 @@ async function verifyIdentity() {
       `https://localhost:${port}/v1/person/${encodeURIComponent(admin.username)}`,
       decodeSecretValue(reader, 'token')
     );
+    const group = await httpsGetWithToken(
+      `https://localhost:${port}/v1/group/opensphere-console-admins`,
+      decodeSecretValue(roleManager, 'token')
+    );
+    if (group.status !== 200 || group.json === null) {
+      throw new Error(`Administrator group lookup failed: HTTP ${group.status}`);
+    }
+    if (admin.state === 'required') {
+      if (person.status === 200 && person.json !== null) {
+        throw new Error('First-access Wizard is required but an initial administrator already exists');
+      }
+      return { username: admin.username, email: admin.email, setupRequired: true, serviceCredentialsVerified: true };
+    }
     if (person.status !== 200 || person.json === null) {
       throw new Error(`Initial administrator lookup failed: HTTP ${person.status}`);
     }
@@ -348,13 +361,6 @@ async function verifyIdentity() {
     const personMail = person.json.attrs?.mail ?? [];
     if (!personNames.includes(admin.username) || !personMail.includes(admin.email)) {
       throw new Error('Initial administrator attributes differ from installation metadata');
-    }
-    const group = await httpsGetWithToken(
-      `https://localhost:${port}/v1/group/opensphere-console-admins`,
-      decodeSecretValue(roleManager, 'token')
-    );
-    if (group.status !== 200 || group.json === null) {
-      throw new Error(`Administrator group lookup failed: HTTP ${group.status}`);
     }
     const members = (group.json.attrs?.member ?? []).map((value) => String(value).split('@')[0]);
     if (!members.includes(admin.username)) {

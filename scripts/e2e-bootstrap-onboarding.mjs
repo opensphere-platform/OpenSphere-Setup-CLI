@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Clean-install acceptance test for the first administrator. Reset tokens and the
-// generated password remain process-local and are never printed or persisted.
+// Clean-install acceptance test for the Console first-access administrator Wizard.
+// The generated password remains process-local and no reset token exists.
 import crypto from 'node:crypto';
 import https from 'node:https';
 import { bootstrap } from '../src/bootstrap.mjs';
@@ -43,22 +43,6 @@ function request(method, input, body, headers = {}) {
   });
 }
 
-function decodeHtml(value) {
-  return value
-    .replaceAll('&quot;', '"')
-    .replaceAll('&#39;', "'")
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&amp;', '&');
-}
-
-function hiddenInput(html, name) {
-  const pattern = new RegExp(`<input[^>]*name=["']${name}["'][^>]*value=["']([^"']*)["'][^>]*>`, 'i');
-  const match = html.match(pattern);
-  if (!match) throw new Error(`Onboarding page did not contain ${name}`);
-  return decodeHtml(match[1]);
-}
-
 function expect(response, status, step) {
   if (response.status !== status) throw new Error(`${step}: expected HTTP ${status}, got ${response.status}`);
   return response;
@@ -66,25 +50,18 @@ function expect(response, status, step) {
 
 const lock = await resolveChannel(channel);
 const result = await bootstrap(lock, { initialAdmin, openOnboarding: false });
-if (!result.onboardingUrl) throw new Error('Fresh bootstrap did not return a first-administrator onboarding URL');
+if (!result.setupRequired) throw new Error('Fresh bootstrap did not require the first-access administrator Wizard');
 
-let response = expect(await request('GET', new URL(result.onboardingUrl)), 200, 'open onboarding Wizard');
-const session = hiddenInput(response.text, 'session');
-const account = hiddenInput(response.text, 'account');
-const setupForm = new URLSearchParams({
-  password,
-  totp: '',
-  session,
-  secret: hiddenInput(response.text, 'secret'),
-  account,
-  otpauth: hiddenInput(response.text, 'otpauth')
-}).toString();
-response = expect(await request('POST', '/ui/reset', setupForm, {
-  'content-type': 'application/x-www-form-urlencoded'
-}), 200, 'commit first-administrator credentials');
-if (!response.text.includes("You're all set") || !response.text.includes('Your password is enrolled')) {
-  throw new Error('First-administrator Wizard did not commit the password-only credential');
-}
+let response = expect(await request('GET', '/bff/setup/status', undefined, { accept: 'application/json' }), 200, 'read first-access Wizard state');
+if (JSON.parse(response.text).state !== 'required') throw new Error('First-access Wizard was not required');
+response = expect(await request('POST', '/bff/setup/begin', JSON.stringify({
+  ...initialAdmin, password, passwordConfirm: password
+}), {
+  origin: consoleUrl.origin,
+  'content-type': 'application/json',
+  accept: 'application/json'
+}), 201, 'commit first-administrator credentials');
+if (JSON.parse(response.text).state !== 'complete') throw new Error('First-access Wizard did not complete');
 
 const verifier = crypto.randomBytes(32).toString('base64url');
 const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
@@ -124,7 +101,7 @@ const idToken = JSON.parse(response.text).id_token;
 const claims = JSON.parse(Buffer.from(idToken.split('.')[1], 'base64url').toString('utf8'));
 if (claims.preferred_username !== initialAdmin.username) throw new Error('First-administrator identity claim mismatch');
 if (!claims.groups?.includes('opensphere-console-admins')) throw new Error('First administrator is missing the Console admin role');
-if (claims.iss !== 'https://localhost:8444/oauth2/openid/opensphere-console' || claims.aud !== 'opensphere-console') {
+if (claims.iss !== `${consoleUrl.origin}/oauth2/openid/opensphere-console` || claims.aud !== 'opensphere-console') {
   throw new Error('Console issuer/audience claims mismatch');
 }
 

@@ -65,7 +65,7 @@ Usage:
        [--storage-class <name>] [--console <https-origin>]
        [--auth-environment <development|production>] [--backup-target-secret <namespace/name>]
        [--shell-tls-secret <namespace/name>]
-       [--no-open-browser] [--onboarding-url-file <path>] [--add-to-path]
+       [--no-open-browser] [--add-to-path]
   opensphere-setup upgrade --release <edge|candidate|stable> [--lock <verified-lock-file>]
       [--context <kube-context>] [--storage-class <name>] [--console <https-origin>]
       [--backup-target-secret <namespace/name>] [--add-to-path]
@@ -199,7 +199,6 @@ async function main() {
       backupTargetSecret: hasOption('--backup-target-secret') ? option('--backup-target-secret', '') : undefined,
       shellTlsSecret: requestedShellTlsSecret,
       openOnboarding: !hasOption('--no-open-browser'),
-      onboardingUrlFile: hasOption('--onboarding-url-file') ? option('--onboarding-url-file', '') : undefined
     });
     const installedCli = await installConsoleCliFromCluster({
       installDirectory: option('--install-dir', undefined),

@@ -19,7 +19,19 @@ import {
   buildCompatibilityOverlaySet,
   compatibilityBackupOverlay,
   retargetPostgresImage,
-  sanitizeManifestMetadata
+  sanitizeManifestMetadata,
+  deriveDedicatedBackupScripts,
+  deriveDedicatedBackupCronJob,
+  deriveDedicatedRestoreDrill,
+  buildBootstrapBackupBoundaryOverlaySet,
+  planBootstrapBackupBoundary,
+  BACKUP_ROLE_RECONCILE_RESOURCE,
+  BACKUP_ROLE,
+  BACKUP_ROLE_RECONCILE_SQL,
+  BACKUP_ROLE_RECONCILE_SCRIPT,
+  buildBackupRoleReconcileConfigMap,
+  buildBackupRoleReconcileJob,
+  buildBackupRoleReconcileManifests
 } from '../src/backup-boundary.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -441,4 +453,336 @@ test('verifyRecovery fails closed on the backup CronJob credential, the ConfigMa
     'verifyRecovery must gate on the live backup script running pg_dump as opensphere_backup');
   assert.match(match[0], /if \(!restoreDrillPreservesCredentialBoundary\(drill\)\)/,
     'verifyRecovery must gate on the restore drill preserving its credential boundary');
+});
+
+// ---------------------------------------------------------------------------
+// Clean-bootstrap derivation of the dedicated boundary from a regressed release.
+// ---------------------------------------------------------------------------
+
+// A historical scripts ConfigMap that also carries a companion script running psql as
+// the console role -- the whole ConfigMap must be transformed, not just backup.sh.
+function historicalScriptsConfigMap() {
+  const configMap = backupScriptsConfigMap({ script: CONSOLE_BACKUP_SH });
+  configMap.data['verify.sh'] = 'psql -U console -d console -Atc "SELECT count(*) FROM audit_log"';
+  return configMap;
+}
+
+test('deriveDedicatedBackupScripts rewrites every console-role pg_dump/psql to opensphere_backup and preserves the -d console database', () => {
+  const dedicated = deriveDedicatedBackupScripts(historicalScriptsConfigMap());
+  assert.equal(backupScriptUsesDedicatedRole(dedicated), true);
+  // The authenticating role is rewritten in every script value...
+  assert.match(dedicated.data['backup.sh'], /pg_dump[^\n]*-U opensphere_backup\b/);
+  assert.match(dedicated.data['verify.sh'], /psql -U opensphere_backup\b/);
+  // ...but the -d console DATABASE argument is never touched.
+  assert.match(dedicated.data['backup.sh'], /-d console\b/);
+  assert.doesNotMatch(dedicated.data['backup.sh'], /-U console\b/);
+});
+
+test('deriveDedicatedBackupScripts handles the --username=console and --username console forms', () => {
+  const equals = deriveDedicatedBackupScripts(backupScriptsConfigMap({ script: 'pg_dump --username=console -d console' }));
+  assert.equal(equals.data['backup.sh'], 'pg_dump --username=opensphere_backup -d console');
+  const spaced = deriveDedicatedBackupScripts(backupScriptsConfigMap({ script: 'pg_dump --username console -d console' }));
+  assert.equal(spaced.data['backup.sh'], 'pg_dump --username opensphere_backup -d console');
+});
+
+test('deriveDedicatedBackupScripts is idempotent on an already-dedicated ConfigMap', () => {
+  const dedicated = deriveDedicatedBackupScripts(backupScriptsConfigMap());
+  assert.deepEqual(dedicated.data, { 'backup.sh': DEDICATED_BACKUP_SH });
+  assert.equal(backupScriptUsesDedicatedRole(dedicated), true);
+});
+
+test('deriveDedicatedBackupScripts fails closed when pg_dump supplies no inline role flag (rather than patching shell text)', () => {
+  // The role is carried in an env var, so no console flag exists to rewrite and the result
+  // cannot be proven dedicated; fail closed instead of injecting a flag.
+  assert.throws(
+    () => deriveDedicatedBackupScripts(backupScriptsConfigMap({ script: 'export PGUSER=console\npg_dump -d console' })),
+    /Cannot derive dedicated backbone-postgres-backup-scripts: script does not run pg_dump as opensphere_backup/
+  );
+  // A present-but-empty data map reaches the postcondition (no pg_dump at all).
+  assert.throws(() => deriveDedicatedBackupScripts({ data: {} }), /does not run pg_dump as opensphere_backup/);
+  // A ConfigMap with no data map at all fails on the earlier guard.
+  assert.throws(() => deriveDedicatedBackupScripts({}), /no script data to transform/);
+  assert.throws(() => deriveDedicatedBackupScripts(null), /no script data to transform/);
+});
+
+test('deriveDedicatedBackupScripts does not mutate the captured source ConfigMap', () => {
+  const source = backupScriptsConfigMap({ script: CONSOLE_BACKUP_SH });
+  deriveDedicatedBackupScripts(source);
+  assert.equal(source.data['backup.sh'], CONSOLE_BACKUP_SH);
+});
+
+test('deriveDedicatedBackupCronJob repoints PGPASSWORD (and any console password ref) to backup_password across all containers', () => {
+  // Regressed release: PGPASSWORD binds the console runtime `password` key on the main
+  // container and a seed init container also references it.
+  const regressed = backupCronJob({
+    env: [secretEnv('PGPASSWORD', 'password'), secretEnv('AUX', 'password')],
+    initEnv: [secretEnv('SEED_PW', 'password')]
+  });
+  const dedicated = deriveDedicatedBackupCronJob(regressed);
+  assert.equal(backupCronJobUsesDedicatedRole(dedicated), true);
+  assert.equal(backupCronJobBackbonePostgresKeys(dedicated).includes('password'), false);
+  assert.deepEqual(backbonePostgresEnvRefs(dedicated), {
+    PGPASSWORD: 'backup_password', AUX: 'backup_password', SEED_PW: 'backup_password'
+  });
+});
+
+test('deriveDedicatedBackupCronJob is idempotent on an already-dedicated CronJob', () => {
+  const dedicated = deriveDedicatedBackupCronJob(backupCronJob());
+  assert.equal(backupCronJobUsesDedicatedRole(dedicated), true);
+  assert.deepEqual(backbonePostgresEnvRefs(dedicated), { PGPASSWORD: 'backup_password' });
+});
+
+test('deriveDedicatedBackupCronJob fails closed when PGPASSWORD is absent or a non-backbone-postgres value', () => {
+  // A credential is referenced but PGPASSWORD itself is absent -- cannot be made dedicated safely.
+  assert.throws(
+    () => deriveDedicatedBackupCronJob(backupCronJob({ env: [secretEnv('AUDIT_PW', 'password')] })),
+    /Cannot derive dedicated backbone-postgres-backup: PGPASSWORD is not bound to a backbone-postgres credential/
+  );
+  // PGPASSWORD is a literal, not a Secret ref.
+  assert.throws(
+    () => deriveDedicatedBackupCronJob(backupCronJob({ env: [{ name: 'PGPASSWORD', value: 'literal' }] })),
+    /PGPASSWORD is not bound to a backbone-postgres credential/
+  );
+  assert.throws(() => deriveDedicatedBackupCronJob(null), /PGPASSWORD is not bound/);
+});
+
+test('deriveDedicatedBackupCronJob does not mutate the captured source CronJob', () => {
+  const source = backupCronJob({ env: [secretEnv('PGPASSWORD', 'password')] });
+  deriveDedicatedBackupCronJob(source);
+  assert.deepEqual(backbonePostgresEnvRefs(source), { PGPASSWORD: 'password' });
+});
+
+test('deriveDedicatedRestoreDrill drops the exposed PGPASSWORD and pins POSTGRES_PASSWORD to bootstrap_password', () => {
+  // Regressed drill wiring PGPASSWORD -> console `password` and POSTGRES_PASSWORD -> `password`.
+  const dedicated = deriveDedicatedRestoreDrill(restoreDrillCronJob({ pgPassword: 'password', postgresPassword: 'password' }));
+  assert.equal(restoreDrillPreservesCredentialBoundary(dedicated), true);
+  assert.deepEqual(backbonePostgresEnvRefs(dedicated), { POSTGRES_PASSWORD: 'bootstrap_password' });
+  // The S3 target credential (a DIFFERENT secret) is preserved untouched.
+  const env = dedicated.spec.jobTemplate.spec.template.spec.containers[0].env;
+  const s3 = env.find((entry) => entry.name === 'BACKUP_S3_ACCESS_KEY');
+  assert.equal(s3?.valueFrom?.secretKeyRef?.name, 'backbone-postgres-backup-target');
+});
+
+test('deriveDedicatedRestoreDrill also drops a PGPASSWORD wired to the read-only backup credential', () => {
+  const dedicated = deriveDedicatedRestoreDrill(restoreDrillCronJob({ pgPassword: 'backup_password' }));
+  assert.equal(restoreDrillPreservesCredentialBoundary(dedicated), true);
+  assert.equal('PGPASSWORD' in backbonePostgresEnvRefs(dedicated), false);
+});
+
+test('deriveDedicatedRestoreDrill is idempotent on the canonical bootstrap-only drill', () => {
+  const dedicated = deriveDedicatedRestoreDrill(restoreDrillCronJob());
+  assert.equal(restoreDrillPreservesCredentialBoundary(dedicated), true);
+  assert.deepEqual(backbonePostgresEnvRefs(dedicated), { POSTGRES_PASSWORD: 'bootstrap_password' });
+});
+
+test('deriveDedicatedRestoreDrill fails closed when POSTGRES_PASSWORD is not a backbone-postgres credential', () => {
+  const noBootstrap = {
+    apiVersion: 'batch/v1', kind: 'CronJob',
+    metadata: { name: RESTORE_DRILL_CRONJOB_RESOURCE, namespace: 'opensphere-backbone' },
+    spec: { suspend: true, jobTemplate: { spec: { template: { spec: {
+      containers: [{ name: 'restore-drill', image: LIVE_IMAGE, env: [secretEnv('PGPASSWORD', 'password')] }]
+    } } } } }
+  };
+  assert.throws(
+    () => deriveDedicatedRestoreDrill(noBootstrap),
+    /Cannot derive dedicated backbone-postgres-restore-drill: POSTGRES_PASSWORD is not bound to a backbone-postgres credential/
+  );
+  assert.throws(() => deriveDedicatedRestoreDrill(null), /POSTGRES_PASSWORD is not bound/);
+});
+
+test('deriveDedicatedRestoreDrill does not mutate the captured source CronJob', () => {
+  const source = restoreDrillCronJob({ pgPassword: 'password' });
+  deriveDedicatedRestoreDrill(source);
+  assert.deepEqual(backbonePostgresEnvRefs(source), { PGPASSWORD: 'password', POSTGRES_PASSWORD: 'bootstrap_password' });
+});
+
+// A fully regressed historical release resource set: every one of the three resources
+// predates the dedicated boundary and is pinned to the LIVE (historical) image.
+function regressedReleaseResources() {
+  return {
+    configMap: historicalScriptsConfigMap(),
+    cronJob: backupCronJob({ env: [secretEnv('PGPASSWORD', 'password')], image: LIVE_IMAGE }),
+    restoreDrill: restoreDrillCronJob({ pgPassword: 'password', image: LIVE_IMAGE })
+  };
+}
+
+test('buildBootstrapBackupBoundaryOverlaySet derives all three dedicated resources, ConfigMap first, each image-pinned and annotated', () => {
+  const overlays = buildBootstrapBackupBoundaryOverlaySet(regressedReleaseResources(), lock, TARGET_IMAGE);
+  assert.deepEqual(overlays.map((overlay) => `${overlay.kind}/${overlay.metadata.name}`), [
+    `ConfigMap/${BACKUP_SCRIPTS_CONFIGMAP_RESOURCE}`,
+    `CronJob/${BACKUP_CRONJOB_RESOURCE}`,
+    `CronJob/${RESTORE_DRILL_CRONJOB_RESOURCE}`
+  ]);
+  const [configMap, cronJob, restoreDrill] = overlays;
+  // Every overlay is dedicated after derivation -- verifyRecovery would accept them.
+  assert.equal(backupScriptUsesDedicatedRole(configMap), true);
+  assert.equal(backupCronJobUsesDedicatedRole(cronJob), true);
+  assert.equal(restoreDrillPreservesCredentialBoundary(restoreDrill), true);
+  // No privilege regression: the console runtime `password` is never re-exposed.
+  assert.equal(backupCronJobBackbonePostgresKeys(cronJob).includes('password'), false);
+  assert.equal(Object.values(backbonePostgresEnvRefs(restoreDrill)).includes('password'), false);
+  // Every CronJob is retargeted to the applied release's cbsPostgresql digest, not the
+  // historical LIVE image, and every overlay carries the audit annotations.
+  for (const overlay of overlays) {
+    assert.equal(overlay.metadata.annotations[COMPATIBILITY_OVERLAY_ANNOTATION], COMPATIBILITY_OVERLAY_VALUE);
+    assert.equal(overlay.metadata.annotations['opensphere.io/overlay-release'], lock.releaseDigest);
+    assert.equal(overlay.metadata.annotations['opensphere.io/overlay-source-revision'], lock.sourceRevision);
+    assert.equal('resourceVersion' in overlay.metadata, false);
+  }
+  for (const overlay of [cronJob, restoreDrill]) {
+    assert.equal(overlay.spec.jobTemplate.spec.template.spec.containers[0].image, TARGET_IMAGE);
+  }
+  assert.equal(restoreDrill.spec.suspend, true, 'the restore drill must remain suspended');
+});
+
+test('buildBootstrapBackupBoundaryOverlaySet fails closed with a precise error when any of the three resources is missing', () => {
+  const base = regressedReleaseResources();
+  assert.throws(() => buildBootstrapBackupBoundaryOverlaySet({ ...base, configMap: null }, lock, TARGET_IMAGE),
+    /release is missing ConfigMap backbone-postgres-backup-scripts/);
+  assert.throws(() => buildBootstrapBackupBoundaryOverlaySet({ ...base, cronJob: null }, lock, TARGET_IMAGE),
+    /release is missing CronJob backbone-postgres-backup\b/);
+  assert.throws(() => buildBootstrapBackupBoundaryOverlaySet({ ...base, restoreDrill: null }, lock, TARGET_IMAGE),
+    /release is missing CronJob backbone-postgres-restore-drill/);
+  assert.throws(() => buildBootstrapBackupBoundaryOverlaySet(undefined, lock, TARGET_IMAGE),
+    /release is missing ConfigMap/);
+});
+
+test('planBootstrapBackupBoundary is a no-op when the release already ships all three dedicated resources', () => {
+  const dedicated = {
+    cronJob: backupCronJob(),
+    configMap: backupScriptsConfigMap(),
+    restoreDrill: restoreDrillCronJob()
+  };
+  assert.deepEqual(planBootstrapBackupBoundary(dedicated, lock, TARGET_IMAGE), []);
+});
+
+test('planBootstrapBackupBoundary overlays all three when any single resource regresses (a historical lock)', () => {
+  // Only the restore drill regresses; the plan still re-establishes the full ordered set.
+  const partiallyRegressed = {
+    cronJob: backupCronJob(),
+    configMap: backupScriptsConfigMap(),
+    restoreDrill: restoreDrillCronJob({ pgPassword: 'password' })
+  };
+  const plan = planBootstrapBackupBoundary(partiallyRegressed, lock, TARGET_IMAGE);
+  assert.deepEqual(plan.map((overlay) => `${overlay.kind}/${overlay.metadata.name}`), [
+    `ConfigMap/${BACKUP_SCRIPTS_CONFIGMAP_RESOURCE}`,
+    `CronJob/${BACKUP_CRONJOB_RESOURCE}`,
+    `CronJob/${RESTORE_DRILL_CRONJOB_RESOURCE}`
+  ]);
+  // A fully regressed historical release produces the same complete overlay set.
+  assert.equal(planBootstrapBackupBoundary(regressedReleaseResources(), lock, TARGET_IMAGE).length, 3);
+});
+
+test('the Setup-owned backup-role reconcile is image-pinned, TLS-verified, hardened, and secret-backed', () => {
+  const [configMap, job] = buildBackupRoleReconcileManifests(lock);
+  assert.equal(configMap.kind, 'ConfigMap');
+  assert.equal(configMap.metadata.name, BACKUP_ROLE_RECONCILE_RESOURCE);
+  assert.equal(job.kind, 'Job');
+  assert.equal(job.metadata.name, BACKUP_ROLE_RECONCILE_RESOURCE);
+  assert.equal(job.spec.template.spec.automountServiceAccountToken, false);
+  assert.equal(job.spec.template.spec.securityContext.runAsNonRoot, true);
+  assert.equal(job.spec.template.spec.securityContext.seccompProfile.type, 'RuntimeDefault');
+  const container = job.spec.template.spec.containers[0];
+  assert.equal(container.image, TARGET_IMAGE);
+  assert.equal(container.securityContext.allowPrivilegeEscalation, false);
+  assert.equal(container.securityContext.readOnlyRootFilesystem, true);
+  assert.deepEqual(container.securityContext.capabilities.drop, ['ALL']);
+  const env = Object.fromEntries(container.env.map((entry) => [entry.name, entry]));
+  assert.equal(env.PGSSLMODE.value, 'verify-full');
+  assert.equal(env.PGSSLROOTCERT.value, '/tls/ca.crt');
+  assert.deepEqual(env.BOOTSTRAP_PASSWORD.valueFrom.secretKeyRef,
+    { name: 'backbone-postgres', key: 'bootstrap_password' });
+  assert.deepEqual(env.BACKUP_PASSWORD.valueFrom.secretKeyRef,
+    { name: 'backbone-postgres', key: 'backup_password' });
+  assert.deepEqual(job.spec.template.spec.volumes.find((volume) => volume.name === 'tls').secret,
+    { secretName: 'backbone-postgres', items: [{ key: 'ca.crt', path: 'ca.crt' }] });
+  for (const resource of [configMap, job]) {
+    assert.equal(resource.metadata.annotations[COMPATIBILITY_OVERLAY_ANNOTATION], COMPATIBILITY_OVERLAY_VALUE);
+    assert.equal(resource.metadata.annotations['opensphere.io/backup-role'], BACKUP_ROLE);
+    assert.equal(resource.metadata.annotations['opensphere.io/overlay-release'], lock.releaseDigest);
+    assert.equal(resource.metadata.annotations['opensphere.io/overlay-source-revision'], lock.sourceRevision);
+  }
+  assert.deepEqual(buildBackupRoleReconcileConfigMap(lock), configMap);
+  assert.deepEqual(buildBackupRoleReconcileJob(lock), job);
+});
+
+test('the backup-role reconcile SQL is idempotent least-privilege and contains no credential or destructive operation', () => {
+  assert.match(BACKUP_ROLE_RECONCILE_SQL, /\\getenv backup_password BACKUP_PASSWORD/);
+  assert.match(BACKUP_ROLE_RECONCILE_SQL, /CREATE ROLE opensphere_backup LOGIN NOSUPERUSER INHERIT NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS/);
+  assert.match(BACKUP_ROLE_RECONCILE_SQL, /ALTER ROLE opensphere_backup LOGIN NOSUPERUSER INHERIT NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS/);
+  assert.match(BACKUP_ROLE_RECONCILE_SQL, /GRANT CONNECT ON DATABASE console TO opensphere_backup/);
+  assert.match(BACKUP_ROLE_RECONCILE_SQL, /GRANT pg_read_all_data TO opensphere_backup/);
+  assert.doesNotMatch(BACKUP_ROLE_RECONCILE_SQL, /(?:GRANT|ALTER ROLE)\s+console\b/i);
+  assert.doesNotMatch(BACKUP_ROLE_RECONCILE_SQL, /\b(?:DROP|DELETE|TRUNCATE)\b/i);
+  assert.doesNotMatch(BACKUP_ROLE_RECONCILE_SQL, /bootstrap_password|backup_password\s*=|PASSWORD\s+'[^']+'/i);
+  assert.match(BACKUP_ROLE_RECONCILE_SQL, /PASSWORD\s+:'backup_password'/,
+    'the password value must remain a psql quoted variable populated by \\getenv');
+  assert.match(BACKUP_ROLE_RECONCILE_SCRIPT, /export PGPASSWORD="\$BOOTSTRAP_PASSWORD"/);
+  assert.doesNotMatch(BACKUP_ROLE_RECONCILE_SCRIPT, /opensphere_backup|backup_password/);
+  const commandText = buildBackupRoleReconcileJob(lock).spec.template.spec.containers[0].command.join(' ');
+  assert.doesNotMatch(commandText, /BOOTSTRAP_PASSWORD|BACKUP_PASSWORD|password/i);
+});
+
+test('historical bootstrap runs the Setup-owned role reconcile only after release reconcile and before recovery', async () => {
+  const source = await readFile(join(ROOT, 'src', 'bootstrap.mjs'), 'utf8');
+  const bootstrapSrc = source.slice(
+    source.indexOf('export async function bootstrap('),
+    source.indexOf('export async function upgrade(')
+  );
+  const idxEstablish = bootstrapSrc.indexOf('establishBootstrapBackupBoundary(lock, release)');
+  const idxReleaseReconcile = bootstrapSrc.indexOf('waitForBackboneBoundaryReconcile(lock)');
+  const idxRoleReconcile = bootstrapSrc.indexOf('runBackupRoleReconcile(lock)');
+  const idxDrill = bootstrapSrc.indexOf('runBackboneRecoveryDrill()');
+  assert.ok(idxEstablish < idxReleaseReconcile && idxReleaseReconcile < idxRoleReconcile && idxRoleReconcile < idxDrill);
+  assert.match(bootstrapSrc, /if \(bootstrapBackupBoundary\.overlaid\) \{[\s\S]*?runBackupRoleReconcile\(lock\)/,
+    'a fully dedicated current release must not run the Setup-owned role reconcile');
+  const runner = source.match(/function runBackupRoleReconcile\(lock\)[\s\S]*?\n\}/);
+  assert.ok(runner);
+  assert.match(runner[0], /buildBackupRoleReconcileManifests\(lock\)/);
+  assert.match(runner[0], /delete', 'job', BACKUP_ROLE_RECONCILE_RESOURCE, '--ignore-not-found', '--wait=true'/,
+    'a rerun must replace the immutable Job object without deleting data');
+  assert.match(runner[0], /applyYaml\(`\$\{JSON\.stringify\(configMap\)\}\\n`\)[\s\S]*applyYaml\(`\$\{JSON\.stringify\(job\)\}\\n`\)/,
+    'the ConfigMap must be applied before the Job');
+});
+
+// bootstrap.mjs must establish the CURRENT boundary from the applied release AFTER
+// BASE_MANIFESTS are applied but BEFORE the reconcile Job and recovery drill run.
+test('bootstrap establishes the derived dedicated boundary after applying BASE_MANIFESTS and before the reconcile/recovery drill', async () => {
+  const source = await readFile(join(ROOT, 'src', 'bootstrap.mjs'), 'utf8');
+  const establish = source.match(/function establishBootstrapBackupBoundary\(lock, release\)[\s\S]*?\n\}/);
+  assert.ok(establish, 'establishBootstrapBackupBoundary must be defined');
+  // It plans from the release and pins to this release's cbsPostgresql digest (never a captured image).
+  assert.match(establish[0], /planBootstrapBackupBoundary\(\s*decodeBackupBoundaryResources\(release\), lock, lock\.components\.cbsPostgresql\.image/);
+  assert.match(establish[0], /applyYaml\(`\$\{JSON\.stringify\(overlay\)\}\\n`\)/,
+    'the derived overlays must be applied to the cluster');
+
+  // Ordering within bootstrap(): apply loop -> establish overlay -> boundary reconcile -> recovery drill.
+  const bootstrapSrc = source.slice(
+    source.indexOf('export async function bootstrap('),
+    source.indexOf('export async function upgrade(')
+  );
+  const idxApplyLoop = bootstrapSrc.indexOf('for (const spec of BASE_MANIFESTS)');
+  const idxEstablish = bootstrapSrc.indexOf('establishBootstrapBackupBoundary(lock, release)');
+  const idxReconcile = bootstrapSrc.indexOf('waitForBackboneBoundaryReconcile(lock)');
+  const idxDrill = bootstrapSrc.indexOf('runBackboneRecoveryDrill()');
+  assert.ok(idxApplyLoop !== -1 && idxEstablish !== -1 && idxReconcile !== -1 && idxDrill !== -1);
+  assert.ok(idxApplyLoop < idxEstablish, 'the boundary is established only after BASE_MANIFESTS are applied');
+  assert.ok(idxEstablish < idxReconcile, 'the boundary is established before the reconcile Job runs');
+  assert.ok(idxReconcile < idxDrill, 'the recovery drill runs after the reconcile Job');
+  // decodeBackupBoundaryResources keys off the three REAL distinct resource names.
+  const decode = source.match(/function decodeBackupBoundaryResources\(release\)[\s\S]*?\n\}/);
+  assert.ok(decode, 'decodeBackupBoundaryResources must be defined');
+  assert.match(decode[0], /find\('CronJob', BACKUP_CRONJOB_RESOURCE\)/);
+  assert.match(decode[0], /find\('ConfigMap', BACKUP_SCRIPTS_CONFIGMAP_RESOURCE\)/);
+  assert.match(decode[0], /find\('CronJob', RESTORE_DRILL_CRONJOB_RESOURCE\)/);
+});
+
+// verify.mjs must stay strict: the clean-bootstrap derivation belongs to bootstrap, not
+// verify. verify must never import the derivation helpers to relax verifyRecovery.
+test('verify.mjs does not weaken verifyRecovery with the bootstrap derivation helpers', async () => {
+  const source = await readFile(join(ROOT, 'src', 'verify.mjs'), 'utf8');
+  assert.doesNotMatch(source, /planBootstrapBackupBoundary|deriveDedicated|buildBootstrapBackupBoundaryOverlaySet/,
+    'verify must not import or call the clean-bootstrap derivation; it stays fail-closed');
+  // The exact CI failure message remains the guard, proving the boundary is still enforced.
+  assert.match(source, /PostgreSQL audit backup CronJob does not authenticate as the dedicated opensphere_backup role \(backup_password\)/);
 });

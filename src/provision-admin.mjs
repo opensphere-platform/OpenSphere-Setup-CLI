@@ -9,6 +9,7 @@ const ADMIN_DISPLAY = process.env.OPENSPHERE_INITIAL_ADMIN_DISPLAY || 'OpenSpher
 const ADMIN_EMAIL = process.env.OPENSPHERE_INITIAL_ADMIN_EMAIL || 'admin@opensphere.local';
 const SKIP_SERVICE_TOKENS = process.env.OPENSPHERE_SKIP_SERVICE_TOKENS === 'true';
 const AUTH_ENVIRONMENT = process.env.OPENSPHERE_AUTH_ENVIRONMENT || 'development';
+const BROWSER_SETUP = process.env.OPENSPHERE_BROWSER_SETUP === 'true';
 const SERVICE_TOKEN_TTL_DAYS = Number.parseInt(process.env.OPENSPHERE_SERVICE_TOKEN_TTL_DAYS || '30', 10);
 
 if (!PASSWORD) throw new Error('KANIDM_ADMIN_PASSWORD is required');
@@ -134,16 +135,18 @@ if (response.status >= 300) {
 for (const group of ['opensphere-console-admins', 'opensphere-console-operators', 'opensphere-console-viewers']) {
   await ensureEntry(token, `/v1/group/${group}`, { attrs: { name: [group] } });
 }
-await ensureEntry(token, `/v1/person/${ADMIN}`, { attrs: { name: [ADMIN], displayname: [ADMIN_DISPLAY] } });
-response = await request('PATCH', `/v1/person/${ADMIN}`, { attrs: { mail: [ADMIN_EMAIL] } }, token);
-for (let attempt = 0; response.status === 404 && attempt < 10; attempt += 1) {
-  await new Promise((resolve) => setTimeout(resolve, 250));
+if (!BROWSER_SETUP) {
+  await ensureEntry(token, `/v1/person/${ADMIN}`, { attrs: { name: [ADMIN], displayname: [ADMIN_DISPLAY] } });
   response = await request('PATCH', `/v1/person/${ADMIN}`, { attrs: { mail: [ADMIN_EMAIL] } }, token);
+  for (let attempt = 0; response.status === 404 && attempt < 10; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    response = await request('PATCH', `/v1/person/${ADMIN}`, { attrs: { mail: [ADMIN_EMAIL] } }, token);
+  }
+  if (response.status >= 300) {
+    throw new Error(`Admin mail update failed: HTTP ${response.status}`);
+  }
+  await addMember(token, 'opensphere-console-admins', ADMIN);
 }
-if (response.status >= 300) {
-  throw new Error(`Admin mail update failed: HTTP ${response.status}`);
-}
-await addMember(token, 'opensphere-console-admins', ADMIN);
 
 if (!SKIP_SERVICE_TOKENS) {
   const reader = await serviceToken(token, 'opensphere-console-reader', 'OpenSphere Console Reader', false);
@@ -156,6 +159,11 @@ if (!SKIP_SERVICE_TOKENS) {
   applySecret('opensphere-rolemgr-kanidm', roleManager);
 }
 
+if (BROWSER_SETUP) {
+  process.stdout.write(JSON.stringify({ browserSetup: true }));
+  process.exit(0);
+}
+
 response = await request('GET', `/v1/person/${ADMIN}/_credential/_status`, undefined, token);
 if (response.status !== 200 || !Array.isArray(response.json?.creds)) {
   throw new Error(`Initial admin credential status failed: HTTP ${response.status}`);
@@ -164,11 +172,6 @@ if (response.json.creds.length > 0) {
   process.stdout.write(JSON.stringify({ onboardingRequired: false }));
   process.exit(0);
 }
-
-response = await request('GET', `/v1/person/${ADMIN}/_credential/_update_intent/3600`, undefined, token);
-if (response.status !== 200 || !response.json?.token) {
-  throw new Error(`Initial admin reset intent failed: HTTP ${response.status}`);
-}
-
-// The reset token is captured by the parent, never logged or persisted.
-process.stdout.write(JSON.stringify({ onboardingRequired: true, resetToken: response.json.token }));
+// Human credentials are never bootstrapped through an out-of-band reset link.
+// The Console first-access Wizard owns the one-time credential-update session.
+process.stdout.write(JSON.stringify({ browserSetup: true }));

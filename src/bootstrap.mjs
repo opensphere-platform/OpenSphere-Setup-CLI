@@ -1,9 +1,9 @@
 import { randomBytes, X509Certificate } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import net from 'node:net';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { kubectl, run } from './process.mjs';
@@ -18,8 +18,11 @@ import {
   BACKUP_CRONJOB_RESOURCE,
   BACKUP_SCRIPTS_CONFIGMAP_RESOURCE,
   RESTORE_DRILL_CRONJOB_RESOURCE,
+  BACKUP_ROLE_RECONCILE_RESOURCE,
   backupBoundaryFullyDedicated,
-  buildCompatibilityOverlaySet
+  buildBackupRoleReconcileManifests,
+  buildCompatibilityOverlaySet,
+  planBootstrapBackupBoundary
 } from './backup-boundary.mjs';
 import {
   EXTERNAL_SHELL_TLS_ANNOTATION,
@@ -733,6 +736,79 @@ function reassertBackupBoundary(boundary, lock, release) {
   return { overlaid: overlays.length > 0, resources: overlays.map((overlay) => `${overlay.kind}/${overlay.metadata.name}`) };
 }
 
+// Decode the three backup-boundary resources from the materialized release in a single
+// client-side pass, keyed by their REAL distinct in-cluster names -- they are not a
+// shared identity. Absent resources decode to null so the planner can fail closed.
+function decodeBackupBoundaryResources(release) {
+  const items = decodeReleaseItems(release);
+  const find = (kind, name) => items.find((item) => item.kind === kind && item.metadata?.name === name) ?? null;
+  return {
+    cronJob: find('CronJob', BACKUP_CRONJOB_RESOURCE),
+    configMap: find('ConfigMap', BACKUP_SCRIPTS_CONFIGMAP_RESOURCE),
+    restoreDrill: find('CronJob', RESTORE_DRILL_CRONJOB_RESOURCE)
+  };
+}
+
+// Clean bootstrap of a historical signed lock (for the upgrade/rollback gate): unlike
+// upgrade/downgrade there is no live dedicated boundary to capture, so DERIVE the three
+// dedicated resources from the just-applied release and overlay them (ConfigMap first,
+// image-pinned to this release's cbsPostgresql digest). This monotonically establishes
+// the CURRENT boundary -- so the scheduled pg_dump authenticates as opensphere_backup
+// and can read the forward `oaa` schema -- BEFORE the boundary reconcile and recovery
+// drill run, keeping verifyRecovery strict. A no-op when the applied release already
+// ships all three dedicated resources (a forward release is never overlaid).
+function establishBootstrapBackupBoundary(lock, release) {
+  const overlays = planBootstrapBackupBoundary(
+    decodeBackupBoundaryResources(release), lock, lock.components.cbsPostgresql.image
+  );
+  for (const overlay of overlays) applyYaml(`${JSON.stringify(overlay)}\n`);
+  return { overlaid: overlays.length > 0, resources: overlays.map((overlay) => `${overlay.kind}/${overlay.metadata.name}`) };
+}
+
+// Run the Setup-owned dedicated backup-ROLE reconcile as a one-shot Job (never kubectl
+// exec). Called only after establishBootstrapBackupBoundary actually overlaid a regressed
+// historical release, whose PostgreSQL never created the opensphere_backup login role.
+// The ConfigMap is applied first so the pod can mount the shell + SQL; a Job's spec is
+// immutable, so any Job left by a prior attempt is deleted (the Job object only, with
+// --ignore-not-found -- never a PVC/namespace/database, i.e. no data deletion) before the
+// fresh image-pinned Job is created and awaited to completion.
+function runBackupRoleReconcile(lock) {
+  const [configMap, job] = buildBackupRoleReconcileManifests(lock);
+  applyYaml(`${JSON.stringify(configMap)}\n`);
+  kubectl(['-n', 'opensphere-backbone', 'delete', 'job', BACKUP_ROLE_RECONCILE_RESOURCE, '--ignore-not-found', '--wait=true']);
+  applyYaml(`${JSON.stringify(job)}\n`);
+  return waitForBackupRoleReconcile(job.metadata.name);
+}
+
+// Await the Setup-owned role reconcile Job, reporting a precise failure. A Failed
+// condition surfaces its reason/message; a never-completing Job fails closed on timeout so
+// the boundary is never silently left unestablished before the recovery drill runs.
+function waitForBackupRoleReconcile(jobName) {
+  const deadline = Date.now() + 10 * 60 * 1000;
+  while (Date.now() < deadline) {
+    const job = JSON.parse(kubectl([
+      '-n', 'opensphere-backbone', 'get', 'job', jobName, '-o', 'json'
+    ], { capture: true }));
+    const conditions = job.status?.conditions ?? [];
+    if (conditions.some((condition) => condition.type === 'Complete' && condition.status === 'True')) {
+      return jobName;
+    }
+    const failed = conditions.find((condition) => condition.type === 'Failed' && condition.status === 'True');
+    if (failed) {
+      const detail = failed.reason ? ` (${failed.reason}${failed.message ? `: ${failed.message}` : ''})` : '';
+      throw new Error(`Dedicated backup-role reconcile Job failed: ${jobName}${detail}`);
+    }
+    try {
+      kubectl(['-n', 'opensphere-backbone', 'wait', '--for=condition=complete', `job/${jobName}`, '--timeout=15s'], { capture: true });
+      return jobName;
+    } catch {
+      // A timed-out `kubectl wait` is expected while PostgreSQL is starting or the role
+      // reconcile is still in flight; re-check the Job conditions on the next iteration.
+    }
+  }
+  throw new Error('Dedicated backup-role reconcile Job did not complete before timeout');
+}
+
 function waitForBackboneBoundaryReconcile(lock) {
   const selector = `opensphere.io/boundary-reconcile=true,opensphere.io/release-revision=${lock.sourceRevision}`;
   const deadline = Date.now() + 10 * 60 * 1000;
@@ -784,12 +860,15 @@ function recordInstallationState(lock, storageClass, initialAdmin, consoleUrl, a
   applyYaml(yaml);
 }
 
-function recordInitialAdmin(initialAdmin) {
+function recordInitialAdmin(initialAdmin, setupRequired) {
+  const existing = readConfigMap('opensphere-console', 'opensphere-initial-admin');
+  const state = setupRequired === undefined ? (existing?.data?.state || 'complete') : (setupRequired ? 'required' : 'complete');
   const yaml = kubectl([
     '-n', 'opensphere-console', 'create', 'configmap', 'opensphere-initial-admin',
     `--from-literal=username=${initialAdmin.username}`,
     `--from-literal=displayName=${initialAdmin.displayName}`,
     `--from-literal=email=${initialAdmin.email}`,
+    `--from-literal=state=${state}`,
     '--dry-run=client', '-o', 'yaml'
   ], { capture: true });
   applyYaml(yaml);
@@ -982,24 +1061,7 @@ function openBrowser(url) {
   child.unref();
 }
 
-function defaultOnboardingUrlFile() {
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return join(homedir(), '.opensphere', 'onboarding', `initial-admin-${stamp}.url`);
-}
-
-// Do not print the one-time onboarding URL: its reset token is a credential.
-// A headless bootstrap receives the URL through a new user-private file instead.
-export async function writeOnboardingUrl(url, target = defaultOnboardingUrlFile()) {
-  const destination = resolve(target);
-  await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
-  await writeFile(destination, `${url}\n`, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
-  // chmod is meaningful on POSIX; on Windows the user profile ACL remains the
-  // access boundary. Never fall back to stdout if a private file cannot be made.
-  await chmod(destination, 0o600).catch(() => {});
-  return destination;
-}
-
-async function provisionInitialAdmin({ username, displayName, email }, consoleUrl, { rotateServiceCredentials = false, authEnvironment = 'development' } = {}) {
+async function provisionInitialAdmin({ username, displayName, email }, consoleUrl, { rotateServiceCredentials = false, authEnvironment = 'development', browserSetup = false } = {}) {
   let serviceCredentialsExist = true;
   for (const name of ['opensphere-identity-kanidm', 'opensphere-rolemgr-kanidm']) {
     try { kubectl(['-n', 'opensphere-console', 'get', 'secret', name], { capture: true }); }
@@ -1031,7 +1093,8 @@ async function provisionInitialAdmin({ username, displayName, email }, consoleUr
         OPENSPHERE_INITIAL_ADMIN_EMAIL: email,
         OPENSPHERE_SKIP_SERVICE_TOKENS: String(serviceCredentialsExist && !rotateServiceCredentials),
         OPENSPHERE_SERVICE_TOKEN_TTL_DAYS: '30',
-        OPENSPHERE_AUTH_ENVIRONMENT: validateAuthEnvironment(authEnvironment)
+        OPENSPHERE_AUTH_ENVIRONMENT: validateAuthEnvironment(authEnvironment),
+        OPENSPHERE_BROWSER_SETUP: String(browserSetup)
       }
     });
     if (provision.status !== 0) {
@@ -1040,20 +1103,15 @@ async function provisionInitialAdmin({ username, displayName, email }, consoleUr
     let result;
     try { result = JSON.parse(provision.stdout.trim()); }
     catch { throw new Error('Initial admin provisioning returned an invalid result'); }
+    if (result.browserSetup || result.onboardingRequired) {
+      console.log('[완료] Console service credential 준비 · 최초 관리자는 첫 접속 Wizard에서 구성');
+      return { onboardingUrl: null, serviceCredentialsCreated: !serviceCredentialsExist, setupRequired: true };
+    }
     if (!result.onboardingRequired) {
       console.log('[재사용] Console service credential과 최초 관리자 credential이 이미 구성됨');
       return { onboardingUrl: null, serviceCredentialsCreated: false };
     }
-    if (!result.resetToken) throw new Error('Initial admin reset token was not returned');
-    console.log(rotateServiceCredentials
-      ? '[완료] Console service credential 교체 및 만료일 갱신'
-      : serviceCredentialsExist
-        ? '[재사용] Console service credential 유지, 최초 관리자 Wizard token 재발급'
-        : '[완료] 최초 관리자와 Console service credential 구성');
-    return {
-      onboardingUrl: `${normalizeConsoleUrl(consoleUrl)}/ui/reset?token=${encodeURIComponent(result.resetToken)}`,
-      serviceCredentialsCreated: !serviceCredentialsExist
-    };
+    throw new Error('Initial administrator provisioning returned an unsupported onboarding result');
   } finally {
     forward.kill();
   }
@@ -1073,7 +1131,7 @@ export async function rotateServiceCredentials() {
   kubectl(['-n', 'opensphere-console', 'rollout', 'restart', 'deployment/opensphere-console-auth', 'deployment/opensphere-console-backend']);
   kubectl(['-n', 'opensphere-console', 'rollout', 'status', 'deployment/opensphere-console-auth', '--timeout=300s']);
   kubectl(['-n', 'opensphere-console', 'rollout', 'status', 'deployment/opensphere-console-backend', '--timeout=300s']);
-  return { consoleUrl, serviceCredentialsRotated: true, onboardingUrl: result.onboardingUrl ?? null };
+  return { consoleUrl, serviceCredentialsRotated: true, setupRequired: Boolean(result.setupRequired) };
 }
 
 export async function bootstrap(lock, {
@@ -1091,7 +1149,6 @@ export async function bootstrap(lock, {
   authEnvironment,
   backupTargetSecret,
   shellTlsSecret,
-  onboardingUrlFile
 } = {}) {
   validateLock(lock);
   const requestedConsoleUrl = normalizeConsoleUrl(consoleUrl);
@@ -1216,13 +1273,33 @@ export async function bootstrap(lock, {
       release.push({ path: spec.path, yaml });
       console.log(`[완료] ${spec.path}`);
     }
+    // The applied release may be a historical signed lock whose own backup manifests
+    // predate the dedicated opensphere_backup boundary. Re-establish the CURRENT
+    // boundary from the applied release now -- after BASE_MANIFESTS are applied but
+    // before the reconcile Job and recovery drill -- so verifyRecovery stays strict.
+    const bootstrapBackupBoundary = establishBootstrapBackupBoundary(lock, release);
+    if (bootstrapBackupBoundary.overlaid) {
+      console.log(`[준비] 전용 백업 경계 호환성 overlay 적용 (${bootstrapBackupBoundary.resources.join(', ')})`);
+    }
     console.log('[대기] Kanidm과 CBS rollout');
     kubectl(['-n', 'opensphere-console-auth', 'rollout', 'status', 'statefulset/kanidm', '--timeout=360s']);
     console.log('[대기] PostgreSQL audit ownership boundary reconcile');
     waitForBackboneBoundaryReconcile(lock);
-    const onboarding = await provisionInitialAdmin(effectiveAdmin, effectiveConsoleUrl, { authEnvironment: effectiveAuthEnvironment });
-    const onboardingUrl = onboarding.onboardingUrl;
-    recordInitialAdmin(effectiveAdmin);
+    // Only a historical release that regressed the boundary (overlaid above) predates the
+    // opensphere_backup login role. Establish that missing role now -- after the release's
+    // own boundary reconcile, before the recovery drill's pg_dump authenticates as it. A
+    // forward release with a fully dedicated boundary was a no-op above and gets no
+    // Setup-owned role Job here.
+    if (bootstrapBackupBoundary.overlaid) {
+      console.log('[준비] 전용 백업 역할 opensphere_backup reconcile');
+      const backupRoleReconcileJob = runBackupRoleReconcile(lock);
+      console.log(`[완료] 전용 백업 역할 reconcile (${backupRoleReconcileJob})`);
+    }
+    const onboarding = await provisionInitialAdmin(effectiveAdmin, effectiveConsoleUrl, {
+      authEnvironment: effectiveAuthEnvironment,
+      browserSetup: !installed,
+    });
+    recordInitialAdmin(effectiveAdmin, installed ? undefined : Boolean(onboarding.setupRequired));
     if (onboarding.serviceCredentialsCreated) {
       kubectl(['-n', 'opensphere-console', 'rollout', 'restart', 'deployment/opensphere-console-auth', 'deployment/opensphere-console-backend']);
     }
@@ -1247,20 +1324,17 @@ export async function bootstrap(lock, {
     });
     recordReleaseInventory(lock, releaseResourceInventory(release));
     console.log(`[완료] OpenSphere Console ${lock.channel} 설치 검증 (${evidence.podCount} pods, ${evidence.serviceCount} services)`);
-    let savedOnboardingUrlFile;
-    if (onboardingUrl && openOnboarding) {
-      openBrowser(onboardingUrl);
-      console.log('[필요] 최초 관리자 Wizard가 브라우저에 열렸습니다. 비밀번호 설정 후 Console 로그인을 완료하세요.');
-    } else if (onboardingUrl) {
-      savedOnboardingUrlFile = await writeOnboardingUrl(onboardingUrl, onboardingUrlFile);
-      console.log(`[필요] 최초 관리자 Wizard URL을 사용자 전용 파일에 저장했습니다: ${savedOnboardingUrlFile}`);
+    if (onboarding.setupRequired && openOnboarding) {
+      openBrowser(effectiveConsoleUrl);
+      console.log('[필요] Console 첫 접속 관리자 구성 Wizard가 브라우저에 열렸습니다.');
+    } else if (onboarding.setupRequired) {
+      console.log(`[필요] ${effectiveConsoleUrl} 에 접속해 최초 관리자 구성 Wizard를 완료하세요.`);
     }
     return {
       lock,
       evidence,
       consoleUrl: effectiveConsoleUrl,
-      onboardingUrl,
-      onboardingUrlFile: savedOnboardingUrlFile,
+      setupRequired: Boolean(onboarding.setupRequired),
       temporaryDirectory: keepTemporaryFiles ? work : undefined
     };
   } finally {

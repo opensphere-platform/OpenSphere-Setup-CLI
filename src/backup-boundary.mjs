@@ -206,3 +206,296 @@ export function buildCompatibilityOverlaySet(boundary, lock, postgresImage) {
     .filter(Boolean)
     .map((resource) => compatibilityBackupOverlay(resource, lock, postgresImage));
 }
+
+// --- Clean-bootstrap compatibility: DERIVE the dedicated boundary from a regressed
+// --- release (there is no live boundary to capture) ---
+//
+// Upgrade/downgrade preserves a live dedicated boundary via captureBackupBoundary +
+// buildCompatibilityOverlaySet. A CLEAN bootstrap of a historical signed lock has no
+// live dedicated resources to capture: the just-applied BASE_MANIFESTS may themselves
+// predate the boundary. The three resources are instead DERIVED from the applied
+// release by transforming their PARSED Kubernetes objects into the dedicated form --
+// never by patching manifest text. Each transform asserts its dedicated postcondition
+// and fails closed with a precise error when a historical shape cannot be safely
+// transformed, so the contract is never weakened (CONSTITUTION-0004 §4.5).
+
+// Repoint (or drop) every backbone-postgres secretKeyRef in a CronJob's pod template.
+// `mapKey(key, envName)` returns the replacement Secret key, null to drop the whole env
+// entry, or the same key for a no-op. Literal env vars and refs to other Secrets are
+// left untouched. Mutates and returns the passed-in CronJob clone.
+function rewriteBackbonePostgresRefs(cronJob, mapKey) {
+  for (const container of allContainers(podSpec(cronJob))) {
+    if (!Array.isArray(container.env)) continue;
+    container.env = container.env.flatMap((entry) => {
+      const ref = entry.valueFrom?.secretKeyRef;
+      if (ref?.name !== 'backbone-postgres' || !ref.key) return [entry];
+      const mapped = mapKey(ref.key, entry.name);
+      if (mapped === null) return [];
+      if (mapped === ref.key) return [entry];
+      return [{ ...entry, valueFrom: { ...entry.valueFrom, secretKeyRef: { ...ref, key: mapped } } }];
+    });
+  }
+  return cronJob;
+}
+
+// A pg_dump/psql role flag naming the constrained console runtime role, in any accepted
+// form (-U console, --username console, --username=console). The database argument
+// (-d console) is deliberately NOT matched, so only the authenticating role is rewritten.
+const CONSOLE_ROLE_FLAG = /((?:-U|--username[=\s])\s*)console\b/g;
+
+// backbone-postgres-backup-scripts: rewrite every console-role pg_dump/psql invocation
+// in every script value to the dedicated read-only opensphere_backup role. Fails closed
+// (rather than injecting a flag into shell text) if the result does not run pg_dump as
+// opensphere_backup -- e.g. a historical script that supplies the role via an env var
+// instead of an inline flag cannot be safely transformed here.
+export function deriveDedicatedBackupScripts(configMap) {
+  const clone = JSON.parse(JSON.stringify(configMap ?? null));
+  const data = clone?.data;
+  if (!data || typeof data !== 'object') {
+    throw new Error(`Cannot derive dedicated ${BACKUP_SCRIPTS_CONFIGMAP_RESOURCE}: no script data to transform`);
+  }
+  for (const [key, value] of Object.entries(data)) {
+    if (typeof value === 'string') data[key] = value.replace(CONSOLE_ROLE_FLAG, (_match, flag) => `${flag}opensphere_backup`);
+  }
+  if (!backupScriptUsesDedicatedRole(clone)) {
+    throw new Error(`Cannot derive dedicated ${BACKUP_SCRIPTS_CONFIGMAP_RESOURCE}: script does not run pg_dump as opensphere_backup after transformation`);
+  }
+  return clone;
+}
+
+// backbone-postgres-backup: rewrite the CronJob so PGPASSWORD binds the dedicated
+// backup_password credential and no backbone-postgres ref keeps the console runtime
+// `password` key. Fails closed if PGPASSWORD is not a backbone-postgres credential to
+// retarget (a literal or foreign-Secret PGPASSWORD cannot be safely made dedicated).
+export function deriveDedicatedBackupCronJob(cronJob) {
+  const clone = JSON.parse(JSON.stringify(cronJob ?? null));
+  if (!('PGPASSWORD' in backbonePostgresEnvRefs(clone))) {
+    throw new Error(`Cannot derive dedicated ${BACKUP_CRONJOB_RESOURCE}: PGPASSWORD is not bound to a backbone-postgres credential`);
+  }
+  rewriteBackbonePostgresRefs(clone, (key, envName) =>
+    (envName === 'PGPASSWORD' || key === 'password') ? 'backup_password' : key);
+  if (!backupCronJobUsesDedicatedRole(clone)) {
+    throw new Error(`Cannot derive dedicated ${BACKUP_CRONJOB_RESOURCE}: console runtime credential still present after transformation`);
+  }
+  return clone;
+}
+
+// backbone-postgres-restore-drill: rewrite the CronJob so POSTGRES_PASSWORD binds the
+// sealed bootstrap operator and NO PGPASSWORD backbone-postgres credential is exposed
+// (restore-drill.sh consumes an inline PGPASSWORD="$POSTGRES_PASSWORD" only). Every
+// backbone-postgres ref other than a dropped PGPASSWORD is pinned to bootstrap_password
+// so no console/backup read credential remains. Fails closed if POSTGRES_PASSWORD is
+// not a backbone-postgres credential to retarget.
+export function deriveDedicatedRestoreDrill(restoreDrill) {
+  const clone = JSON.parse(JSON.stringify(restoreDrill ?? null));
+  if (!('POSTGRES_PASSWORD' in backbonePostgresEnvRefs(clone))) {
+    throw new Error(`Cannot derive dedicated ${RESTORE_DRILL_CRONJOB_RESOURCE}: POSTGRES_PASSWORD is not bound to a backbone-postgres credential`);
+  }
+  rewriteBackbonePostgresRefs(clone, (_key, envName) => envName === 'PGPASSWORD' ? null : 'bootstrap_password');
+  if (!restoreDrillPreservesCredentialBoundary(clone)) {
+    throw new Error(`Cannot derive dedicated ${RESTORE_DRILL_CRONJOB_RESOURCE}: backup/console read credential still exposed after transformation`);
+  }
+  return clone;
+}
+
+// The ordered dedicated overlay set for a clean bootstrap: derive each of the three
+// resources from the applied (regressed) release, then wrap each as an auditable,
+// image-retargeted, annotated compatibility overlay -- scripts ConfigMap first so both
+// CronJobs mount the dedicated backup.sh, then the backup CronJob, then the suspended
+// restore drill. A missing required resource fails closed with a precise error rather
+// than silently establishing a partial boundary.
+export function buildBootstrapBackupBoundaryOverlaySet({ cronJob, configMap, restoreDrill } = {}, lock, postgresImage) {
+  if (!configMap) throw new Error(`Cannot establish the dedicated backup boundary: release is missing ConfigMap ${BACKUP_SCRIPTS_CONFIGMAP_RESOURCE}`);
+  if (!cronJob) throw new Error(`Cannot establish the dedicated backup boundary: release is missing CronJob ${BACKUP_CRONJOB_RESOURCE}`);
+  if (!restoreDrill) throw new Error(`Cannot establish the dedicated backup boundary: release is missing CronJob ${RESTORE_DRILL_CRONJOB_RESOURCE}`);
+  return [
+    deriveDedicatedBackupScripts(configMap),
+    deriveDedicatedBackupCronJob(cronJob),
+    deriveDedicatedRestoreDrill(restoreDrill)
+  ].map((resource) => compatibilityBackupOverlay(resource, lock, postgresImage));
+}
+
+// Pure planner for the clean-bootstrap path: a no-op (empty set) when the applied
+// release already ships all three dedicated resources -- so a forward release's own
+// dedicated backup manifests are never overlaid -- otherwise the ordered dedicated
+// overlay set derived from the release. Callers apply the returned overlays in order.
+export function planBootstrapBackupBoundary(resources, lock, postgresImage) {
+  if (backupBoundaryFullyDedicated(resources)) return [];
+  return buildBootstrapBackupBoundaryOverlaySet(resources, lock, postgresImage);
+}
+
+// --- Setup-owned dedicated backup ROLE reconcile (clean-bootstrap only) ---
+//
+// The overlays above make the scheduled backup CronJob authenticate as the dedicated
+// read-only opensphere_backup PostgreSQL role. But a historical signed release (e.g.
+// dc272f4) predates that role ENTIRELY: its PostgreSQL init and boundary-reconcile SQL
+// never CREATE it. On a clean bootstrap of such a release the role does not exist, so the
+// recovery-drill pg_dump -- now overlaid to run `-U opensphere_backup` -- would fail
+// authentication. (The prior CI backup only passed because it still used the old console
+// role.) When -- and only when -- planBootstrapBackupBoundary actually overlays a
+// regressed release, current Setup must also ESTABLISH the missing role before the
+// recovery drill, WITHOUT weakening verifyRecovery and without touching upgrade/downgrade.
+//
+// This is a Setup-OWNED, auditable, one-shot Kubernetes reconcile expressed as parsed
+// objects (a ConfigMap carrying the shell + SQL, and a Job image-pinned to the applied
+// release's cbsPostgresql image). The Job connects as the sealed bootstrap operator over
+// verify-full TLS (CA mounted from backbone-postgres/ca.crt), reads the dedicated backup
+// credential through psql \getenv (never on argv, never embedded in the SQL) and
+// idempotently CREATE/ALTERs the least-privilege opensphere_backup role, granting it only
+// CONNECT on the console database and pg_read_all_data. It never grants or elevates the
+// constrained console runtime role, never touches OAA, deletes no data, and never uses
+// kubectl exec (CONSTITUTION-0004 §4.5).
+export const BACKUP_ROLE_RECONCILE_RESOURCE = 'setup-backup-role-reconcile';
+export const BACKUP_ROLE = 'opensphere_backup';
+export const BACKUP_ROLE_RECONCILE_ANNOTATION = 'opensphere.io/backup-role';
+const BACKUP_ROLE_BOOTSTRAP_OPERATOR = 'opensphere_db_bootstrap';
+const BACKUP_ROLE_DATABASE = 'console';
+// A cert-SAN-matching host so verify-full validates: New-Certificates.ps1 issues the
+// backbone-postgres leaf for backbone-postgres[.opensphere-backbone.svc[.cluster.local]].
+const BACKUP_ROLE_POSTGRES_HOST = 'backbone-postgres.opensphere-backbone.svc.cluster.local';
+
+// Static, secret-free reconcile SQL. The dedicated backup credential is pulled from the
+// environment via \getenv (so it is never embedded here and never lands on a process
+// argument) and applied through the injection-safe :'...' quoted-literal interpolation.
+// The role is created (or realigned) with an explicit least-privilege attribute set and
+// granted only read access; the constrained console runtime role is never referenced as a
+// grantee or altered. NB: every psql backslash meta-command is written with a doubled
+// backslash so the emitted file carries a single backslash.
+export const BACKUP_ROLE_RECONCILE_SQL = [
+  '\\set ON_ERROR_STOP on',
+  '\\getenv backup_password BACKUP_PASSWORD',
+  "SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'opensphere_backup') AS backup_role_exists \\gset",
+  '\\if :backup_role_exists',
+  'ALTER ROLE opensphere_backup LOGIN NOSUPERUSER INHERIT NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS PASSWORD :\'backup_password\';',
+  '\\else',
+  'CREATE ROLE opensphere_backup LOGIN NOSUPERUSER INHERIT NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS PASSWORD :\'backup_password\';',
+  '\\endif',
+  'GRANT CONNECT ON DATABASE console TO opensphere_backup;',
+  'GRANT pg_read_all_data TO opensphere_backup;',
+  ''
+].join('\n');
+
+// Fail-closed wait for PostgreSQL, then apply the reconcile SQL as the sealed bootstrap
+// operator. The operator password reaches libpq only through PGPASSWORD in the process
+// ENVIRONMENT -- never argv -- and the backup credential is handed to psql by \getenv.
+export const BACKUP_ROLE_RECONCILE_SCRIPT = [
+  '#!/bin/sh',
+  'set -eu',
+  'export PGPASSWORD="$BOOTSTRAP_PASSWORD"',
+  'attempt=0',
+  'until pg_isready -q; do',
+  '  attempt=$((attempt + 1))',
+  '  if [ "$attempt" -ge 60 ]; then',
+  '    echo "PostgreSQL did not become ready for the dedicated backup-role reconcile" >&2',
+  '    exit 1',
+  '  fi',
+  '  sleep 5',
+  'done',
+  'exec psql -v ON_ERROR_STOP=1 --no-psqlrc -f /reconcile/reconcile.sql',
+  ''
+].join('\n');
+
+function backupRoleReconcileAnnotations(lock) {
+  return {
+    [COMPATIBILITY_OVERLAY_ANNOTATION]: COMPATIBILITY_OVERLAY_VALUE,
+    [BACKUP_ROLE_RECONCILE_ANNOTATION]: BACKUP_ROLE,
+    'opensphere.io/overlay-release': lock.releaseDigest,
+    'opensphere.io/overlay-source-revision': lock.sourceRevision
+  };
+}
+
+// Setup-owned ConfigMap carrying the reconcile shell + SQL (no secrets), annotated for
+// audit. The Job mounts it read-only.
+export function buildBackupRoleReconcileConfigMap(lock) {
+  return {
+    apiVersion: 'v1',
+    kind: 'ConfigMap',
+    metadata: {
+      name: BACKUP_ROLE_RECONCILE_RESOURCE,
+      namespace: 'opensphere-backbone',
+      labels: { 'app.kubernetes.io/managed-by': 'opensphere-setup' },
+      annotations: backupRoleReconcileAnnotations(lock)
+    },
+    data: {
+      'reconcile.sh': BACKUP_ROLE_RECONCILE_SCRIPT,
+      'reconcile.sql': BACKUP_ROLE_RECONCILE_SQL
+    }
+  };
+}
+
+// Setup-owned one-shot Job, image-pinned to lock.components.cbsPostgresql.image EXACTLY.
+// Hardened: automountServiceAccountToken false, restricted pod/container securityContext,
+// read-only root fs (with a writable emptyDir /tmp for libpq), CA mounted from
+// backbone-postgres/ca.crt for verify-full TLS, and both PostgreSQL credentials wired only
+// as backbone-postgres secretKeyRefs (never inline literals, never argv).
+export function buildBackupRoleReconcileJob(lock) {
+  const image = lock.components.cbsPostgresql.image;
+  const annotations = backupRoleReconcileAnnotations(lock);
+  const labels = { 'app.kubernetes.io/managed-by': 'opensphere-setup' };
+  return {
+    apiVersion: 'batch/v1',
+    kind: 'Job',
+    metadata: {
+      name: BACKUP_ROLE_RECONCILE_RESOURCE,
+      namespace: 'opensphere-backbone',
+      labels,
+      annotations
+    },
+    spec: {
+      backoffLimit: 2,
+      activeDeadlineSeconds: 600,
+      template: {
+        metadata: { labels, annotations },
+        spec: {
+          restartPolicy: 'Never',
+          automountServiceAccountToken: false,
+          securityContext: {
+            runAsNonRoot: true,
+            runAsUser: 999,
+            runAsGroup: 999,
+            fsGroup: 999,
+            seccompProfile: { type: 'RuntimeDefault' }
+          },
+          containers: [{
+            name: 'reconcile',
+            image,
+            command: ['/bin/sh', '/reconcile/reconcile.sh'],
+            workingDir: '/tmp',
+            env: [
+              { name: 'HOME', value: '/tmp' },
+              { name: 'PGHOST', value: BACKUP_ROLE_POSTGRES_HOST },
+              { name: 'PGPORT', value: '5432' },
+              { name: 'PGDATABASE', value: BACKUP_ROLE_DATABASE },
+              { name: 'PGUSER', value: BACKUP_ROLE_BOOTSTRAP_OPERATOR },
+              { name: 'PGSSLMODE', value: 'verify-full' },
+              { name: 'PGSSLROOTCERT', value: '/tls/ca.crt' },
+              { name: 'BOOTSTRAP_PASSWORD', valueFrom: { secretKeyRef: { name: 'backbone-postgres', key: 'bootstrap_password' } } },
+              { name: 'BACKUP_PASSWORD', valueFrom: { secretKeyRef: { name: 'backbone-postgres', key: 'backup_password' } } }
+            ],
+            securityContext: {
+              allowPrivilegeEscalation: false,
+              readOnlyRootFilesystem: true,
+              capabilities: { drop: ['ALL'] }
+            },
+            volumeMounts: [
+              { name: 'reconcile', mountPath: '/reconcile', readOnly: true },
+              { name: 'tls', mountPath: '/tls', readOnly: true },
+              { name: 'tmp', mountPath: '/tmp' }
+            ]
+          }],
+          volumes: [
+            { name: 'reconcile', configMap: { name: BACKUP_ROLE_RECONCILE_RESOURCE } },
+            { name: 'tls', secret: { secretName: 'backbone-postgres', items: [{ key: 'ca.crt', path: 'ca.crt' }] } },
+            { name: 'tmp', emptyDir: {} }
+          ]
+        }
+      }
+    }
+  };
+}
+
+// The ordered manifests for the Setup-owned role reconcile: the ConfigMap first (so the
+// Job's pod can mount the shell + SQL), then the image-pinned Job.
+export function buildBackupRoleReconcileManifests(lock) {
+  return [buildBackupRoleReconcileConfigMap(lock), buildBackupRoleReconcileJob(lock)];
+}
