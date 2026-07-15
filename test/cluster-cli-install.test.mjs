@@ -18,12 +18,30 @@ test('bootstrap artifact transport uses a local Console Service tunnel, not the 
     }
   });
   assert.deepEqual(tunnelOptions, {
-    namespace: 'opensphere-console', service: 'opensphere-console-ext', remotePort: 8090, label: 'Console artifact download'
+    namespace: 'opensphere-console', service: 'opensphere-console-ext', remotePort: 8090, label: 'Console artifact download', protocol: 'https'
   });
   assert.deepEqual(installOptions, {
     consoleUrl: 'https://localhost:49152', installDirectory: '/tmp/os', insecureSkipTlsVerify: true, updatePath: true
   });
   assert.equal(result.version, '0.4.0');
+});
+
+test('edge loopback HTTP keeps CLI artifact transport on the configured service protocol', async () => {
+  let tunnelOptions;
+  let installOptions;
+  await installConsoleCliFromCluster({ consoleUrl: 'http://localhost:8090' }, {
+    tunnel: async (options, operation) => {
+      tunnelOptions = options;
+      return operation('http://localhost:49154');
+    },
+    install: async (options) => {
+      installOptions = options;
+      return { version: '0.4.0', target: '/tmp/os/os' };
+    }
+  });
+  assert.equal(tunnelOptions.protocol, 'http');
+  assert.equal(installOptions.consoleUrl, 'http://localhost:49154');
+  assert.equal(installOptions.insecureSkipTlsVerify, false);
 });
 
 test('service port-forward binds loopback and honors the selected Kubernetes context', () => {

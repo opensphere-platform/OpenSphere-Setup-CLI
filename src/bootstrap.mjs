@@ -878,6 +878,10 @@ function recordInitialAdmin(initialAdmin, setupRequired) {
   applyYaml(yaml);
 }
 
+export function shouldUseBrowserSetup(installed, recordedAdmin) {
+  return !installed || recordedAdmin?.state !== 'complete';
+}
+
 function readInitialAdmin() {
   const json = kubectl([
     '-n', 'opensphere-console', 'get', 'configmap', 'opensphere-initial-admin',
@@ -1301,9 +1305,13 @@ export async function bootstrap(lock, {
       const backupRoleReconcileJob = runBackupRoleReconcile(lock);
       console.log(`[완료] 전용 백업 역할 reconcile (${backupRoleReconcileJob})`);
     }
+    const recordedAdmin = installed ? readInitialAdmin() : null;
     const onboarding = await provisionInitialAdmin(effectiveAdmin, effectiveConsoleUrl, {
       authEnvironment: effectiveAuthEnvironment,
-      browserSetup: !installed,
+      // A retry after a post-provision verification failure already has an
+      // installation lock. It must still preserve the browser-owned human
+      // credential boundary until the Wizard itself records completion.
+      browserSetup: shouldUseBrowserSetup(installed, recordedAdmin),
     });
     recordInitialAdmin(effectiveAdmin, installed ? undefined : Boolean(onboarding.setupRequired));
     if (onboarding.serviceCredentialsCreated) {

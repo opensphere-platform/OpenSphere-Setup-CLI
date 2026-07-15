@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
+import { shouldUseBrowserSetup } from '../src/bootstrap.mjs';
 
 const bootstrap = await readFile(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
 const provision = await readFile(new URL('../src/provision-admin.mjs', import.meta.url), 'utf8');
@@ -10,11 +11,19 @@ const acceptance = await readFile(new URL('../scripts/e2e-first-admin.mjs', impo
 
 test('clean bootstrap delegates human credentials to the Console first-access Wizard', () => {
   assert.match(bootstrap, /OPENSPHERE_BROWSER_SETUP:\s*String\(browserSetup\)/);
-  assert.match(bootstrap, /browserSetup:\s*!installed/);
+  assert.match(bootstrap, /browserSetup:\s*shouldUseBrowserSetup\(installed, recordedAdmin\)/);
   assert.match(provision, /The Console first-access Wizard owns the one-time credential-update session/);
   assert.doesNotMatch(provision, /_credential\/_update_intent\/3600/);
   assert.match(bootstrap, /function recordInitialAdmin[\s\S]{0,500}const existing = readInitialAdmin\(\)/);
   assert.match(bootstrap, /opensphere-initial-admin'[\s\S]{0,120}'--ignore-not-found'/);
+});
+
+test('bootstrap resume never creates the human administrator behind a required Wizard', () => {
+  assert.equal(shouldUseBrowserSetup(false, null), true);
+  assert.equal(shouldUseBrowserSetup(true, undefined), true);
+  assert.equal(shouldUseBrowserSetup(true, { state: 'required' }), true);
+  assert.equal(shouldUseBrowserSetup(true, { state: 'claiming' }), true);
+  assert.equal(shouldUseBrowserSetup(true, { state: 'complete' }), false);
 });
 
 test('Setup never prints or persists a credential-reset URL', () => {

@@ -1,3 +1,4 @@
+import http from 'node:http';
 import https from 'node:https';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -84,6 +85,31 @@ function getJson(args) {
 function httpsGet(url, timeoutMs = 10_000) {
   return new Promise((resolve, reject) => {
     const request = https.get(url, { rejectUnauthorized: false, timeout: timeoutMs }, (response) => {
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.on('end', () => {
+        const buffer = Buffer.concat(chunks);
+        resolve({
+          status: response.statusCode,
+          contentType: String(response.headers['content-type'] ?? '').split(';')[0],
+          body: buffer.toString('utf8'),
+          buffer
+        });
+      });
+    });
+    request.on('timeout', () => request.destroy(new Error(`HTTP timeout: ${url}`)));
+    request.on('error', reject);
+  });
+}
+
+function consoleGet(url, timeoutMs = 10_000) {
+  const target = new URL(url);
+  const client = target.protocol === 'http:' ? http : https;
+  return new Promise((resolve, reject) => {
+    const request = client.get(target, {
+      ...(target.protocol === 'https:' ? { rejectUnauthorized: false } : {}),
+      timeout: timeoutMs
+    }, (response) => {
       const chunks = [];
       response.on('data', (chunk) => chunks.push(chunk));
       response.on('end', () => {
@@ -411,14 +437,15 @@ async function verifyHttp(consoleUrl) {
     '-n', 'opensphere-console', 'port-forward', 'svc/opensphere-console-ext', `${port}:8090`, '--address', '127.0.0.1'
   ];
   const forward = spawn('kubectl', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
-  const base = `https://localhost:${port}`;
+  const protocol = new URL(normalizeConsoleUrl(consoleUrl)).protocol;
+  const base = `${protocol}//localhost:${port}`;
   try {
     await waitForForward(forward, 'Console');
     const required = requiredUrls(base);
     const results = [];
     for (const [url, expectedContentType] of required) {
       const response = await eventually(async () => {
-        const current = await httpsGet(url);
+        const current = await consoleGet(url);
         if (current.status !== 200) throw new Error(`${url} returned HTTP ${current.status}`);
         if (current.contentType !== expectedContentType) {
           throw new Error(`${url} returned ${current.contentType}, expected ${expectedContentType}`);
@@ -427,24 +454,24 @@ async function verifyHttp(consoleUrl) {
       });
       results.push({ url, status: response.status, contentType: response.contentType });
     }
-    const discovery = JSON.parse((await httpsGet(required[2][0])).body);
+    const discovery = JSON.parse((await consoleGet(required[2][0])).body);
     if (discovery.issuer !== oidcIssuer(consoleUrl)) {
       throw new Error(`OIDC issuer is incorrect: ${discovery.issuer}`);
     }
-    const bff = JSON.parse((await httpsGet(`${base}/bff/healthz`)).body);
+    const bff = JSON.parse((await consoleGet(`${base}/bff/healthz`)).body);
     if (bff.ready !== true || bff.credentialStore !== true || bff.authPolicy !== true) {
       throw new Error('Console BFF dependency readiness is not healthy');
     }
-    const registry = JSON.parse((await httpsGet(`${base}/api/v1/registry`)).body);
+    const registry = JSON.parse((await consoleGet(`${base}/api/v1/registry`)).body);
     if (registry.version !== 3 || !Array.isArray(registry.plugins) || typeof registry.trustedKeys !== 'object') {
       throw new Error('Console Registry contract is not ready');
     }
-    const cli = JSON.parse((await httpsGet(`${base}/api/cli/index.json`)).body);
+    const cli = JSON.parse((await consoleGet(`${base}/api/cli/index.json`)).body);
     if (cli.ownership !== 'console-native' || !Array.isArray(cli.links) || cli.links.length === 0) {
       throw new Error('Console-native CLI manifest is not ready');
     }
     for (const link of cli.links) {
-      const artifact = await httpsGet(new URL(link.href, `${base}/`));
+      const artifact = await consoleGet(new URL(link.href, `${base}/`));
       if (artifact.status !== 200) throw new Error(`CLI artifact ${link.href} returned HTTP ${artifact.status}`);
       if (artifact.buffer.length !== link.size) throw new Error(`CLI artifact ${link.href} size differs from its manifest`);
       const digest = createHash('sha256').update(artifact.buffer).digest('hex');

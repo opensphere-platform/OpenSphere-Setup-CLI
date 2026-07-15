@@ -201,6 +201,7 @@ async function main() {
       openOnboarding: !hasOption('--no-open-browser'),
     });
     const installedCli = await installConsoleCliFromCluster({
+      consoleUrl: bootstrapResult.consoleUrl,
       installDirectory: option('--install-dir', undefined),
       updatePath: hasOption('--add-to-path')
     });
