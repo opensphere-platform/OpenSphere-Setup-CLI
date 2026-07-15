@@ -363,6 +363,15 @@ async function prepareUpgradePrerequisites(consoleUrl) {
   if (ensureGenericSecret('opensphere-backbone', 'backbone-postgres', { oaa_password: hex(32) }, {})) {
     changed = true;
   }
+  // A legacy/pre-backup-role installation may lack the dedicated opensphere_backup
+  // credential. backbone.yaml's init/reconcile provisioning and the backup CronJob
+  // all require backbone-postgres/backup_password before applyRelease's Backbone
+  // boundary reconcile Job runs, so backfill it here unconditionally (same rationale
+  // as oaa_password above). ensureGenericSecret only adds the key when absent; an
+  // already-installed backup credential is never rotated by an upgrade.
+  if (ensureGenericSecret('opensphere-backbone', 'backbone-postgres', { backup_password: hex(32) }, {})) {
+    changed = true;
+  }
   const needsPostgresTls = tlsSecretNeedsDnsName('opensphere-backbone', 'backbone-postgres-tls', 'backbone-postgres.opensphere-backbone.svc.cluster.local');
   const needsRustfsTls = tlsSecretNeedsDnsName('opensphere-backbone', 'backbone-rustfs-tls', RUSTFS_DNS_NAME);
   if (!needsPostgresTls && !needsRustfsTls) {
@@ -1078,7 +1087,14 @@ export async function bootstrap(lock, {
       // backend/backbone/bootstrap/backbone.yaml in OpenSphere-console). ensureGenericSecret
       // only ever adds this key when absent, so a rerun/upgrade preserves the existing
       // value rather than rotating it.
-      oaa_password: hex(32)
+      oaa_password: hex(32),
+      // Dedicated, independently-generated credential for the least-privilege
+      // opensphere_backup PostgreSQL role used only by the scheduled pg_dump job --
+      // never the Console runtime `password`, the superuser `bootstrap_password`, or
+      // the OAA `oaa_password`. Consumed by the empty-PVC init script, the boundary
+      // reconcile Job, and the backup CronJob (backend/backbone/bootstrap/backbone.yaml
+      // in OpenSphere-console). Added only when absent, so a rerun/upgrade preserves it.
+      backup_password: hex(32)
     }, { 'ca.crt': ca });
     ensureTlsSecret('opensphere-backbone', 'backbone-postgres-tls', cert, key);
     ensureTlsSecret('opensphere-backbone', 'backbone-rustfs-tls', cert, key);

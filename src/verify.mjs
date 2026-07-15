@@ -25,8 +25,11 @@ const REQUIRED_SECRETS = Object.freeze({
   // gateway (CONSTITUTION-0004 §4.5 OAA bootstrap boundary) -- it must never default to or
   // reuse the `password` key (the constrained Console runtime role). Verification fails closed
   // if oaa_password would be absent, matching the Backbone bootstrap/reconcile requirement that
-  // consumes it (backend/backbone/bootstrap/backbone.yaml in OpenSphere-console).
-  'opensphere-backbone/backbone-postgres': ['password', 'bootstrap_password', 'oaa_password'],
+  // consumes it (backend/backbone/bootstrap/backbone.yaml in OpenSphere-console). backup_password
+  // is the equally-dedicated credential for the read-only opensphere_backup role that the
+  // scheduled pg_dump job authenticates as -- also distinct from `password` and required so the
+  // Setup-created backup job never falls back to the console runtime role.
+  'opensphere-backbone/backbone-postgres': ['password', 'bootstrap_password', 'oaa_password', 'backup_password'],
   'opensphere-backbone/backbone-rustfs': ['access_key', 'secret_key', 'endpoint'],
   'opensphere-backbone/backbone-postgres-backup-target': ['endpoint', 'bucket', 'access_key', 'secret_key', 'ca.crt', 'region'],
   'opensphere-backbone/backbone-rustfs-tls': ['tls.crt', 'tls.key'],
