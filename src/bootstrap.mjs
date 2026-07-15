@@ -63,8 +63,18 @@ export const BASE_MANIFESTS = Object.freeze([
     ['opensphere-backbone-rustfs@sha256:[a-f0-9]+', 'cbsRustfs'],
     ['opensphere-backbone-gitea@sha256:[a-f0-9]+', 'cbsGitea']
   ] },
+  // Only the canonical ghcr.io/opensphere-platform/opensphere-console-oaa-gateway
+  // repository is matched; alternate registries/orgs/repos are intentionally
+  // left unreplaced so the governed-image validator below rejects them. Both
+  // branches stop at the first character outside a strict allow-list, so the
+  // match cannot bleed into surrounding YAML quotes, comments, or whitespace:
+  //   @sha256:<placeholder-or-hex>  -- e.g. the source's
+  //       __OAA_GATEWAY_IMAGE_DIGEST__ placeholder, or a real historical
+  //       @sha256:<64hex> digest from a previously signed release.
+  //   :<tag>                        -- e.g. a historical signed release's
+  //       mutable-tag reference such as :2.0.0-rc.1.
   { path: 'backend/backbone/console-services.yaml', replacements: [
-    ['ghcr\\.io/opensphere-platform/opensphere-console-oaa-gateway@sha256:[^\\s]+', 'oaaGateway']
+    ['ghcr\\.io/opensphere-platform/opensphere-console-oaa-gateway(?:@sha256:[A-Za-z0-9_]+|:[A-Za-z0-9][A-Za-z0-9._-]*)', 'oaaGateway']
   ] },
   { path: 'backend/dupa-control/backboneclaim-crd.yaml' },
   { path: 'backend/dupa-control/ui-plugin-crds.yaml' },

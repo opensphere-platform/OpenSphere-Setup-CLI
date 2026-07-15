@@ -8,20 +8,30 @@ test('base bootstrap manifests deploy OAA Core as required native Main Shell run
   assert.equal(paths.includes('backend/backbone/console-services.yaml'), true);
 });
 
-test('the OAA Core manifest replaces its canonical digest placeholder with the locked oaaGateway image', () => {
+test('the OAA Core manifest replacement targets only the canonical oaaGateway repository', () => {
   const spec = BASE_MANIFESTS.find((manifest) => manifest.path === 'backend/backbone/console-services.yaml');
   assert.ok(spec, 'console-services.yaml must be a base manifest');
   assert.deepEqual(spec.replacements, [
-    ['ghcr\\.io/opensphere-platform/opensphere-console-oaa-gateway@sha256:[^\\s]+', 'oaaGateway']
+    ['ghcr\\.io/opensphere-platform/opensphere-console-oaa-gateway(?:@sha256:[A-Za-z0-9_]+|:[A-Za-z0-9][A-Za-z0-9._-]*)', 'oaaGateway']
   ]);
 });
 
-// The real source manifest pins an underscore placeholder, not a hex digest:
-// ghcr.io/opensphere-platform/opensphere-console-oaa-gateway@sha256:__OAA_GATEWAY_IMAGE_DIGEST__
-// A hex-only pattern (`[a-f0-9]+`) cannot match this and would leave the
-// placeholder unresolved, causing clean Setup to fail the governed-image
-// gate. Replay the exact fetchManifest replacement and final validator here.
-test('the OAA Core replacement resolves the real underscore digest placeholder to the canonical governed image', () => {
+// Replay the exact fetchManifest replacement and its final governed-image
+// validator (the same `image:` line regex fetchManifest applies) against
+// every historically-observed source form of the OAA reference, so a clean
+// bootstrap or an upgrade/rollback to any signed prior release keeps working:
+//   1. the current source's underscore digest placeholder
+//   2. an already-resolved canonical @sha256 digest (e.g. a prior lock file
+//      replayed verbatim, or a source revision that pinned a real digest)
+//   3. a historical signed release that pinned the canonical repo with a
+//      mutable tag (the exact CI failure: :2.0.0-rc.1)
+// A substituted repo/org must NOT be replaced and must still fail the
+// validator -- governed image acceptance stays scoped to the canonical repo.
+function finalGovernedImageValidator(imageLine) {
+  return /^ghcr\.io\/opensphere-platform\/[a-z0-9-]+@sha256:[a-f0-9]{64}$/.test(imageLine);
+}
+
+function replayOaaReplacement(sourceImageRef) {
   const spec = BASE_MANIFESTS.find((manifest) => manifest.path === 'backend/backbone/console-services.yaml');
   const [[pattern, component]] = spec.replacements;
   assert.equal(component, 'oaaGateway');
@@ -34,18 +44,66 @@ test('the OAA Core replacement resolves the real underscore digest placeholder t
     '    spec:',
     '      containers:',
     '        - name: oaa-gateway',
-    '          image: ghcr.io/opensphere-platform/opensphere-console-oaa-gateway@sha256:__OAA_GATEWAY_IMAGE_DIGEST__'
+    `          image: ${sourceImageRef} # pinned by release manifest`
   ].join('\n');
 
   const resolved = sourceYaml.replace(new RegExp(pattern, 'g'), canonicalImage);
-  assert.doesNotMatch(resolved, /__OAA_GATEWAY_IMAGE_DIGEST__/);
-  assert.match(resolved, new RegExp(`image: ${canonicalImage.replace(/[.+]/g, '\\$&')}$`, 'm'));
-
-  // This is the same final governed-image validator fetchManifest applies;
-  // it must not be weakened to accept the replacement result.
   const imageLine = resolved.match(/^[ \t]*image:[ \t]+["']?([^"'#\s]+)/m)[1];
-  assert.match(imageLine, /^ghcr\.io\/opensphere-platform\/[a-z0-9-]+@sha256:[a-f0-9]{64}$/);
+  return { resolved, imageLine, canonicalImage };
+}
+
+test('the OAA Core replacement resolves the current underscore digest placeholder to the canonical governed image', () => {
+  const { resolved, imageLine, canonicalImage } = replayOaaReplacement(
+    'ghcr.io/opensphere-platform/opensphere-console-oaa-gateway@sha256:__OAA_GATEWAY_IMAGE_DIGEST__'
+  );
+  assert.doesNotMatch(resolved, /__OAA_GATEWAY_IMAGE_DIGEST__/);
   assert.equal(imageLine, canonicalImage);
+  assert.ok(finalGovernedImageValidator(imageLine), 'must not be weakened to accept the replacement result');
+});
+
+test('the OAA Core replacement resolves an exact canonical @sha256 digest reference to the locked governed image', () => {
+  const historicalDigest = `sha256:${'b'.repeat(64)}`;
+  const { imageLine, canonicalImage } = replayOaaReplacement(
+    `ghcr.io/opensphere-platform/opensphere-console-oaa-gateway@${historicalDigest}`
+  );
+  assert.equal(imageLine, canonicalImage);
+  assert.ok(finalGovernedImageValidator(imageLine));
+});
+
+// This is the observed CI failure (run 29385717474): a historical signed
+// release pinned the canonical OAA repository with a mutable tag, and clean
+// bootstrap / previous-release rollback against that source revision must
+// still rewrite it to the locked, digest-pinned governed image.
+test('the OAA Core replacement resolves an exact canonical :tag reference (2.0.0-rc.1) to the locked governed image', () => {
+  const { imageLine, canonicalImage } = replayOaaReplacement(
+    'ghcr.io/opensphere-platform/opensphere-console-oaa-gateway:2.0.0-rc.1'
+  );
+  assert.equal(imageLine, canonicalImage);
+  assert.ok(finalGovernedImageValidator(imageLine));
+});
+
+test('the OAA Core replacement does not broaden acceptance to a substituted repository/org and the result still fails the governed-image validator', () => {
+  const { imageLine } = replayOaaReplacement(
+    'ghcr.io/some-other-org/opensphere-console-oaa-gateway:2.0.0-rc.1'
+  );
+  assert.equal(imageLine, 'ghcr.io/some-other-org/opensphere-console-oaa-gateway:2.0.0-rc.1');
+  assert.ok(!finalGovernedImageValidator(imageLine), 'a non-canonical repo/org must remain unreplaced and rejected');
+});
+
+test('the OAA Core replacement regex stops at YAML token boundaries and does not consume quotes, comments, or whitespace', () => {
+  const spec = BASE_MANIFESTS.find((manifest) => manifest.path === 'backend/backbone/console-services.yaml');
+  const [[pattern]] = spec.replacements;
+  const re = new RegExp(pattern);
+
+  const quoted = re.exec('image: "ghcr.io/opensphere-platform/opensphere-console-oaa-gateway:2.0.0-rc.1"');
+  assert.ok(quoted, 'must match inside a quoted scalar');
+  assert.equal(quoted[0], 'ghcr.io/opensphere-platform/opensphere-console-oaa-gateway:2.0.0-rc.1');
+
+  const commented = re.exec('image: ghcr.io/opensphere-platform/opensphere-console-oaa-gateway:2.0.0-rc.1 # pinned');
+  assert.equal(commented[0], 'ghcr.io/opensphere-platform/opensphere-console-oaa-gateway:2.0.0-rc.1');
+
+  const digestPlaceholder = re.exec('image: ghcr.io/opensphere-platform/opensphere-console-oaa-gateway@sha256:__OAA_GATEWAY_IMAGE_DIGEST__\n');
+  assert.equal(digestPlaceholder[0], 'ghcr.io/opensphere-platform/opensphere-console-oaa-gateway@sha256:__OAA_GATEWAY_IMAGE_DIGEST__');
 });
 
 test('upgrade materialization uses the canonical base manifest set', () => {
