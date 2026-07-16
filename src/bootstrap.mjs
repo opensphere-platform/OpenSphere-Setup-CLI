@@ -66,6 +66,7 @@ export const MANAGED_CLUSTER_RBAC = Object.freeze([
   'clusterrolebinding/opensphere-console-oaa-gateway-environment-reader',
   'clusterrole/dupa-backbone-installer',
   'clusterrole/opensphere-module-cluster-observer-v1',
+  'clusterrole/opensphere-module-cluster-his-manager-v1',
   'clusterrole/dupa-module-profile-installer',
   'clusterrole/opensphere-console-backend',
   'clusterrole/opensphere-console-oaa-gateway-environment-reader'

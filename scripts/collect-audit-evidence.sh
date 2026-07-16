@@ -39,6 +39,7 @@ capture opensphere-cluster-rbac.yaml kubectl --context "$context" get \
   clusterrole/dupa-module-profile-installer \
   clusterrole/opensphere-console-backend \
   clusterrole/opensphere-module-cluster-observer-v1 \
+  clusterrole/opensphere-module-cluster-his-manager-v1 \
   clusterrolebinding/dupa-backbone-installer \
   clusterrolebinding/dupa-module-profile-installer \
   clusterrolebinding/opensphere-console-backend \
