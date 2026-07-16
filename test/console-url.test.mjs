@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   configureShellServiceEndpoint,
   defaultConsoleUrl,
+  isLegacyEdgeLoopbackHttpOrigin,
   normalizeConsoleUrl,
   oidcIssuer
 } from '../src/console-url.mjs';
@@ -16,12 +17,27 @@ test('Console endpoint is an exact HTTPS origin shared by OIDC and CLI', () => {
   );
 });
 
-test('edge development has a zero-trust-prompt loopback default', () => {
-  assert.equal(defaultConsoleUrl('edge', 'development'), 'http://localhost:8090');
+test('every managed channel has one canonical HTTPS localhost default', () => {
+  assert.equal(defaultConsoleUrl('edge', 'development'), 'https://localhost:8090');
   assert.equal(defaultConsoleUrl('edge', 'production'), 'https://localhost:8090');
   assert.equal(defaultConsoleUrl('stable', 'production'), 'https://localhost:8090');
   assert.equal(normalizeConsoleUrl('http://localhost:8090/'), 'http://localhost:8090');
   assert.equal(normalizeConsoleUrl('http://127.0.0.1:8090'), 'http://127.0.0.1:8090');
+});
+
+test('only the temporary edge/development loopback HTTP default is repairable in place', () => {
+  assert.equal(isLegacyEdgeLoopbackHttpOrigin({
+    channel: 'edge', authEnvironment: 'development',
+    storedUrl: 'http://localhost:8090', requestedUrl: 'https://localhost:8090'
+  }), true);
+  assert.equal(isLegacyEdgeLoopbackHttpOrigin({
+    channel: 'edge', authEnvironment: 'production',
+    storedUrl: 'http://localhost:8090', requestedUrl: 'https://localhost:8090'
+  }), false);
+  assert.equal(isLegacyEdgeLoopbackHttpOrigin({
+    channel: 'edge', authEnvironment: 'development',
+    storedUrl: 'http://127.0.0.1:8090', requestedUrl: 'https://localhost:8090'
+  }), false);
 });
 
 test('loopback HTTP selects nginx HTTP without weakening the external HTTPS listener', () => {

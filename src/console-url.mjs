@@ -1,12 +1,6 @@
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
-/**
- * Canonical browser origin for a managed Console installation. HTTPS remains
- * mandatory everywhere except an edge/development Console bound to the local
- * host. That narrow HTTP exception makes the first-access wizard usable on a
- * clean workstation without teaching a non-technical operator to install a
- * private root CA or bypass a browser certificate warning.
- */
+/** Canonical browser origin for a managed Console installation. */
 export function normalizeConsoleUrl(value) {
   let url;
   try {
@@ -22,9 +16,17 @@ export function normalizeConsoleUrl(value) {
 }
 
 export function defaultConsoleUrl(channel, authEnvironment) {
-  return channel === 'edge' && authEnvironment === 'development'
-    ? 'http://localhost:8090'
-    : 'https://localhost:8090';
+  return 'https://localhost:8090';
+}
+
+// c8bde85 temporarily made loopback HTTP the edge/development default. A managed
+// installation carrying exactly that origin may be repaired in place when Setup's
+// canonical default returns to HTTPS. No other endpoint change is implicit.
+export function isLegacyEdgeLoopbackHttpOrigin({ channel, authEnvironment, storedUrl, requestedUrl } = {}) {
+  return channel === 'edge'
+    && authEnvironment === 'development'
+    && normalizeConsoleUrl(storedUrl) === 'http://localhost:8090'
+    && normalizeConsoleUrl(requestedUrl) === 'https://localhost:8090';
 }
 
 /**

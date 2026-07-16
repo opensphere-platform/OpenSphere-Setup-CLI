@@ -28,6 +28,7 @@ jobs:
           Get-ChildItem src/*.mjs | ForEach-Object { node --check $_.FullName }
           node --check scripts/e2e-resolve-source-revision.mjs
           node --check scripts/e2e-first-admin.mjs
+          [void][scriptblock]::Create((Get-Content -Raw src/Install-LocalDevelopmentCa.ps1))
           [void][scriptblock]::Create((Get-Content -Raw scripts/e2e-clean-install.ps1))
       # candidate/stable must remain unavailable or fail closed until an
       # explicit promotion publishes a complete dual-architecture release.

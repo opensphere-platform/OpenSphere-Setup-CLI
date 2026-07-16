@@ -11,6 +11,7 @@ import { defaultConsoleUrl, normalizeConsoleUrl } from './console-url.mjs';
 import { selectAuthEnvironment } from './auth-environment.mjs';
 import { assertReleaseShellTlsReference, parseShellTlsSecretRef } from './shell-tls.mjs';
 import { preflightPromotion } from './promotion-preflight.mjs';
+import { resetInitialAdministrator } from './reset-initial-admin.mjs';
 
 function option(names, fallback) {
   const aliases = Array.isArray(names) ? names : [names];
@@ -71,6 +72,7 @@ Usage:
       [--backup-target-secret <namespace/name>] [--add-to-path]
   opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
   opensphere-setup rotate-service-credentials [--context <kube-context>]
+  opensphere-setup reset-initial-admin --confirm RESET-INITIAL-ADMIN [--context <kube-context>]
   opensphere-setup uninstall --purge-data --confirm DELETE-OPENSPHERE [--context <kube-context>]
   opensphere-setup install-cli [--console <url>] [--install-dir <directory>]
       [--insecure-skip-tls-verify] [--add-to-path]
@@ -263,6 +265,13 @@ async function main() {
     if (migrated) console.log(`[마이그레이션] 기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
     const result = await rotateServiceCredentials();
     console.log(`[완료] Console service credentials 회전 (${result.consoleUrl})`);
+    return;
+  }
+
+  if (command === 'reset-initial-admin') {
+    assertKubectl();
+    const result = await resetInitialAdministrator({ confirmation: option('--confirm', '') });
+    console.log(`[완료] 시험 관리자 ${result.username} 제거 및 최초 관리자 Wizard 재개방`);
     return;
   }
 

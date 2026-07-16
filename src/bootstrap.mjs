@@ -11,7 +11,12 @@ import { preflight } from './preflight.mjs';
 import { fetchWithRetry } from './http.mjs';
 import { migrateLegacyReleaseLock, validateLock, verifyReleaseProvenance } from './release.mjs';
 import { verifyInstallation } from './verify.mjs';
-import { configureShellServiceEndpoint, defaultConsoleUrl, normalizeConsoleUrl } from './console-url.mjs';
+import {
+  configureShellServiceEndpoint,
+  defaultConsoleUrl,
+  isLegacyEdgeLoopbackHttpOrigin,
+  normalizeConsoleUrl
+} from './console-url.mjs';
 import { assertReleaseBackupTarget, backupTargetData, inspectBackupTarget, parseBackupTargetSecretRef } from './backup-target.mjs';
 import { selectAuthEnvironment } from './auth-environment.mjs';
 import {
@@ -1212,9 +1217,17 @@ export async function bootstrap(lock, {
     throw new Error(`Installation uses StorageClass ${storedConfig.storageClass}; changing it requires migration`);
   }
   const storedConsoleUrl = storedConfig?.consoleUrl ?? 'https://localhost:8090';
-  const effectiveConsoleUrl = normalizeConsoleUrl(installed ? storedConsoleUrl : requestedConsoleUrl);
   const effectiveAuthEnvironment = selectAuthEnvironment(lock.channel, storedConfig?.authEnvironment ?? requestedAuthEnvironment);
-  if (installed && requestedConsoleUrl !== effectiveConsoleUrl) {
+  const repairLegacyLoopbackHttp = installed && isLegacyEdgeLoopbackHttpOrigin({
+    channel: lock.channel,
+    authEnvironment: effectiveAuthEnvironment,
+    storedUrl: storedConsoleUrl,
+    requestedUrl: requestedConsoleUrl
+  });
+  const effectiveConsoleUrl = normalizeConsoleUrl(
+    installed && !repairLegacyLoopbackHttp ? storedConsoleUrl : requestedConsoleUrl
+  );
+  if (installed && requestedConsoleUrl !== effectiveConsoleUrl && !repairLegacyLoopbackHttp) {
     throw new Error(`Installation uses Console URL ${effectiveConsoleUrl}; changing it requires an endpoint migration`);
   }
   if (installed && requestedAuthEnvironment !== effectiveAuthEnvironment) {
@@ -1236,6 +1249,7 @@ export async function bootstrap(lock, {
   const work = await mkdtemp(join(tmpdir(), 'opensphere-setup-'));
   try {
     console.log(`[완료] Kubernetes 연결 (${cluster.serverVersion}, ${cluster.nodeCount} nodes, StorageClass ${cluster.storageClass})`);
+    if (repairLegacyLoopbackHttp) console.log('[마이그레이션] edge loopback Console origin을 HTTPS로 복구');
     for (const namespace of MANAGED_NAMESPACES) ensureNamespace(namespace);
     const externalShellTls = effectiveShellTls
       ? readSecret(effectiveShellTls.namespace, effectiveShellTls.name)
@@ -1261,6 +1275,21 @@ export async function bootstrap(lock, {
     else ensureTlsSecret('opensphere-console', 'shell-tls', cert, key);
     // The root is a real CA; TLS leaves are never treated as trust anchors.
     ensureGenericSecret('opensphere-console', 'opensphere-console-auth-ca', {}, { 'ca.crt': ca, 'tls.crt': cert });
+    const effectiveConsoleHost = new URL(effectiveConsoleUrl).hostname;
+    const localConsoleHost = ['localhost', '127.0.0.1', '[::1]'].includes(effectiveConsoleHost);
+    if (!externalShellTls && localConsoleHost && lock.channel === 'edge' && effectiveAuthEnvironment === 'development') {
+      const installedCa = readSecret('opensphere-console', 'opensphere-console-auth-ca').data?.['ca.crt'];
+      if (!installedCa) throw new Error('Managed local Console CA is missing');
+      const localCa = join(work, 'opensphere-local-development-ca.crt');
+      await writeFile(localCa, Buffer.from(installedCa, 'base64').toString('utf8'), 'utf8');
+      if (process.platform === 'win32') {
+        run('pwsh', [
+          '-NoProfile', '-NonInteractive', '-File', join(HERE, 'Install-LocalDevelopmentCa.ps1'),
+          '-CertificatePath', localCa
+        ]);
+        console.log('[완료] localhost HTTPS 인증서를 현재 Windows 사용자에 신뢰 등록');
+      }
+    }
     // console-services.yaml mounts this Secret in opensphere-backbone for the
     // OAA gateway's trust anchor. Only the public ca.crt is mirrored here --
     // never the private key or leaf certificate -- and it must exist before
