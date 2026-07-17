@@ -29,7 +29,8 @@ $ClusterRoles = @(
   'opensphere-console-oaa-gateway-controlled-operator',
   'opensphere-console-oaa-gateway-environment-reader',
   'opensphere-module-cluster-observer-v1',
-  'opensphere-module-cluster-his-manager-v1'
+  'opensphere-module-cluster-his-manager-v1',
+  'opensphere-module-cluster-infrastructure-manager-v1'
 )
 $ClusterRoleBindings = @(
   'dupa-backbone-installer',
