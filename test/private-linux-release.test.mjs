@@ -16,7 +16,8 @@ test('private release publisher fails closed for a public repository', () => {
   assert.match(workflow, /opensphere-setup-darwin-amd64/);
   assert.match(workflow, /opensphere-setup-darwin-arm64/);
   assert.match(workflow, /SHA256SUMS/);
-  assert.match(workflow, /gh release verify/);
+  assert.match(workflow, /\.immutable/);
+  assert.match(workflow, /remote_digest/);
   assert.doesNotMatch(workflow, /attest-build-provenance/);
   assert.doesNotMatch(workflow, /npm publish|docker push/);
 });

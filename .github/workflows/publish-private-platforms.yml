@@ -226,15 +226,18 @@ jobs:
           if [[ "$IS_PRERELEASE" == "true" ]]; then args+=(--prerelease); fi
           gh release create "${args[@]}"
 
-      - name: Verify immutable release attestation
+      - name: Validate immutable release and asset digests
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in $(seq 1 24); do
-            if gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"; then
-              exit 0
-            fi
-            sleep 10
+          release="$(gh api \
+            -H 'X-GitHub-Api-Version: 2026-03-10' \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")"
+          test "$(jq -r '.immutable' <<<"$release")" = "true"
+          for file in dist/opensphere-setup-* dist/SHA256SUMS; do
+            name="$(basename "$file")"
+            local_digest="sha256:$(sha256sum "$file" | awk '{print $1}')"
+            remote_digest="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release")"
+            test -n "$remote_digest"
+            test "$local_digest" = "$remote_digest"
           done
-          echo "Immutable release attestation was not available" >&2
-          exit 1

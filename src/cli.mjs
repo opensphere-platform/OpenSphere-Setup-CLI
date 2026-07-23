@@ -80,7 +80,7 @@ async function readLock(lockPath) {
 }
 
 function help() {
-  console.log(`OpenSphere Setup CLI 0.5.0-edge.2
+  console.log(`OpenSphere Setup CLI 0.5.0-edge.3
 
 Usage:
   opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
@@ -143,7 +143,7 @@ async function main() {
   }
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
-  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.2');
+  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.3');
 
   if (command === 'install-cli') {
     const installed = await installConsoleCli({
