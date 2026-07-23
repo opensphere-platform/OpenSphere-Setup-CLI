@@ -29,6 +29,7 @@ import {
   inspectLocalEnvironment
 } from './doctor.mjs';
 import { preflight } from './preflight.mjs';
+import { printOpenSphereBanner } from './banner.mjs';
 
 function option(names, fallback) {
   const aliases = Array.isArray(names) ? names : [names];
@@ -88,7 +89,7 @@ async function readLock(lockPath) {
 }
 
 function help() {
-  console.log(`OpenSphere Setup CLI 0.5.0-edge.4
+  console.log(`OpenSphere Setup CLI 0.5.0-edge.5
 
 Usage:
   opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
@@ -151,7 +152,9 @@ async function main() {
   }
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
-  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.4');
+  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.5');
+
+  printOpenSphereBanner({ command });
 
   if (command === 'install-cli') {
     const installed = await installConsoleCli({

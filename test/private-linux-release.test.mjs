@@ -41,6 +41,8 @@ test('portable archives bundle their required runtimes, including Linux libatomi
   assert.match(portableBuild, /powershell/);
   assert.match(portableBuild, /kubectl/);
   assert.match(portableBuild, /LD_LIBRARY_PATH=/);
+  assert.match(portableBuild, /run\('codesign', \['--force', '--sign', '-', packagedSetup\]\)/);
+  assert.match(portableBuild, /run\('codesign', \['--verify', '--strict', '--verbose=4', packagedSetup\]\)/);
 });
 
 test('private platform installation requires authenticated GitHub download and checksum verification', () => {

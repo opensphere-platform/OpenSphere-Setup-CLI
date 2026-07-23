@@ -36,6 +36,10 @@ Windows amd64, Linux amd64/arm64, macOS amd64/arm64 자체 포함 아카이브�
 `node src/cli.mjs`와 저장소의 `opensphere-setup.cmd`는 내부 개발·진단용 구현 세부사항이며
 설치 문서나 운영 runbook의 사용자 명령으로 사용하지 않는다.
 
+대화형 터미널에서 `bootstrap`, `doctor`, `upgrade` 같은 운영 명령을 시작하면 ANSI Shadow
+OpenSphere 배너를 표시한다. 파이프·CI 및 `version` 같은 기계 판독 출력에는 표시하지
+않는다. 제한된 터미널에서는 `OPENSPHERE_NO_BANNER=1`로 끌 수 있다.
+
 소스 설치 요구 사항은 Node.js 24 이상, PowerShell 7(`pwsh`), GitHub CLI(`gh`),
 `kubectl`, Kubernetes Ready 노드, 기본 또는 명시한 동적 StorageClass이다. 비공개 platform
 아카이브는 Node.js, PowerShell, kubectl과 Linux의 libatomic을 포함한다. 대상 호스트에

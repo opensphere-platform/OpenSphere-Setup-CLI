@@ -43,13 +43,14 @@ if (platform !== 'linux' && libatomic) throw new Error('--libatomic is only vali
 const temporary = await mkdtemp(join(tmpdir(), 'opensphere-platform-runtime-'));
 const packageRoot = join(temporary, `opensphere-setup-${platform}-${architecture}`);
 const runtime = join(packageRoot, 'runtime');
+const packagedSetup = join(packageRoot, platform === 'windows' ? 'opensphere-setup.exe' : 'opensphere-setup');
 try {
   await mkdir(join(runtime, 'bin'), { recursive: true });
   await cp(pwsh, join(runtime, 'pwsh'), { recursive: true });
   await cp(kubectl, join(runtime, 'bin', platform === 'windows' ? 'kubectl.exe' : 'kubectl'));
 
   if (platform === 'windows') {
-    await cp(sea, join(packageRoot, 'opensphere-setup.exe'));
+    await cp(sea, packagedSetup);
   } else if (platform === 'linux') {
     await mkdir(join(runtime, 'lib'), { recursive: true });
     await cp(resolve(libatomic), join(runtime, 'lib', 'libatomic.so.1'));
@@ -63,14 +64,18 @@ export LD_LIBRARY_PATH="$root/runtime/lib\${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 exec "$root/bin/opensphere-setup.bin" "$@"
 `, { mode: 0o755 });
   } else {
-    await cp(sea, join(packageRoot, 'opensphere-setup'));
+    await cp(sea, packagedSetup);
   }
 
   if (platform !== 'windows') {
-    await chmod(join(packageRoot, 'opensphere-setup'), 0o755);
+    await chmod(packagedSetup, 0o755);
     if (platform === 'linux') await chmod(join(packageRoot, 'bin', 'opensphere-setup.bin'), 0o755);
     await chmod(join(runtime, 'pwsh', 'pwsh'), 0o755);
     await chmod(join(runtime, 'bin', 'kubectl'), 0o755);
+  }
+  if (platform === 'darwin') {
+    run('codesign', ['--force', '--sign', '-', packagedSetup]);
+    run('codesign', ['--verify', '--strict', '--verbose=4', packagedSetup]);
   }
   await writeFile(join(packageRoot, 'OPENSPHERE-RUNTIME.json'), `${JSON.stringify({
     name: 'opensphere-setup',

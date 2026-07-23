@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Private release tag, for example setup-v0.5.0-edge.4
+        description: Private release tag, for example setup-v0.5.0-edge.5
         required: true
         type: string
       prerelease:
@@ -198,17 +198,18 @@ jobs:
           $kubectl = Join-Path $root "runtime/bin/$(if ($platform -eq 'windows') { 'kubectl.exe' } else { 'kubectl' })"
           $packageVersion = node -p "require('./package.json').version"
           $expected = "opensphere-setup $packageVersion"
+          if ($platform -eq 'darwin') {
+            codesign --verify --strict --verbose=4 $setup
+          }
           $actual = & $setup version
-          if ($LASTEXITCODE -ne 0 -or $actual -ne $expected) {
-            throw "Setup smoke test failed: $actual (expected $expected)"
+          $setupExitCode = $LASTEXITCODE
+          if ($setupExitCode -ne 0 -or $actual -ne $expected) {
+            throw "Setup smoke test failed with exit code ${setupExitCode}: $actual (expected $expected)"
           }
           & $pwsh -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.ToString()'
           if ($LASTEXITCODE -ne 0) { throw 'Bundled PowerShell smoke test failed' }
           & $kubectl version --client -o json
           if ($LASTEXITCODE -ne 0) { throw 'Bundled kubectl smoke test failed' }
-          if ($platform -eq 'darwin') {
-            codesign --verify --strict --verbose=4 $setup
-          }
 
       - name: Upload platform archive
         uses: actions/upload-artifact@v4
