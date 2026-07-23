@@ -8,7 +8,8 @@
 
 GitHub 저장소의 `Contents: read` 권한이 있는 사용자 또는 fine-grained token만 다운로드할 수
 있다. 실행 파일은 Node.js runtime과 Setup 인증서 생성 asset을 포함하는 단일 Node SEA
-실행 파일이다. 대상 Linux 노드에는 Node.js나 Setup 저장소 clone이 필요하지 않다.
+실행 파일이다. 대상 Linux 노드에는 Node.js, `libatomic` package 또는 Setup 저장소 clone이
+필요하지 않다.
 
 지원 플랫폼:
 
@@ -23,27 +24,14 @@ GitHub 저장소의 `Contents: read` 권한이 있는 사용자 또는 fine-grai
 - `kubectl`
 - PowerShell 7 명령 `pwsh`
 - GitHub CLI 명령 `gh`
-- Node SEA가 동적 연결하는 `libatomic.so.1`
 - GitHub 및 GHCR로 나갈 수 있는 HTTPS 네트워크
 - 대상 Kubernetes context와 동적 StorageClass
 - 비공개 GHCR image를 사용하는 release라면 별도의 package read token
 
-최소 Linux 이미지에는 `libatomic`이 빠져 있을 수 있다. 배포판에 맞게 먼저 설치한다.
-
-```bash
-# Debian / Ubuntu
-sudo apt-get update
-sudo apt-get install -y libatomic1
-
-# RHEL / Rocky / AlmaLinux
-sudo dnf install -y libatomic
-```
-
-확인:
-
-```bash
-ldconfig -p | grep 'libatomic\.so\.1'
-```
+Release asset은 Node SEA, 아키텍처별 `libatomic.so.1`, Node/GCC 재배포 고지문을 포함한다.
+첫 실행에서 `~/.cache/opensphere-setup/<version>/<architecture>`에 private mode로 한 번만
+압축 해제하고 내부 SHA-256 manifest를 확인한다. 이후 실행은 같은 검증된 runtime을 재사용한다.
+따라서 root package 설치나 시스템 `LD_LIBRARY_PATH` 변경이 필요 없다.
 
 GitHub 로그인 상태를 확인한다.
 
@@ -75,7 +63,7 @@ esac
 설치할 private release tag를 지정한 뒤 실행 파일과 체크섬을 인증 다운로드한다.
 
 ```bash
-release=setup-v0.4.0-edge.2
+release=setup-v0.4.0-edge.3
 download_dir="$(mktemp -d)"
 
 gh release download "$release" \
@@ -104,7 +92,7 @@ rm -rf -- "$download_dir"
 예상 버전:
 
 ```text
-opensphere-setup 0.4.0-edge.2
+opensphere-setup 0.4.0-edge.3
 ```
 
 `SHA256SUMS`는 인증된 동일 Release에서 함께 받아 전송 손상이나 asset 혼합을 차단한다.
@@ -179,5 +167,6 @@ Setup 실행 파일 버전과 설치되는 OpenSphere OS release는 별도 잠�
 - GitHub token은 Kubernetes Secret이나 release lock에 저장하지 않는다.
 - GitHub 저장소 접근 token과 GHCR package token은 용도와 권한을 분리한다.
 - 다운로드한 실행 파일은 반드시 같은 Release의 `SHA256SUMS`로 확인한다.
+- 실행 파일이 푼 private runtime과 라이선스는 사용자별 XDG cache에 보관된다.
 - 설치 작업은 전용 관리 노드에서 수행하고 일반 Kubernetes worker에 도구를 상주시킬 필요는 없다.
 - Console TLS, DNS, StorageClass와 복구 정책은 대상 환경에 맞게 사전에 결정한다.

@@ -78,19 +78,78 @@ jobs:
             tar -xJf ".release/node/${archive}" -C .release/node
           done
 
-      - name: Build amd64 and arm64 single executables
+      - name: Download redistributable architecture runtimes
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p dist
+          mkdir -p .release/debs
+          docker run --rm \
+            -v "$PWD/.release/debs:/out" \
+            debian:bookworm-slim bash -lc '
+              set -euo pipefail
+              dpkg --add-architecture arm64
+              apt-get update -qq
+              cd /out
+              apt-get download \
+                libatomic1:amd64 \
+                libatomic1:arm64 \
+                gcc-12-base:amd64 >/dev/null
+            '
+          for architecture in amd64 arm64; do
+            package="$(find .release/debs -maxdepth 1 -name "libatomic1_*_${architecture}.deb" -print -quit)"
+            test -n "$package"
+            mkdir -p ".release/libatomic/${architecture}"
+            dpkg-deb -x "$package" ".release/libatomic/${architecture}"
+          done
+          gcc_package="$(find .release/debs -maxdepth 1 -name 'gcc-12-base_*_amd64.deb' -print -quit)"
+          test -n "$gcc_package"
+          mkdir -p .release/gcc-license
+          dpkg-deb -x "$gcc_package" .release/gcc-license
+
+      - name: Build amd64 and arm64 SEA payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .release/sea
           node scripts/build-linux-sea.mjs \
             --node-executable ".release/node/node-v${NODE_RELEASE}-linux-x64/bin/node" \
-            --output dist/opensphere-setup-linux-amd64
+            --output .release/sea/opensphere-setup-linux-amd64.bin
           node scripts/build-linux-sea.mjs \
             --node-executable ".release/node/node-v${NODE_RELEASE}-linux-arm64/bin/node" \
+            --output .release/sea/opensphere-setup-linux-arm64.bin
+
+      - name: Build self-extracting portable executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./package.json').version")"
+          node_license=".release/node/node-v${NODE_RELEASE}-linux-x64/LICENSE"
+          libatomic_license=".release/gcc-license/usr/share/doc/gcc-12-base/copyright"
+          amd64_lib="$(find .release/libatomic/amd64 -type f -name 'libatomic.so.1.*' -print -quit)"
+          arm64_lib="$(find .release/libatomic/arm64 -type f -name 'libatomic.so.1.*' -print -quit)"
+          test -f "$node_license"
+          test -f "$libatomic_license"
+          test -f "$amd64_lib"
+          test -f "$arm64_lib"
+          mkdir -p dist
+          node scripts/build-portable-linux-executable.mjs \
+            --sea .release/sea/opensphere-setup-linux-amd64.bin \
+            --libatomic "$amd64_lib" \
+            --node-license "$node_license" \
+            --libatomic-license "$libatomic_license" \
+            --version "$version" \
+            --architecture amd64 \
+            --output dist/opensphere-setup-linux-amd64
+          node scripts/build-portable-linux-executable.mjs \
+            --sea .release/sea/opensphere-setup-linux-arm64.bin \
+            --libatomic "$arm64_lib" \
+            --node-license "$node_license" \
+            --libatomic-license "$libatomic_license" \
+            --version "$version" \
+            --architecture arm64 \
             --output dist/opensphere-setup-linux-arm64
           file dist/opensphere-setup-linux-amd64 dist/opensphere-setup-linux-arm64
-          test "$(dist/opensphere-setup-linux-amd64 version)" = "opensphere-setup 0.4.0-edge.2"
+          test "$(dist/opensphere-setup-linux-amd64 version)" = "opensphere-setup 0.4.0-edge.3"
           sha256sum dist/opensphere-setup-linux-amd64 dist/opensphere-setup-linux-arm64 \
             | sed 's#dist/##' > dist/SHA256SUMS
 
