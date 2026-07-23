@@ -28,5 +28,6 @@ test('private Linux installation requires authenticated GitHub download and chec
   assert.match(documentation, /gh release download/);
   assert.match(documentation, /sha256sum --check/);
   assert.match(documentation, /Contents:\s*read/i);
+  assert.match(documentation, /libatomic\.so\.1/);
   assert.doesNotMatch(documentation, /curl.*github\.com.*releases\/download/);
 });

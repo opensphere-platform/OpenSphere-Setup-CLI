@@ -23,9 +23,27 @@ GitHub 저장소의 `Contents: read` 권한이 있는 사용자 또는 fine-grai
 - `kubectl`
 - PowerShell 7 명령 `pwsh`
 - GitHub CLI 명령 `gh`
+- Node SEA가 동적 연결하는 `libatomic.so.1`
 - GitHub 및 GHCR로 나갈 수 있는 HTTPS 네트워크
 - 대상 Kubernetes context와 동적 StorageClass
 - 비공개 GHCR image를 사용하는 release라면 별도의 package read token
+
+최소 Linux 이미지에는 `libatomic`이 빠져 있을 수 있다. 배포판에 맞게 먼저 설치한다.
+
+```bash
+# Debian / Ubuntu
+sudo apt-get update
+sudo apt-get install -y libatomic1
+
+# RHEL / Rocky / AlmaLinux
+sudo dnf install -y libatomic
+```
+
+확인:
+
+```bash
+ldconfig -p | grep 'libatomic\.so\.1'
+```
 
 GitHub 로그인 상태를 확인한다.
 
