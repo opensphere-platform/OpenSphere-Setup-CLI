@@ -35,10 +35,17 @@ const platform = option('--platform');
 const architecture = option('--architecture');
 const version = option('--version');
 const libatomic = optionalOption('--libatomic');
+const nodeExecutable = optionalOption('--node-executable');
+const bundle = optionalOption('--bundle');
+const runtimeAssets = optionalOption('--runtime-assets');
 if (!['windows', 'linux', 'darwin'].includes(platform)) throw new Error('invalid platform');
 if (!['amd64', 'arm64'].includes(architecture)) throw new Error('invalid architecture');
 if (platform === 'linux' && !libatomic) throw new Error('--libatomic is required for Linux packages');
 if (platform !== 'linux' && libatomic) throw new Error('--libatomic is only valid for Linux packages');
+const usesMacIntelRuntime = platform === 'darwin' && architecture === 'amd64';
+if (usesMacIntelRuntime && (!nodeExecutable || !bundle || !runtimeAssets)) {
+  throw new Error('darwin/amd64 requires --node-executable, --bundle and --runtime-assets');
+}
 
 const temporary = await mkdtemp(join(tmpdir(), 'opensphere-platform-runtime-'));
 const packageRoot = join(temporary, `opensphere-setup-${platform}-${architecture}`);
@@ -63,8 +70,21 @@ export OPENSPHERE_PORTABLE_ROOT="$root"
 export LD_LIBRARY_PATH="$root/runtime/lib\${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 exec "$root/bin/opensphere-setup.bin" "$@"
 `, { mode: 0o755 });
-  } else {
+  } else if (!usesMacIntelRuntime) {
     await cp(sea, packagedSetup);
+  } else {
+    const setupRuntime = join(runtime, 'setup');
+    await mkdir(setupRuntime, { recursive: true });
+    await cp(resolve(nodeExecutable), join(runtime, 'bin', 'node'));
+    await cp(resolve(bundle), join(setupRuntime, 'index.mjs'));
+    await cp(resolve(runtimeAssets, 'New-Certificates.ps1'), join(setupRuntime, 'New-Certificates.ps1'));
+    await cp(resolve(runtimeAssets, 'Install-LocalDevelopmentCa.ps1'), join(setupRuntime, 'Install-LocalDevelopmentCa.ps1'));
+    await writeFile(packagedSetup, `#!/bin/sh
+set -eu
+root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+export OPENSPHERE_PORTABLE_ROOT="$root"
+exec "$root/runtime/bin/node" "$root/runtime/setup/index.mjs" "$@"
+`, { mode: 0o755 });
   }
 
   if (platform !== 'windows') {
@@ -73,7 +93,12 @@ exec "$root/bin/opensphere-setup.bin" "$@"
     await chmod(join(runtime, 'pwsh', 'pwsh'), 0o755);
     await chmod(join(runtime, 'bin', 'kubectl'), 0o755);
   }
-  if (platform === 'darwin') {
+  if (usesMacIntelRuntime) {
+    const packagedNode = join(runtime, 'bin', 'node');
+    await chmod(packagedNode, 0o755);
+    run('codesign', ['--force', '--sign', '-', packagedNode]);
+    run('codesign', ['--verify', '--strict', '--verbose=4', packagedNode]);
+  } else if (platform === 'darwin') {
     run('codesign', ['--force', '--sign', '-', packagedSetup]);
     run('codesign', ['--verify', '--strict', '--verbose=4', packagedSetup]);
   }

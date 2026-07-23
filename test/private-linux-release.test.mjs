@@ -43,6 +43,10 @@ test('portable archives bundle their required runtimes, including Linux libatomi
   assert.match(portableBuild, /LD_LIBRARY_PATH=/);
   assert.match(portableBuild, /run\('codesign', \['--force', '--sign', '-', packagedSetup\]\)/);
   assert.match(portableBuild, /run\('codesign', \['--verify', '--strict', '--verbose=4', packagedSetup\]\)/);
+  assert.match(portableBuild, /usesMacIntelRuntime/);
+  assert.match(portableBuild, /runtime\/bin\/node/);
+  assert.match(portableBuild, /runtime\/setup\/index\.mjs/);
+  assert.match(workflow, /--node-executable/);
 });
 
 test('private platform installation requires authenticated GitHub download and checksum verification', () => {

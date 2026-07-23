@@ -172,6 +172,9 @@ jobs:
             '--platform', '${{ matrix.platform }}',
             '--architecture', '${{ matrix.architecture }}',
             '--version', (node -p "require('./package.json').version"),
+            '--node-executable', (node -p "process.execPath"),
+            '--bundle', '.release/bundle/index.mjs',
+            '--runtime-assets', 'src',
             '--output', "dist/${{ matrix.archive }}"
           )
           if ('${{ matrix.platform }}' -eq 'linux') {
@@ -198,8 +201,10 @@ jobs:
           $kubectl = Join-Path $root "runtime/bin/$(if ($platform -eq 'windows') { 'kubectl.exe' } else { 'kubectl' })"
           $packageVersion = node -p "require('./package.json').version"
           $expected = "opensphere-setup $packageVersion"
-          if ($platform -eq 'darwin') {
+          if ($platform -eq 'darwin' -and $architecture -eq 'arm64') {
             codesign --verify --strict --verbose=4 $setup
+          } elseif ($platform -eq 'darwin') {
+            codesign --verify --strict --verbose=4 (Join-Path $root 'runtime/bin/node')
           }
           $actual = & $setup version
           $setupExitCode = $LASTEXITCODE
