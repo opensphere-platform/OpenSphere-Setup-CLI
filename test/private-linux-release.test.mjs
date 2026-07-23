@@ -16,6 +16,8 @@ test('private release publisher fails closed for a public repository', () => {
   assert.match(workflow, /opensphere-setup-darwin-amd64/);
   assert.match(workflow, /opensphere-setup-darwin-arm64/);
   assert.match(workflow, /SHA256SUMS/);
+  assert.match(workflow, /gh release verify/);
+  assert.doesNotMatch(workflow, /attest-build-provenance/);
   assert.doesNotMatch(workflow, /npm publish|docker push/);
 });
 
@@ -39,6 +41,7 @@ test('portable archives bundle their required runtimes, including Linux libatomi
 test('private platform installation requires authenticated GitHub download and checksum verification', () => {
   assert.match(documentation, /gh auth status/);
   assert.match(documentation, /gh release download/);
+  assert.match(documentation, /gh release verify-asset/);
   assert.match(documentation, /SHA256SUMS/);
   assert.match(documentation, /Contents:\s*read/i);
   assert.match(documentation, /libatomic\.so\.1/);

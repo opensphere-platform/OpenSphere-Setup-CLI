@@ -11,6 +11,8 @@ runtime assets and third-party notices. The target host needs Git, authenticated
 GitHub CLI (`gh`) and access to a Kubernetes cluster. Node.js, npm, PowerShell,
 kubectl and libatomic are not host prerequisites.
 
-Verify the downloaded archive with `SHA256SUMS` and GitHub artifact attestation
-before extraction. This edge release is not a substitute for Windows Authenticode
-or Apple Developer ID notarization required by a stable enterprise release.
+The repository enforces GitHub Immutable Releases. Verify the release and downloaded
+archive with `gh release verify` and `gh release verify-asset`, then confirm
+`SHA256SUMS` before extraction. This edge release is not a substitute for Windows
+Authenticode or Apple Developer ID notarization required by a stable enterprise
+release.

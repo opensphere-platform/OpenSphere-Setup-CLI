@@ -29,7 +29,7 @@ opensphere-setup version
 
 비공개 실제 관리 호스트에는 저장소 clone이나 개발 런타임 설치 대신 GitHub Release의
 Windows amd64, Linux amd64/arm64, macOS amd64/arm64 자체 포함 아카이브를 사용한다.
-인증 다운로드, SHA-256·artifact attestation 검증과 설치 절차는
+인증 다운로드, SHA-256·immutable release attestation 검증과 설치 절차는
 [`docs/PRIVATE-PLATFORM-INSTALL.md`](docs/PRIVATE-PLATFORM-INSTALL.md)가 정본이다. Setup
 저장소가 public이면 platform Release 발행 workflow는 fail-closed한다.
 

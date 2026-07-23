@@ -15,9 +15,6 @@ on:
 
 permissions:
   contents: write
-  id-token: write
-  attestations: write
-  artifact-metadata: write
 
 concurrency:
   group: private-platform-setup-${{ inputs.tag || github.ref_name }}
@@ -178,11 +175,6 @@ jobs:
           }
           node @arguments
 
-      - name: Attest archive provenance
-        uses: actions/attest-build-provenance@v3
-        with:
-          subject-path: dist/${{ matrix.archive }}
-
       - name: Upload platform archive
         uses: actions/upload-artifact@v4
         with:
@@ -233,3 +225,16 @@ jobs:
           )
           if [[ "$IS_PRERELEASE" == "true" ]]; then args+=(--prerelease); fi
           gh release create "${args[@]}"
+
+      - name: Verify immutable release attestation
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4 5 6; do
+            if gh release verify "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY"; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "Immutable release attestation was not available" >&2
+          exit 1

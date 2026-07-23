@@ -52,7 +52,9 @@ if ($actual.ToLowerInvariant() -ne $expected.ToLowerInvariant()) {
   throw 'OpenSphere Setup archive checksum mismatch'
 }
 
-gh attestation verify .\opensphere-setup-windows-amd64.zip `
+gh release verify $release `
+  --repo opensphere-platform/OpenSphere-Setup-CLI
+gh release verify-asset $release .\opensphere-setup-windows-amd64.zip `
   --repo opensphere-platform/OpenSphere-Setup-CLI
 Expand-Archive .\opensphere-setup-windows-amd64.zip -DestinationPath .
 .\opensphere-setup-windows-amd64\opensphere-setup.exe version
@@ -76,7 +78,8 @@ gh release download "$release" \
 
 cd "$target"
 grep " opensphere-setup-linux-${architecture}.tar.gz$" SHA256SUMS | sha256sum --check
-gh attestation verify "opensphere-setup-linux-${architecture}.tar.gz" \
+gh release verify "$release" --repo opensphere-platform/OpenSphere-Setup-CLI
+gh release verify-asset "$release" "opensphere-setup-linux-${architecture}.tar.gz" \
   --repo opensphere-platform/OpenSphere-Setup-CLI
 tar -xzf "opensphere-setup-linux-${architecture}.tar.gz"
 ./"opensphere-setup-linux-${architecture}"/opensphere-setup version
@@ -102,14 +105,16 @@ cd "$target"
 expected="$(grep " opensphere-setup-darwin-${architecture}.tar.gz$" SHA256SUMS | awk '{print $1}')"
 actual="$(shasum -a 256 "opensphere-setup-darwin-${architecture}.tar.gz" | awk '{print $1}')"
 test "$actual" = "$expected"
-gh attestation verify "opensphere-setup-darwin-${architecture}.tar.gz" \
+gh release verify "$release" --repo opensphere-platform/OpenSphere-Setup-CLI
+gh release verify-asset "$release" "opensphere-setup-darwin-${architecture}.tar.gz" \
   --repo opensphere-platform/OpenSphere-Setup-CLI
 tar -xzf "opensphere-setup-darwin-${architecture}.tar.gz"
 ./"opensphere-setup-darwin-${architecture}"/opensphere-setup version
 ```
 
-`edge` 아카이브에는 GitHub artifact provenance가 붙지만 Windows Authenticode와 Apple
-Developer ID notarization은 아직 별도 release gate이다.
+GitHub Immutable Releases가 tag와 asset 변경을 잠그고 release attestation을 생성한다.
+`edge` 아카이브의 이 검증은 Windows Authenticode와 Apple Developer ID notarization을
+대체하지 않으며, 운영 승격에서는 별도 release gate가 필요하다.
 
 ## 5. 설치 전 검사와 bootstrap
 
