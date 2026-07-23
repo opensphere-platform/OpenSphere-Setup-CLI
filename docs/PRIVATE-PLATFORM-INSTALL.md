@@ -34,7 +34,7 @@ gh auth status
 ## 2. Windows amd64
 
 ```powershell
-$release = 'setup-v0.5.0-edge.1'
+$release = 'setup-v0.5.0-edge.2'
 $target = Join-Path $PWD 'opensphere-setup-download'
 New-Item -ItemType Directory -Force $target | Out-Null
 
@@ -65,7 +65,7 @@ Expand-Archive .\opensphere-setup-windows-amd64.zip -DestinationPath .
 아키텍처에 맞춰 `amd64` 또는 `arm64`를 선택한다.
 
 ```bash
-release=setup-v0.5.0-edge.1
+release=setup-v0.5.0-edge.2
 architecture=amd64
 target="$PWD/opensphere-setup-download"
 mkdir -p "$target"
@@ -90,7 +90,7 @@ tar -xzf "opensphere-setup-linux-${architecture}.tar.gz"
 Intel은 `amd64`, Apple Silicon은 `arm64`를 선택한다.
 
 ```bash
-release=setup-v0.5.0-edge.1
+release=setup-v0.5.0-edge.2
 architecture=arm64
 target="$PWD/opensphere-setup-download"
 mkdir -p "$target"
