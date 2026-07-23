@@ -7,16 +7,14 @@ import { fileURLToPath } from 'node:url';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CLI = join(ROOT, 'src', 'cli.mjs');
 
-test('identity-reserved initial administrator names fail before cluster mutation', () => {
-  for (const name of ['admin', 'idm_admin', 'anonymous']) {
-    const result = spawnSync(process.execPath, [CLI, 'bootstrap', '--release', 'edge', '--admin-username', name], {
-      encoding: 'utf8',
-      cwd: ROOT,
-      windowsHide: true
-    });
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /is reserved by the identity service/);
-  }
+test('Supabase-reserved initial administrator name fails before cluster mutation', () => {
+  const result = spawnSync(process.execPath, [CLI, 'bootstrap', '--release', 'edge', '--admin-username', 'anonymous'], {
+    encoding: 'utf8',
+    cwd: ROOT,
+    windowsHide: true
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /reserved by Supabase Auth/);
 });
 
 test('missing option values are rejected', () => {
@@ -74,13 +72,42 @@ test('promotion preflight refuses missing external inputs before cluster access'
     encoding: 'utf8', cwd: ROOT, windowsHide: true
   });
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /--backup-target-secret must be an existing namespace\/name Secret reference/);
+  assert.match(result.stderr, /--recovery-target-secret must be an existing namespace\/name Secret reference/);
 });
 
-test('service credential rotation is an explicit supported maintenance command', () => {
+test('retired Kanidm service credential rotation is not exposed', () => {
   const result = spawnSync(process.execPath, [CLI, 'help'], {
     encoding: 'utf8', cwd: ROOT, windowsHide: true
   });
   assert.equal(result.status, 0);
-  assert.match(result.stdout, /rotate-service-credentials/);
+  assert.doesNotMatch(result.stdout, /rotate-service-credentials/);
+});
+
+test('retired backup target option is rejected instead of ignored', () => {
+  const result = spawnSync(process.execPath, [
+    CLI,
+    'bootstrap',
+    '--release',
+    'edge',
+    '--backup-target-secret',
+    'platform-secrets/legacy'
+  ], {
+    encoding: 'utf8', cwd: ROOT, windowsHide: true
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /retired --backup-target-secret option is not accepted/);
+});
+
+test('registry credentials are accepted only through the paired token-stdin contract', () => {
+  const missingTokenStdin = spawnSync(process.execPath, [CLI, 'resolve', '--release', 'edge', '--registry-username', 'opensphere-platform'], {
+    encoding: 'utf8', cwd: ROOT, windowsHide: true
+  });
+  assert.notEqual(missingTokenStdin.status, 0);
+  assert.match(missingTokenStdin.stderr, /--registry-username requires --registry-token-stdin/);
+
+  const missingUsername = spawnSync(process.execPath, [CLI, 'resolve', '--release', 'edge', '--registry-token-stdin'], {
+    encoding: 'utf8', cwd: ROOT, windowsHide: true, input: 'not-a-real-token'
+  });
+  assert.notEqual(missingUsername.status, 0);
+  assert.match(missingUsername.stderr, /--registry-token-stdin requires --registry-username/);
 });

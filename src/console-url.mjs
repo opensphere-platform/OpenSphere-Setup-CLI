@@ -45,7 +45,3 @@ export function configureShellServiceEndpoint(yaml, consoleUrl) {
   }
   return configured;
 }
-
-export function oidcIssuer(consoleUrl) {
-  return `${normalizeConsoleUrl(consoleUrl)}/oauth2/openid/opensphere-console`;
-}

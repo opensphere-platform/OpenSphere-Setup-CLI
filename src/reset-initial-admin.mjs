@@ -1,82 +1,75 @@
-import https from 'node:https';
 import { kubectl } from './process.mjs';
 import { withServicePortForward } from './port-forward.mjs';
 
 export const INITIAL_ADMIN_RESET_CONFIRMATION = 'RESET-INITIAL-ADMIN';
 
-function getJson(kind, name) {
-  return JSON.parse(kubectl(['-n', 'opensphere-console', 'get', kind, name, '-o', 'json'], { capture: true }));
+function getJson(namespace, kind, name) {
+  return JSON.parse(kubectl(['-n', namespace, 'get', kind, name, '-o', 'json'], { capture: true }));
 }
 
 function installationConfig() {
-  const lock = getJson('configmap', 'opensphere-installation-lock');
+  const lock = getJson('opensphere-console', 'configmap', 'opensphere-installation-lock');
   return JSON.parse(lock.data?.['config.json'] || '{}');
 }
 
 function initialSetupConfigMap() {
-  return getJson('configmap', 'opensphere-initial-admin');
+  return getJson('opensphere-console', 'configmap', 'opensphere-initial-admin');
 }
 
-function roleManagerToken() {
-  const secret = getJson('secret', 'opensphere-rolemgr-kanidm');
-  const encoded = secret.data?.token;
-  if (!encoded) throw new Error('Console role-manager credential is unavailable');
+function serviceRoleKey() {
+  const secret = getJson('opensphere-console-data', 'secret', 'opensphere-supabase-secrets');
+  const encoded = secret.data?.['service-role-key'];
+  if (!encoded) throw new Error('Supabase service-role credential is unavailable');
   return Buffer.from(encoded, 'base64').toString('utf8');
 }
 
-function request(baseUrl, method, path, token) {
-  return new Promise((resolve, reject) => {
-    const url = new URL(path, baseUrl);
-    const req = https.request({
-      method,
-      hostname: url.hostname,
-      port: url.port,
-      path: url.pathname,
-      rejectUnauthorized: false,
-      headers: { accept: 'application/json', authorization: `Bearer ${token}` }
-    }, (response) => {
-      const chunks = [];
-      response.on('data', (chunk) => chunks.push(chunk));
-      response.on('end', () => {
-        const text = Buffer.concat(chunks).toString('utf8');
-        let json = null;
-        try { json = text ? JSON.parse(text) : null; } catch {}
-        resolve({ status: response.statusCode, json });
-      });
-    });
-    req.on('error', reject);
-    req.end();
+async function supabaseRequest(baseUrl, key, path, options = {}) {
+  const response = await fetch(`${baseUrl}${path}`, {
+    ...options,
+    headers: {
+      accept: 'application/json',
+      apikey: key,
+      authorization: `Bearer ${key}`,
+      ...options.headers
+    }
   });
+  const text = await response.text();
+  let json = null;
+  try { json = text ? JSON.parse(text) : null; } catch {}
+  return { status: response.status, json };
 }
 
-async function deletePerson(username) {
-  const token = roleManagerToken();
+async function deleteSupabaseOperator(email) {
+  const key = serviceRoleKey();
   await withServicePortForward({
-    namespace: 'opensphere-console',
-    service: 'opensphere-console-auth',
-    remotePort: 8443,
-    label: 'Kanidm administrator reset'
+    namespace: 'opensphere-console-data',
+    service: 'opensphere-supabase-auth',
+    remotePort: 9999,
+    protocol: 'http',
+    label: 'Supabase initial administrator reset'
   }, async (baseUrl) => {
-    const deleted = await request(baseUrl, 'DELETE', `/v1/person/${encodeURIComponent(username)}`, token);
+    const listed = await supabaseRequest(baseUrl, key, '/admin/users?page=1&per_page=1000');
+    if (listed.status !== 200) throw new Error(`Supabase user listing failed: HTTP ${listed.status}`);
+    const users = Array.isArray(listed.json?.users) ? listed.json.users : [];
+    const user = users.find((candidate) => String(candidate.email ?? '').toLowerCase() === email.toLowerCase());
+    if (!user) return;
+    if (!/^[0-9a-f-]{36}$/i.test(String(user.id))) throw new Error('Supabase initial administrator has an invalid UUID');
+    // auth.users is intentionally ON DELETE RESTRICT. Remove the disposable
+    // Console projection first; its role/CLI rows cascade. If any durable
+    // governed record still references the operator, PostgreSQL refuses this
+    // development reset rather than silently orphaning evidence.
+    kubectl([
+      '-n', 'opensphere-console-data', 'exec', 'statefulset/opensphere-supabase-postgres', '--',
+      'sh', '-ec',
+      `PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -c "DELETE FROM console.operator WHERE user_id='${user.id}'"`
+    ], { capture: true });
+    const deleted = await supabaseRequest(baseUrl, key, `/admin/users/${encodeURIComponent(user.id)}`, {
+      method: 'DELETE'
+    });
     if (![200, 204, 404].includes(deleted.status)) {
-      throw new Error(`Initial administrator delete failed: HTTP ${deleted.status}`);
-    }
-    const check = await request(baseUrl, 'GET', `/v1/person/${encodeURIComponent(username)}`, token);
-    if (check.status !== 404 && !(check.status === 200 && check.json === null)) {
-      throw new Error('Initial administrator still exists after reset');
+      throw new Error(`Initial Supabase administrator delete failed: HTTP ${deleted.status}`);
     }
   });
-}
-
-function clearData(kind, name) {
-  try {
-    kubectl([
-      '-n', 'opensphere-console', 'patch', kind, name, '--type=merge',
-      '-p', JSON.stringify({ data: null })
-    ], { capture: true });
-  } catch (error) {
-    if (!String(error.message).includes('NotFound')) throw error;
-  }
 }
 
 function resetState(configMap) {
@@ -101,13 +94,13 @@ function resetState(configMap) {
 const defaultRuntime = {
   installationConfig,
   initialSetupConfigMap,
-  deletePerson,
-  clearData,
+  deleteSupabaseOperator,
   resetState
 };
 
-// Development-only recovery for a first-access Wizard completed with a disposable
-// test identity. Candidate/stable and production policy require audited IGA recovery.
+// Development-only recovery for a first-access Wizard completed with a
+// disposable Supabase operator. Deleting auth.users cascades through the
+// Console operator, role assignment, CLI-device and API-token foreign keys.
 export async function resetInitialAdministrator({ confirmation, runtime = defaultRuntime } = {}) {
   if (confirmation !== INITIAL_ADMIN_RESET_CONFIRMATION) {
     throw new Error(`reset-initial-admin requires --confirm ${INITIAL_ADMIN_RESET_CONFIRMATION}`);
@@ -117,16 +110,9 @@ export async function resetInitialAdministrator({ confirmation, runtime = defaul
     throw new Error('reset-initial-admin is restricted to edge/development installations');
   }
   const state = runtime.initialSetupConfigMap();
-  const username = state.data?.username;
-  if (!username) throw new Error('Initial administrator state has no username');
-
-  await runtime.deletePerson(username);
-  for (const [kind, name] of [
-    ['configmap', 'opensphere-console-auth-pats'],
-    ['configmap', 'opensphere-console-auth-cli-devices'],
-    ['secret', 'opensphere-console-auth-cli-flows'],
-    ['secret', 'opensphere-console-auth-codes']
-  ]) runtime.clearData(kind, name);
+  const email = state.data?.email;
+  if (!email) throw new Error('Initial administrator state has no email');
+  await runtime.deleteSupabaseOperator(email);
   runtime.resetState(state);
-  return { username, state: 'required' };
+  return { username: state.data?.username, email, state: 'required' };
 }

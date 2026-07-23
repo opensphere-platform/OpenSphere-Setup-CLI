@@ -66,7 +66,7 @@ test('managed uninstall refuses an installation lock that does not own every nam
         existingOpenSphereNamespaces: () => ['opensphere-console']
       }
     }),
-    /installation is incomplete; refusing purge/
+    /Managed namespace ownership differs/
   );
 });
 

@@ -24,7 +24,14 @@ capture() {
 } >"$output_dir/metadata.env"
 
 capture kubernetes-version.json kubectl --context "$context" version -o json
-capture namespaces.yaml kubectl --context "$context" get namespace opensphere-console-auth opensphere-console opensphere-backbone -o yaml
+capture namespaces.yaml kubectl --context "$context" get namespace \
+  opensphere-console-data \
+  opensphere-console-change \
+  opensphere-console \
+  opensphere-oaa-credentials \
+  opensphere-foundation \
+  opensphere-system \
+  -o yaml
 capture pods-wide.txt kubectl --context "$context" get pods -A -o wide
 capture services.yaml kubectl --context "$context" get service -A -o yaml
 capture endpoint-slices.yaml kubectl --context "$context" get endpointslice -A -o yaml
@@ -35,16 +42,20 @@ capture network-policies.yaml kubectl --context "$context" get networkpolicy -A 
 # RBAC. Capture the exact managed names instead of silently producing an empty
 # label-filtered List.
 capture opensphere-cluster-rbac.yaml kubectl --context "$context" get \
-  clusterrole/dupa-backbone-installer \
   clusterrole/dupa-module-profile-installer \
+  clusterrole/dupa-console-evidence-reader \
+  clusterrole/dupa-clidownload-reader \
   clusterrole/opensphere-console-backend \
+  clusterrole/opensphere-console-oaa-gateway-environment-reader \
   clusterrole/opensphere-module-cluster-observer-v1 \
   clusterrole/opensphere-module-cluster-his-manager-v1 \
   clusterrole/opensphere-module-cluster-infrastructure-manager-v1 \
-  clusterrolebinding/dupa-backbone-installer \
   clusterrolebinding/dupa-module-profile-installer \
+  clusterrolebinding/dupa-console-evidence-reader \
+  clusterrolebinding/dupa-clidownload-reader \
   clusterrolebinding/opensphere-console-backend \
+  clusterrolebinding/opensphere-console-oaa-gateway-environment-reader \
   -o yaml
 capture recent-events.txt kubectl --context "$context" get events -A --sort-by=.lastTimestamp
-capture audit-runtime-boundary.txt kubectl --context "$context" -n opensphere-backbone exec deployment/backbone-postgres -- \
-  psql -U console -d console -Atc "SELECT rolname || '|superuser=' || rolsuper || '|bypassrls=' || rolbypassrls FROM pg_roles WHERE rolname IN ('console','opensphere_audit_owner') ORDER BY rolname; SELECT 'console_audit_write=' || has_table_privilege('console','audit_log','UPDATE') || ',' || has_table_privilege('console','audit_log','DELETE') || ',' || has_table_privilege('console','audit_log','TRUNCATE');"
+capture audit-runtime-boundary.txt kubectl --context "$context" -n opensphere-console-data exec statefulset/opensphere-supabase-postgres -- \
+  psql -U supabase_admin -d postgres -Atc "SELECT rolname || '|superuser=' || rolsuper || '|bypassrls=' || rolbypassrls FROM pg_roles WHERE rolname IN ('opensphere_console_backend','opensphere_oaa_gateway','supabase_auth_admin','supabase_storage_admin') ORDER BY rolname; SELECT 'audit_event_rls=' || relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='audit' AND c.relname='event';"

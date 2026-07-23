@@ -7,7 +7,7 @@ const collector = readFileSync(new URL('../scripts/collect-audit-evidence.sh', i
 
 test('clean-cluster CI preserves redacted, post-run audit evidence on success and failure', () => {
   assert.match(workflow, /Collect redacted audit evidence[\s\S]*?if: always\(\)/);
-  assert.match(workflow, /Collect redacted upgrade and rollback evidence[\s\S]*?if: always\(\)/);
+  assert.match(workflow, /name: audit-evidence-supabase/);
   assert.match(workflow, /actions\/upload-artifact@v4/);
   assert.match(workflow, /retention-days: 90/);
 });
@@ -16,7 +16,8 @@ test('evidence collector records runtime facts but never reads Secret objects or
   assert.match(collector, /installation-lock\.yaml/);
   assert.match(collector, /release-inventory\.yaml/);
   assert.match(collector, /audit-runtime-boundary\.txt/);
-  assert.match(collector, /clusterrole\/dupa-backbone-installer/);
+  assert.match(collector, /clusterrole\/dupa-console-evidence-reader/);
+  assert.match(collector, /statefulset\/opensphere-supabase-postgres/);
   assert.match(collector, /clusterrolebinding\/opensphere-console-backend/);
   assert.doesNotMatch(collector, /app\.kubernetes\.io\/part-of=opensphere/);
   assert.doesNotMatch(collector, /\bget\s+secrets?\b/i);

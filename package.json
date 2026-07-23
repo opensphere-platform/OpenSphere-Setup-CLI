@@ -1,13 +1,15 @@
 {
   "name": "@opensphere/setup-cli",
-  "version": "0.3.0-edge.1",
+  "version": "0.4.0-edge.1",
   "private": true,
   "type": "module",
   "bin": {
     "opensphere-setup": "src/cli.mjs"
   },
   "scripts": {
+    "install:command": "pwsh -NoProfile -File ./Install-OpenSphereSetup.ps1",
     "test": "node --test test/*.test.mjs",
+    "pretest:e2e:edge": "npm install --global . --no-audit --no-fund",
     "test:e2e:edge": "pwsh -NoProfile -File scripts/e2e-clean-install.ps1 -Channel edge -FullClusterReset"
   },
   "engines": {

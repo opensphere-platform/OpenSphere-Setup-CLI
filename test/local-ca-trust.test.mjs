@@ -8,8 +8,8 @@ const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 test('Windows local CA trust is narrowly scoped to the managed localhost development origin', async () => {
   const bootstrap = await readFile(join(ROOT, 'src', 'bootstrap.mjs'), 'utf8');
-  assert.match(bootstrap, /\['localhost', '127\.0\.0\.1', '\[::1\]'\]\.includes\(effectiveConsoleHost\)/);
-  assert.match(bootstrap, /!externalShellTls && localConsoleHost && lock\.channel === 'edge' && effectiveAuthEnvironment === 'development'/);
+  assert.match(bootstrap, /\['localhost', '127\.0\.0\.1', '\[::1\]'\]\.includes\(hostname\)/);
+  assert.match(bootstrap, /!externalShellTls[\s\S]{0,180}lock\.channel === 'edge'[\s\S]{0,120}effectiveAuthEnvironment === 'development'/);
   assert.match(bootstrap, /process\.platform === 'win32'/);
   assert.match(bootstrap, /Install-LocalDevelopmentCa\.ps1/);
 });
@@ -28,5 +28,5 @@ test('bootstrap contains only the explicit temporary HTTP-to-HTTPS repair except
   const source = await readFile(join(ROOT, 'src', 'bootstrap.mjs'), 'utf8');
   assert.match(source, /isLegacyEdgeLoopbackHttpOrigin/);
   assert.match(source, /installed && !repairLegacyLoopbackHttp \? storedConsoleUrl : requestedConsoleUrl/);
-  assert.match(source, /changing it requires an endpoint migration/);
+  assert.match(source, /changing it requires endpoint migration/);
 });

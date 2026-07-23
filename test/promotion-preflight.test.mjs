@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { preflightPromotion } from '../src/promotion-preflight.mjs';
 
 const encode = (value) => Buffer.from(value).toString('base64');
-const backupSecret = (endpoint = 'https://backup.example.test') => ({
+const recoverySecret = (endpoint = 'https://recovery.example.test') => ({
   data: {
     endpoint: encode(endpoint),
     bucket: encode('opensphere-audit'),
@@ -22,18 +22,18 @@ test('candidate promotion preflight validates read-only prerequisites without di
   const evidence = preflightPromotion({
     channel: 'candidate',
     consoleUrl: 'https://console.example.test',
-    backupTargetSecret: 'platform-secrets/opensphere-audit-backup',
+    recoveryTargetSecret: 'platform-secrets/opensphere-recovery-target',
     shellTlsSecret: 'platform-secrets/opensphere-console-public-tls',
     readSecret(reference) {
       reads.push(`${reference.namespace}/${reference.name}`);
-      return reference.name.includes('audit') ? backupSecret() : tlsSecret;
+      return reference.name.includes('recovery') ? recoverySecret() : tlsSecret;
     },
     runPreflight: () => cluster,
     inspectTls: () => inspectedTls
   });
 
   assert.deepEqual(reads, [
-    'platform-secrets/opensphere-audit-backup',
+    'platform-secrets/opensphere-recovery-target',
     'platform-secrets/opensphere-console-public-tls'
   ]);
   assert.deepEqual(evidence, {
@@ -42,18 +42,18 @@ test('candidate promotion preflight validates read-only prerequisites without di
     kubernetesVersion: 'v1.31.2',
     nodeCount: 3,
     storageClass: 'durable-csi',
-    backup: { endpoint: 'https://backup.example.test', bucket: 'opensphere-audit', region: 'ap-chuncheon-1' },
+    recovery: { endpoint: 'https://recovery.example.test', bucket: 'opensphere-audit', region: 'ap-chuncheon-1' },
     tls: inspectedTls
   });
   assert.doesNotMatch(JSON.stringify(evidence), /not-logged/);
 });
 
-test('promotion preflight rejects in-cluster backup endpoints and non-promotion channels', () => {
+test('promotion preflight rejects in-cluster recovery endpoints and non-promotion channels', () => {
   const options = {
     consoleUrl: 'https://console.example.test',
-    backupTargetSecret: 'platform-secrets/opensphere-audit-backup',
+    recoveryTargetSecret: 'platform-secrets/opensphere-recovery-target',
     shellTlsSecret: 'platform-secrets/opensphere-console-public-tls',
-    readSecret(reference) { return reference.name.includes('audit') ? backupSecret('https://rustfs.opensphere-backbone.svc') : tlsSecret; },
+    readSecret(reference) { return reference.name.includes('recovery') ? recoverySecret('https://object-store.opensphere-console-data.svc') : tlsSecret; },
     runPreflight: () => cluster,
     inspectTls: () => inspectedTls
   };

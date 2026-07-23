@@ -5,14 +5,21 @@ import {
   resetInitialAdministrator
 } from '../src/reset-initial-admin.mjs';
 
-function fakeRuntime({ channel = 'edge', authEnvironment = 'development', username = 'opensphere-admin' } = {}) {
+function fakeRuntime({
+  channel = 'edge',
+  authEnvironment = 'development',
+  username = 'opensphere-admin',
+  email = 'admin@opensphere.local'
+} = {}) {
   const events = [];
   return {
     events,
     installationConfig: () => ({ channel, authEnvironment }),
-    initialSetupConfigMap: () => ({ metadata: { resourceVersion: '9' }, data: { state: 'complete', username } }),
-    deletePerson: async (value) => events.push(`delete:${value}`),
-    clearData: (kind, name) => events.push(`clear:${kind}/${name}`),
+    initialSetupConfigMap: () => ({
+      metadata: { resourceVersion: '9' },
+      data: { state: 'complete', username, email }
+    }),
+    deleteSupabaseOperator: async (value) => events.push(`delete:${value}`),
     resetState: () => events.push('state:required')
   };
 }
@@ -20,13 +27,13 @@ function fakeRuntime({ channel = 'edge', authEnvironment = 'development', userna
 test('reset-initial-admin removes the test identity and credentials before reopening the Wizard', async () => {
   const fake = fakeRuntime();
   const result = await resetInitialAdministrator({ confirmation: INITIAL_ADMIN_RESET_CONFIRMATION, runtime: fake });
-  assert.deepEqual(result, { username: 'opensphere-admin', state: 'required' });
+  assert.deepEqual(result, {
+    username: 'opensphere-admin',
+    email: 'admin@opensphere.local',
+    state: 'required'
+  });
   assert.deepEqual(fake.events, [
-    'delete:opensphere-admin',
-    'clear:configmap/opensphere-console-auth-pats',
-    'clear:configmap/opensphere-console-auth-cli-devices',
-    'clear:secret/opensphere-console-auth-cli-flows',
-    'clear:secret/opensphere-console-auth-codes',
+    'delete:admin@opensphere.local',
     'state:required'
   ]);
 });

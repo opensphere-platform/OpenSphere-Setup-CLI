@@ -16,40 +16,47 @@ if (-not $EvidenceDirectory.StartsWith($RepoRoot, [System.StringComparison]::Ord
 }
 [System.IO.Directory]::CreateDirectory($EvidenceDirectory) | Out-Null
 
-$Namespaces = @('opensphere-console-auth', 'opensphere-console', 'opensphere-backbone')
+$Namespaces = @(
+  'opensphere-console-data',
+  'opensphere-console-change',
+  'opensphere-console',
+  'opensphere-oaa-credentials',
+  'opensphere-foundation',
+  'opensphere-system'
+)
 $Crds = @(
-  'backboneclaims.backbone.opensphere.io',
+  'platformsupportprofiles.platform.opensphere.io',
   'uipluginpackages.plugins.opensphere.io',
   'uipluginregistrations.plugins.opensphere.io'
 )
 $ClusterRoles = @(
-  'dupa-backbone-installer',
   'dupa-module-profile-installer',
+  'dupa-console-evidence-reader',
+  'dupa-clidownload-reader',
   'opensphere-console-backend',
-  'opensphere-console-oaa-gateway-controlled-operator',
   'opensphere-console-oaa-gateway-environment-reader',
   'opensphere-module-cluster-observer-v1',
   'opensphere-module-cluster-his-manager-v1',
   'opensphere-module-cluster-infrastructure-manager-v1'
 )
 $ClusterRoleBindings = @(
-  'dupa-backbone-installer',
   'dupa-module-profile-installer',
+  'dupa-console-evidence-reader',
+  'dupa-clidownload-reader',
   'opensphere-console-backend',
-  'opensphere-console-oaa-gateway-controlled-operator',
   'opensphere-console-oaa-gateway-environment-reader'
 )
 $ManagedSecrets = @(
-  'opensphere-console-auth/kanidm-tls',
-  'opensphere-console/kanidm-tls',
+  'opensphere-console-data/opensphere-supabase-secrets',
+  'opensphere-console-change/opensphere-gitea-runtime',
+  'opensphere-console-change/opensphere-gitea-config',
+  'opensphere-console-change/opensphere-gitea-signing',
   'opensphere-console/shell-tls',
-  'opensphere-console/opensphere-console-auth-ca',
-  'opensphere-console/opensphere-console-auth-sig',
-  'opensphere-console/opensphere-identity-kanidm',
-  'opensphere-console/opensphere-rolemgr-kanidm',
-  'opensphere-backbone/backbone-postgres',
-  'opensphere-backbone/backbone-rustfs',
-  'opensphere-backbone/backbone-gitea'
+  'opensphere-console/opensphere-supabase-runtime',
+  'opensphere-console/opensphere-oaa-runtime',
+  'opensphere-console/opensphere-gitea-control-plane',
+  'opensphere-console/opensphere-console-cli-runtime',
+  'opensphere-console/opensphere-notification-runtime'
 )
 
 function Invoke-Kubectl {
@@ -76,7 +83,7 @@ function Wait-ClusterReady {
 }
 
 function Remove-OpenSphere {
-  foreach ($resource in @('backboneclaims.backbone.opensphere.io', 'uipluginpackages.plugins.opensphere.io', 'uipluginregistrations.plugins.opensphere.io')) {
+  foreach ($resource in @('platformsupportprofiles.platform.opensphere.io', 'uipluginpackages.plugins.opensphere.io', 'uipluginregistrations.plugins.opensphere.io')) {
     & kubectl --context $Context delete $resource --all --all-namespaces --ignore-not-found --wait=false 2>$null | Out-Null
   }
   & kubectl --context $Context delete namespace @Namespaces --ignore-not-found --wait=false | Out-Null
@@ -133,7 +140,7 @@ function Get-SecretFingerprint {
 function Invoke-Setup {
   Push-Location $RepoRoot
   try {
-    & .\opensphere-setup.cmd bootstrap --release $Channel --context $Context `
+    & opensphere-setup bootstrap --release $Channel --context $Context `
       --admin-username e2e-admin --admin-display-name 'OpenSphere E2E Administrator' `
       --admin-email 'e2e-admin@opensphere.local' --no-open-browser
     if ($LASTEXITCODE -ne 0) { throw "OpenSphere Setup bootstrap failed for $Channel" }
@@ -143,12 +150,46 @@ function Invoke-Setup {
 }
 
 function Invoke-FreshSetupAndOnboarding {
-  Push-Location $RepoRoot
+  Invoke-Setup
+  $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+  $listener.Start()
+  $port = ([System.Net.IPEndPoint]$listener.LocalEndpoint).Port
+  $listener.Stop()
+  $stdout = Join-Path $EvidenceDirectory ("$Channel-console-port-forward.stdout.log")
+  $stderr = Join-Path $EvidenceDirectory ("$Channel-console-port-forward.stderr.log")
+  Remove-Item -LiteralPath $stdout, $stderr -Force -ErrorAction SilentlyContinue
+  $kubectl = (Get-Command kubectl -ErrorAction Stop).Source
+  $arguments = @(
+    '--context', $Context,
+    '-n', 'opensphere-console',
+    'port-forward', 'svc/opensphere-console-ext', "${port}:8090",
+    '--address', '127.0.0.1'
+  )
+  $forward = Start-Process -FilePath $kubectl -ArgumentList $arguments -WindowStyle Hidden `
+    -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
   try {
-    & node .\scripts\e2e-bootstrap-onboarding.mjs $Channel
-    if ($LASTEXITCODE -ne 0) { throw "OpenSphere first-administrator E2E failed for $Channel" }
+    $deadline = [DateTimeOffset]::UtcNow.AddSeconds(30)
+    do {
+      Start-Sleep -Milliseconds 200
+      if ($forward.HasExited) {
+        throw "Console port-forward exited before ready; inspect $stdout and $stderr"
+      }
+      $ready = Test-NetConnection -ComputerName 127.0.0.1 -Port $port -InformationLevel Quiet -WarningAction SilentlyContinue
+    } while (-not $ready -and [DateTimeOffset]::UtcNow -lt $deadline)
+    if (-not $ready) { throw "Console port-forward did not become ready; inspect $stdout and $stderr" }
+
+    Push-Location $RepoRoot
+    try {
+      $previousConsole = $env:OPENSPHERE_E2E_CONSOLE
+      $env:OPENSPHERE_E2E_CONSOLE = "https://localhost:$port"
+      & node .\scripts\e2e-first-admin.mjs
+      if ($LASTEXITCODE -ne 0) { throw "OpenSphere Supabase first-administrator E2E failed for $Channel" }
+    } finally {
+      $env:OPENSPHERE_E2E_CONSOLE = $previousConsole
+      Pop-Location
+    }
   } finally {
-    Pop-Location
+    if (-not $forward.HasExited) { Stop-Process -Id $forward.Id -Force }
   }
 }
 

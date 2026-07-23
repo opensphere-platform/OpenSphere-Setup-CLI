@@ -1,6 +1,10 @@
 import { selectAuthEnvironment } from './auth-environment.mjs';
 import { normalizeConsoleUrl } from './console-url.mjs';
-import { assertReleaseBackupTarget, inspectBackupTarget, parseBackupTargetSecretRef } from './backup-target.mjs';
+import {
+  assertReleaseRecoveryTarget,
+  inspectRecoveryTarget,
+  parseRecoveryTargetSecretRef
+} from './recovery-target.mjs';
 import { preflight } from './preflight.mjs';
 import {
   assertReleaseShellTlsReference,
@@ -19,11 +23,11 @@ export function preflightPromotion({
   storageClass,
   consoleUrl,
   authEnvironment,
-  backupTargetSecret,
+  recoveryTargetSecret,
   shellTlsSecret,
   readSecret,
   runPreflight = preflight,
-  inspectBackup = inspectBackupTarget,
+  inspectRecovery = inspectRecoveryTarget,
   inspectTls = inspectExternalShellTlsSecret
 }) {
   if (!PROMOTION_CHANNELS.has(channel)) {
@@ -35,12 +39,15 @@ export function preflightPromotion({
   }
   if (typeof readSecret !== 'function') throw new Error('promotion preflight requires a Secret reader');
 
-  const backupReference = parseBackupTargetSecretRef(backupTargetSecret);
+  const recoveryReference = parseRecoveryTargetSecretRef(recoveryTargetSecret);
   const tlsReference = parseShellTlsSecretRef(shellTlsSecret);
   assertReleaseShellTlsReference(channel, tlsReference);
 
   const cluster = runPreflight({ storageClass, channel });
-  const backup = assertReleaseBackupTarget(inspectBackup(readSecret(backupReference)), channel);
+  const recovery = assertReleaseRecoveryTarget(
+    inspectRecovery(readSecret(recoveryReference)),
+    channel
+  );
   const tls = inspectTls(readSecret(tlsReference), consoleUrl);
 
   return {
@@ -49,10 +56,10 @@ export function preflightPromotion({
     kubernetesVersion: cluster.serverVersion,
     nodeCount: cluster.nodeCount,
     storageClass: cluster.storageClass,
-    backup: {
-      endpoint: backup.endpoint,
-      bucket: backup.bucket,
-      region: backup.region
+    recovery: {
+      endpoint: recovery.endpoint,
+      bucket: recovery.bucket,
+      region: recovery.region
     },
     tls: {
       hostname: tls.hostname,

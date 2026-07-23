@@ -4,17 +4,12 @@ import {
   configureShellServiceEndpoint,
   defaultConsoleUrl,
   isLegacyEdgeLoopbackHttpOrigin,
-  normalizeConsoleUrl,
-  oidcIssuer
+  normalizeConsoleUrl
 } from '../src/console-url.mjs';
 
-test('Console endpoint is an exact HTTPS origin shared by OIDC and CLI', () => {
+test('Console endpoint is one exact origin shared by browser, Supabase and CLI', () => {
   assert.equal(normalizeConsoleUrl('https://console.example.test/'), 'https://console.example.test');
   assert.equal(normalizeConsoleUrl('https://console.example.test:9443'), 'https://console.example.test:9443');
-  assert.equal(
-    oidcIssuer('https://console.example.test'),
-    'https://console.example.test/oauth2/openid/opensphere-console'
-  );
 });
 
 test('every managed channel has one canonical HTTPS localhost default', () => {

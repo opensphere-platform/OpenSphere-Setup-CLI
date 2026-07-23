@@ -1,132 +1,132 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { BASE_MANIFESTS } from '../src/bootstrap.mjs';
+import { resolve, sep } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import {
+  BASE_MANIFESTS,
+  CORE_ROLLOUTS,
+  GITEA_MANIFEST,
+  renderManifest,
+  SUPABASE_MANIFEST,
+  SUPABASE_MIGRATIONS
+} from '../src/bootstrap.mjs';
+import { COMPONENTS } from '../src/release.mjs';
 
-test('base bootstrap manifests deploy OAA Core as required native Main Shell runtime', () => {
-  const paths = BASE_MANIFESTS.map((manifest) => manifest.path);
-  assert.equal(paths.includes('backend/backbone/console-services.yaml'), true);
-});
+const CONSOLE_SOURCE = process.env.OPENSPHERE_CONSOLE_SOURCE
+  ? pathToFileURL(`${resolve(process.env.OPENSPHERE_CONSOLE_SOURCE)}${sep}`)
+  : new URL('../../OpenSphere-console/', import.meta.url);
 
-test('the OAA Core manifest replacement targets only the canonical oaaGateway repository', () => {
-  const spec = BASE_MANIFESTS.find((manifest) => manifest.path === 'backend/backbone/console-services.yaml');
-  assert.ok(spec, 'console-services.yaml must be a base manifest');
-  assert.deepEqual(spec.replacements, [
-    ['ghcr\\.io/opensphere-platform/opensphere-console-oaa-gateway(?:@sha256:[A-Za-z0-9_]+|:[A-Za-z0-9][A-Za-z0-9._-]*)', 'oaaGateway']
+function localReleaseLock() {
+  const components = Object.fromEntries(Object.entries(COMPONENTS).map(
+    ([component, repository], index) => [
+      component,
+      {
+        image: `ghcr.io/opensphere-platform/${repository}@sha256:${String(index + 1).padStart(64, '0')}`
+      }
+    ]
+  ));
+  return { sourceRevision: '1'.repeat(40), components };
+}
+
+test('fresh bootstrap is Supabase Data & Identity plus separate Gitea change authority', () => {
+  assert.equal(SUPABASE_MANIFEST.path, 'backend/supabase/bootstrap/supabase.yaml');
+  assert.equal(GITEA_MANIFEST.path, 'backend/gitea/bootstrap/gitea.yaml');
+  assert.deepEqual(SUPABASE_MANIFEST.replacements.map(([, component]) => component), [
+    'supabasePostgres', 'supabaseAuth', 'supabaseRest', 'supabaseStorage'
+  ]);
+  assert.deepEqual(GITEA_MANIFEST.replacements.map(([, component]) => component), [
+    'gitea', 'giteaPostgres'
   ]);
 });
 
-// Replay the exact fetchManifest replacement and its final governed-image
-// validator (the same `image:` line regex fetchManifest applies) against
-// every historically-observed source form of the OAA reference, so a clean
-// bootstrap or an upgrade/rollback to any signed prior release keeps working:
-//   1. the current source's underscore digest placeholder
-//   2. an already-resolved canonical @sha256 digest (e.g. a prior lock file
-//      replayed verbatim, or a source revision that pinned a real digest)
-//   3. a historical signed release that pinned the canonical repo with a
-//      mutable tag (the exact CI failure: :2.0.0-rc.1)
-// A substituted repo/org must NOT be replaced and must still fail the
-// validator -- governed image acceptance stays scoped to the canonical repo.
-function finalGovernedImageValidator(imageLine) {
-  return /^ghcr\.io\/opensphere-platform\/[a-z0-9-]+@sha256:[a-f0-9]{64}$/.test(imageLine);
-}
-
-function replayOaaReplacement(sourceImageRef) {
-  const spec = BASE_MANIFESTS.find((manifest) => manifest.path === 'backend/backbone/console-services.yaml');
-  const [[pattern, component]] = spec.replacements;
-  assert.equal(component, 'oaaGateway');
-
-  const canonicalDigest = `sha256:${'a'.repeat(64)}`;
-  const canonicalImage = `ghcr.io/opensphere-platform/opensphere-console-oaa-gateway@${canonicalDigest}`;
-  const sourceYaml = [
-    'spec:',
-    '  template:',
-    '    spec:',
-    '      containers:',
-    '        - name: oaa-gateway',
-    `          image: ${sourceImageRef} # pinned by release manifest`
-  ].join('\n');
-
-  const resolved = sourceYaml.replace(new RegExp(pattern, 'g'), canonicalImage);
-  const imageLine = resolved.match(/^[ \t]*image:[ \t]+["']?([^"'#\s]+)/m)[1];
-  return { resolved, imageLine, canonicalImage };
-}
-
-test('the OAA Core replacement resolves the current underscore digest placeholder to the canonical governed image', () => {
-  const { resolved, imageLine, canonicalImage } = replayOaaReplacement(
-    'ghcr.io/opensphere-platform/opensphere-console-oaa-gateway@sha256:__OAA_GATEWAY_IMAGE_DIGEST__'
-  );
-  assert.doesNotMatch(resolved, /__OAA_GATEWAY_IMAGE_DIGEST__/);
-  assert.equal(imageLine, canonicalImage);
-  assert.ok(finalGovernedImageValidator(imageLine), 'must not be weakened to accept the replacement result');
+test('all current Supabase migrations, including notification and recovery ownership, are release material', () => {
+  assert.equal(SUPABASE_MIGRATIONS[0], '0001_console_backbone.sql');
+  assert.equal(SUPABASE_MIGRATIONS.at(-1), '0023_ceph_prerequisite_consumer.sql');
+  assert.equal(SUPABASE_MIGRATIONS.includes('0011_notification_delivery.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0022_oaa_recovery_owner_permissions.sql'), true);
+  assert.equal(new Set(SUPABASE_MIGRATIONS).size, SUPABASE_MIGRATIONS.length);
 });
 
-test('the OAA Core replacement resolves an exact canonical @sha256 digest reference to the locked governed image', () => {
-  const historicalDigest = `sha256:${'b'.repeat(64)}`;
-  const { imageLine, canonicalImage } = replayOaaReplacement(
-    `ghcr.io/opensphere-platform/opensphere-console-oaa-gateway@${historicalDigest}`
-  );
-  assert.equal(imageLine, canonicalImage);
-  assert.ok(finalGovernedImageValidator(imageLine));
+test('base Main Shell includes Backend, DUPA, notification, OAA and governed adapter', () => {
+  const paths = BASE_MANIFESTS.map(({ path }) => path);
+  for (const path of [
+    'backend/opensphere-console-backend/deploy.yaml',
+    'backend/dupa-control/opensphere-console-dupa-controller.yaml',
+    'backend/notification-dispatcher/deploy.yaml',
+    'backend/opensphere-console-oaa-gateway/deploy.yaml',
+    'backend/oaa-governed-adapter/deploy.yaml',
+    'deploy/opensphere-console.yaml'
+  ]) assert.equal(paths.includes(path), true, path);
+  assert.equal(paths.some((path) => /kanidm|backbone/.test(path)), false);
 });
 
-// This is the observed CI failure (run 29385717474): a historical signed
-// release pinned the canonical OAA repository with a mutable tag, and clean
-// bootstrap / previous-release rollback against that source revision must
-// still rewrite it to the locked, digest-pinned governed image.
-test('the OAA Core replacement resolves an exact canonical :tag reference (2.0.0-rc.1) to the locked governed image', () => {
-  const { imageLine, canonicalImage } = replayOaaReplacement(
-    'ghcr.io/opensphere-platform/opensphere-console-oaa-gateway:2.0.0-rc.1'
-  );
-  assert.equal(imageLine, canonicalImage);
-  assert.ok(finalGovernedImageValidator(imageLine));
+test('rollout order establishes Supabase and Gitea before OAA and Main Shell', () => {
+  const index = (namespace, resource) =>
+    CORE_ROLLOUTS.findIndex(([candidateNamespace, candidateResource]) =>
+      candidateNamespace === namespace && candidateResource === resource);
+  const supabase = index('opensphere-console-data', 'statefulset/opensphere-supabase-postgres');
+  const gitea = index('opensphere-console-change', 'deployment/opensphere-gitea');
+  const backend = index('opensphere-console', 'deployment/opensphere-console-backend');
+  const oaa = index('opensphere-console', 'deployment/opensphere-console-oaa-gateway');
+  const shell = index('opensphere-console', 'deployment/opensphere-console');
+  assert.ok(supabase >= 0 && gitea >= 0 && backend >= 0 && oaa >= 0 && shell >= 0);
+  assert.ok(supabase < backend);
+  assert.ok(gitea < backend);
+  assert.ok(backend < oaa);
+  assert.ok(oaa < shell);
 });
 
-test('the OAA Core replacement does not broaden acceptance to a substituted repository/org and the result still fails the governed-image validator', () => {
-  const { imageLine } = replayOaaReplacement(
-    'ghcr.io/some-other-org/opensphere-console-oaa-gateway:2.0.0-rc.1'
-  );
-  assert.equal(imageLine, 'ghcr.io/some-other-org/opensphere-console-oaa-gateway:2.0.0-rc.1');
-  assert.ok(!finalGovernedImageValidator(imageLine), 'a non-canonical repo/org must remain unreplaced and rejected');
+test('every release base workload references the Setup-managed GHCR pull Secret', () => {
+  const files = [
+    'backend/supabase/bootstrap/supabase.yaml',
+    'backend/gitea/bootstrap/gitea.yaml',
+    'backend/opensphere-console-backend/deploy.yaml',
+    'backend/dupa-control/opensphere-console-dupa-controller.yaml',
+    'backend/notification-dispatcher/deploy.yaml',
+    'backend/opensphere-console-oaa-gateway/deploy.yaml',
+    'backend/oaa-governed-adapter/deploy.yaml',
+    'deploy/opensphere-console.yaml'
+  ];
+  for (const file of files) {
+    const source = readFileSync(new URL(file, CONSOLE_SOURCE), 'utf8');
+    const workloads = [...source.matchAll(/^kind:\s*(?:Deployment|StatefulSet|DaemonSet|Job|CronJob)\s*$/gm)].length;
+    const pullSecretReferences = [...source.matchAll(/imagePullSecrets:\s*\[\{ name: opensphere-ghcr-pull \}\]/g)].length;
+    assert.ok(workloads >= 1, `${file} must contain at least one workload`);
+    assert.equal(
+      pullSecretReferences,
+      workloads,
+      `${file} must attach the managed pull Secret to every workload Pod template`
+    );
+  }
 });
 
-test('the OAA Core replacement regex stops at YAML token boundaries and does not consume quotes, comments, or whitespace', () => {
-  const spec = BASE_MANIFESTS.find((manifest) => manifest.path === 'backend/backbone/console-services.yaml');
-  const [[pattern]] = spec.replacements;
-  const re = new RegExp(pattern);
-
-  const quoted = re.exec('image: "ghcr.io/opensphere-platform/opensphere-console-oaa-gateway:2.0.0-rc.1"');
-  assert.ok(quoted, 'must match inside a quoted scalar');
-  assert.equal(quoted[0], 'ghcr.io/opensphere-platform/opensphere-console-oaa-gateway:2.0.0-rc.1');
-
-  const commented = re.exec('image: ghcr.io/opensphere-platform/opensphere-console-oaa-gateway:2.0.0-rc.1 # pinned');
-  assert.equal(commented[0], 'ghcr.io/opensphere-platform/opensphere-console-oaa-gateway:2.0.0-rc.1');
-
-  const digestPlaceholder = re.exec('image: ghcr.io/opensphere-platform/opensphere-console-oaa-gateway@sha256:__OAA_GATEWAY_IMAGE_DIGEST__\n');
-  assert.equal(digestPlaceholder[0], 'ghcr.io/opensphere-platform/opensphere-console-oaa-gateway@sha256:__OAA_GATEWAY_IMAGE_DIGEST__');
+test('every canonical Console manifest renders with only governed immutable images', () => {
+  const lock = localReleaseLock();
+  for (const spec of [SUPABASE_MANIFEST, GITEA_MANIFEST, ...BASE_MANIFESTS]) {
+    const source = readFileSync(new URL(spec.path, CONSOLE_SOURCE), 'utf8');
+    const rendered = renderManifest(
+      lock,
+      spec,
+      source,
+      'hostpath',
+      'https://localhost:8090',
+      'development'
+    );
+    assert.doesNotMatch(rendered, /__OPENSPHERE_[A-Z0-9_]+__/);
+    const images = [...rendered.matchAll(/^[ \t]*image:[ \t]+["']?([^"'#\s]+)/gm)]
+      .map((match) => match[1]);
+    for (const image of images) {
+      assert.match(
+        image,
+        /^ghcr\.io\/opensphere-platform\/[a-z0-9-]+@sha256:[a-f0-9]{64}$/
+      );
+    }
+  }
 });
 
-test('upgrade materialization uses the canonical base manifest set', () => {
+test('active Setup bootstrap source has no retired runtime orchestration', () => {
   const source = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
-  assert.match(source, /async function materializeRelease[\s\S]*?BASE_MANIFESTS\.map/);
-  assert.doesNotMatch(source, /\bMANIFESTS\.map/);
-});
-
-test('bootstrap never deletes the OAA Core deployment after a base apply', () => {
-  const source = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
-  assert.doesNotMatch(source, /removeOptionalOaaStaging/);
-  assert.doesNotMatch(source, /delete[\s\S]{0,80}opensphere-console-oaa-gateway/);
-});
-
-test('OAA Core rollout is awaited after CBS and before Console readiness completes', () => {
-  const source = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
-  const match = source.match(/const CORE_ROLLOUTS = \[([\s\S]*?)\];/);
-  assert.ok(match, 'CORE_ROLLOUTS must be defined');
-  const entries = match[1];
-  const cbsIndex = entries.indexOf("'opensphere-backbone', 'deployment/backbone-gitea'");
-  const oaaIndex = entries.indexOf("'opensphere-backbone', 'deployment/opensphere-console-oaa-gateway'");
-  const consoleIndex = entries.indexOf("'opensphere-console', 'deployment/opensphere-console'");
-  assert.ok(cbsIndex >= 0 && oaaIndex >= 0 && consoleIndex >= 0);
-  assert.ok(cbsIndex < oaaIndex, 'OAA Core rollout must be awaited after CBS');
-  assert.ok(oaaIndex < consoleIndex, 'OAA Core rollout must be awaited before Console readiness completes');
+  assert.doesNotMatch(source, /opensphere-console-auth|opensphere-backbone|backbone-postgres|backbone-rustfs/);
+  assert.doesNotMatch(source, /provision-admin\.mjs|recover-account|KANIDM_/);
 });

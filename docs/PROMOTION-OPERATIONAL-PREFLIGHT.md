@@ -1,33 +1,37 @@
 # OpenSphere candidate/stable 운영 사전검증 Runbook
 
-이 절차는 **클러스터를 변경하지 않고** candidate/stable 설치에 필요한 외부 운영 조건을 검증한다. `edge`의 kind·로컬 검증을 candidate 또는 운영 승인으로 바꾸지 않는다.
+Status: **promotion HOLD**
 
-## 1. 운영자 준비물
+이 절차는 candidate/stable에 필요한 외부 운영 조건을 읽기 전용으로 검사한다. 현재 Setup은
+Supabase PostgreSQL, Supabase Storage, Gitea와 Gitea PostgreSQL을 함께 복구하는 signed
+executor와 격리 drill 증거 계약이 완성되지 않았으므로 candidate/stable bootstrap과 upgrade를
+의도적으로 거부한다.
 
-1. 지원되는 원격 Kubernetes context와 `kubectl` 권한
-2. 스토리지 운영자가 보증한 StorageClass
+## 사전 조건
+
+1. 지원되는 원격 Kubernetes context
+2. 운영자가 보증한 durable StorageClass
    - `opensphere.io/backbone-storage-profile=durable-v1`
    - `opensphere.io/encryption-at-rest=true`
-   - `opensphere.io/failure-domain=multi-node`, `zone-redundant` 또는 `region-redundant`
-   - `reclaimPolicy=Retain`, `allowVolumeExpansion=true`
-3. 클러스터 밖 HTTPS S3-compatible endpoint, bucket, access key, secret key, CA bundle
-4. Console public hostname을 포함하는 외부 CA leaf + issuer chain과 대응 private key
+   - `opensphere.io/failure-domain=multi-node|zone-redundant|region-redundant`
+   - `reclaimPolicy=Retain`
+   - `allowVolumeExpansion=true`
+3. 클러스터 밖 HTTPS S3-compatible recovery endpoint와 CA
+4. Console public hostname의 외부 CA TLS chain과 private key
 
-StorageClass annotation은 단순한 사용자 선언이 아니라 CSI·암호화·장애 도메인 보장을 가진 스토리지 운영자의 인증이어야 한다.
+## 사용자 소유 Secret
 
-## 2. 사용자 소유 Secret 준비
-
-비밀값을 명령행 literal, Git, 로그 또는 설치 lock에 넣지 않는다. 보안 파일에서 Secret을 만들고, 설치 전과 후에도 `platform-secrets` namespace는 운영자가 소유한다.
+비밀값을 argv, Git, 로그 또는 release lock에 넣지 않는다.
 
 ```powershell
 kubectl --context <production-context> create namespace platform-secrets
 
-kubectl --context <production-context> -n platform-secrets create secret generic opensphere-audit-backup `
+kubectl --context <production-context> -n platform-secrets create secret generic opensphere-recovery-target `
   --from-file=endpoint=./endpoint.txt `
   --from-file=bucket=./bucket.txt `
   --from-file=access_key=./access-key.txt `
   --from-file=secret_key=./secret-key.txt `
-  --from-file=ca.crt=./backup-ca.crt `
+  --from-file=ca.crt=./recovery-ca.crt `
   --from-file=region=./region.txt
 
 kubectl --context <production-context> -n platform-secrets create secret tls opensphere-console-public-tls `
@@ -36,35 +40,32 @@ kubectl --context <production-context> -n platform-secrets annotate secret opens
   opensphere.io/shell-tls-profile=external-ca-v1
 ```
 
-`console-fullchain.pem`은 non-CA leaf 뒤에 issuer chain을 포함해야 한다. `localhost` self-signed certificate나 in-cluster RustFS endpoint는 candidate/stable에서 거부된다.
-
-## 3. 읽기 전용 preflight
-
-아래 명령은 API·node·권한·StorageClass와 두 Secret 계약을 검사한다. Secret 값은 출력하지 않는다. S3 credential의 실제 put/restore 검증은 bootstrap 중 recovery drill이 수행한다.
+## 읽기 전용 preflight
 
 ```powershell
 opensphere-setup preflight --release candidate `
   --context <production-context> `
   --storage-class <durable-storage-class> `
   --console https://console.example.com `
-  --backup-target-secret platform-secrets/opensphere-audit-backup `
+  --recovery-target-secret platform-secrets/opensphere-recovery-target `
   --shell-tls-secret platform-secrets/opensphere-console-public-tls
 ```
 
-성공 출력에는 Kubernetes version/node 수, 선택 StorageClass, S3 endpoint·bucket·region, TLS hostname·만료일, production/TOTP 정책만 포함된다.
+이 명령은 node/권한/StorageClass, 외부 endpoint 분리와 TLS profile을 검사한다. Secret 값은
+출력하지 않는다. 성공은 운영 준비 입력이 형식적으로 유효하다는 뜻일 뿐 설치 승인이나 복구
+증거가 아니다.
 
-## 4. candidate 설치와 독립 증적
+## HOLD 해제 조건
 
-```powershell
-opensphere-setup bootstrap --release candidate `
-  --context <production-context> `
-  --storage-class <durable-storage-class> `
-  --console https://console.example.com `
-  --backup-target-secret platform-secrets/opensphere-audit-backup `
-  --shell-tls-secret platform-secrets/opensphere-console-public-tls
+다음이 signed release에 들어오고 독립 클러스터에서 재현되어야 한다.
 
-opensphere-setup verify --context <production-context> `
-  --console https://console.example.com --require-zero-restarts
-```
+- Supabase PostgreSQL point-in-time backup/restore
+- Supabase Storage object·metadata 일관 복구와 canary byte 검증
+- Gitea DB, repository, LFS와 signing/control-plane 상태 복구
+- 격리 namespace 또는 별도 cluster restore
+- AAL2와 two-person 승인
+- request → Gitea review/merge → executor receipt → Supabase append-only audit correlation
+- 실패 주입, RTO/RPO, 원본과 복구 대상 digest/count 비교
+- evidence promotion과 보존 정책
 
-독립 감사자는 최초 관리자 onboarding, production TOTP, service credential 회전, 외부 backup object와 restore drill, `os` CLI 제어, immutable release lock, hostname TLS chain을 재현해야 한다. 이 증적과 재감사 승인 전에는 stable 승격 또는 운영 사용을 주장하지 않는다.
+이 조건 전에는 `candidate` 또는 `stable` 설치 명령을 실행 경로로 문서화하거나 우회하지 않는다.

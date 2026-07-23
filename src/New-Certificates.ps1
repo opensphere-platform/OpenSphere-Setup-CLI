@@ -34,20 +34,18 @@ $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::n
 $san = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
 @(
   'localhost',
-  'kanidm',
-  'kanidm-core',
-  'kanidm.opensphere-console-auth.svc',
-  'kanidm-core.opensphere-console-auth.svc',
-  'kanidm.opensphere-console-auth.svc.cluster.local',
-  'kanidm-core.opensphere-console-auth.svc.cluster.local',
-  'opensphere-console-auth',
-  'opensphere-console-auth.opensphere-console.svc',
-  'backbone-postgres',
-  'backbone-postgres.opensphere-backbone.svc',
-  'backbone-postgres.opensphere-backbone.svc.cluster.local',
-  'backbone-rustfs',
-  'backbone-rustfs.opensphere-backbone.svc',
-  'backbone-rustfs.opensphere-backbone.svc.cluster.local'
+  # P3-W1 foundation-identity 스택(plan-003 §13.5.3 SAN 확장): workforce Keycloak·Syncope·SCIM-GW 의
+  # in-cluster svc DNS 를 leaf SAN 에 등재한다. CA·sig.key 는 불변 재사용.
+  'keycloak.opensphere-foundation.svc',
+  'keycloak.opensphere-foundation.svc.cluster.local',
+  'syncope.opensphere-foundation.svc',
+  'syncope.opensphere-foundation.svc.cluster.local',
+  'scim-gw.opensphere-foundation.svc',
+  'scim-gw.opensphere-foundation.svc.cluster.local',
+  # admission webhook serving cert(opensphere-foundation-identity webhook @ opensphere-system).
+  # 회전 시 webhook 서버는 새 SAN/키를 캐시 재로드해야 한다(§12A.2 write-path 하드 의존·§12A.4 AdmissionWebhookCertExpiry).
+  'opensphere-foundation-identity-webhook.opensphere-system.svc',
+  'opensphere-foundation-identity-webhook.opensphere-system.svc.cluster.local'
 ) + $DnsNames | Sort-Object -Unique | ForEach-Object {
   if ($_ -and $_ -notmatch '[\s/]') { $san.AddDnsName($_) }
 }

@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { bootstrap, existingOpenSphereNamespaces, migrateLegacyInstallationLock, readInstallationLock, rotateServiceCredentials, uninstallManagedInstallation, upgrade } from './bootstrap.mjs';
+import { bootstrap, existingOpenSphereNamespaces, migrateLegacyInstallationLock, readInstallationLock, uninstallManagedInstallation, upgrade } from './bootstrap.mjs';
 import { installConsoleCli } from './install-cli.mjs';
 import { installConsoleCliFromCluster } from './cluster-cli-install.mjs';
-import { resolveChannel, validateChannel, validateLock } from './release.mjs';
+import { normalizeRegistryCredentials, resolveChannel, validateChannel, validateLock } from './release.mjs';
 import { assertKubectl, kubectl } from './process.mjs';
 import { verifyInstallation } from './verify.mjs';
 import { defaultConsoleUrl, normalizeConsoleUrl } from './console-url.mjs';
@@ -12,6 +12,7 @@ import { selectAuthEnvironment } from './auth-environment.mjs';
 import { assertReleaseShellTlsReference, parseShellTlsSecretRef } from './shell-tls.mjs';
 import { preflightPromotion } from './promotion-preflight.mjs';
 import { resetInitialAdministrator } from './reset-initial-admin.mjs';
+import { createProgressReporter, reportReleaseProgress } from './progress.mjs';
 
 function option(names, fallback) {
   const aliases = Array.isArray(names) ? names : [names];
@@ -30,12 +31,31 @@ function hasOption(name) {
   return process.argv.includes(name);
 }
 
+async function registryCredentialsOption() {
+  const fromStdin = hasOption('--registry-token-stdin');
+  const hasUsername = hasOption('--registry-username');
+  if (!fromStdin) {
+    if (hasUsername) throw new Error('--registry-username requires --registry-token-stdin');
+    return undefined;
+  }
+  if (!hasUsername) throw new Error('--registry-token-stdin requires --registry-username');
+  if (process.stdin.isTTY) {
+    throw new Error('--registry-token-stdin requires a pipe; do not enter a registry token as a visible command argument');
+  }
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return normalizeRegistryCredentials({
+    username: option('--registry-username', ''),
+    token: Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString('utf8')
+  });
+}
+
 function validateInitialAdmin(initialAdmin) {
   if (!/^[a-z][a-z0-9._-]{1,31}$/.test(initialAdmin.username)) {
     throw new Error('--admin-username must be 2-32 lowercase letters, numbers, dot, underscore or hyphen');
   }
-  if (['admin', 'idm_admin', 'anonymous'].includes(initialAdmin.username)) {
-    throw new Error(`--admin-username ${initialAdmin.username} is reserved by the identity service`);
+  if (['anonymous'].includes(initialAdmin.username)) {
+    throw new Error(`--admin-username ${initialAdmin.username} is reserved by Supabase Auth`);
   }
   if (!initialAdmin.displayName.trim()) throw new Error('--admin-display-name must not be empty');
   if (!/^[^\s@]+@[^\s@]+$/.test(initialAdmin.email)) throw new Error('--admin-email must be an email address');
@@ -52,26 +72,27 @@ async function readLock(lockPath) {
 }
 
 function help() {
-  console.log(`OpenSphere Setup CLI 0.3.0-edge.1
+  console.log(`OpenSphere Setup CLI 0.4.0-edge.1
 
 Usage:
   opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
+      [--registry-username <github-login> --registry-token-stdin]
   opensphere-setup preflight --release <candidate|stable> --console <https-origin>
-      --backup-target-secret <namespace/name> --shell-tls-secret <namespace/name>
+      --recovery-target-secret <namespace/name> --shell-tls-secret <namespace/name>
       [--context <kube-context>] [--storage-class <name>]
   opensphere-setup bootstrap --release <channel> [--lock <verified-lock-file>]
   opensphere-setup bootstrap -r <channel> [--lock <verified-lock-file>]
       [--context <kube-context>] [--admin-username <name>]
        [--admin-display-name <name>] [--admin-email <email>]
        [--storage-class <name>] [--console <https-origin|loopback-http-origin>]
-       [--auth-environment <development|production>] [--backup-target-secret <namespace/name>]
+       [--auth-environment <development|production>]
        [--shell-tls-secret <namespace/name>]
+       [--registry-username <github-login> --registry-token-stdin]
        [--no-open-browser] [--add-to-path]
   opensphere-setup upgrade --release <edge|candidate|stable> [--lock <verified-lock-file>]
       [--context <kube-context>] [--storage-class <name>] [--console <https-origin>]
-      [--backup-target-secret <namespace/name>] [--add-to-path]
+      [--add-to-path] [--registry-username <github-login> --registry-token-stdin]
   opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
-  opensphere-setup rotate-service-credentials [--context <kube-context>]
   opensphere-setup reset-initial-admin --confirm RESET-INITIAL-ADMIN [--context <kube-context>]
   opensphere-setup uninstall --purge-data --confirm DELETE-OPENSPHERE [--context <kube-context>]
   opensphere-setup install-cli [--console <url>] [--install-dir <directory>]
@@ -91,7 +112,7 @@ function readSecret(reference) {
 function printPromotionPreflight(evidence) {
   console.log(`[완료] ${evidence.channel} 설치 전 읽기 전용 사전검증`);
   console.log(`Kubernetes ${evidence.kubernetesVersion} / ${evidence.nodeCount} nodes / StorageClass ${evidence.storageClass}`);
-  console.log(`Backup ${evidence.backup.endpoint} bucket=${evidence.backup.bucket} region=${evidence.backup.region}`);
+  console.log(`Recovery ${evidence.recovery.endpoint} bucket=${evidence.recovery.bucket} region=${evidence.recovery.region}`);
   console.log(`TLS ${evidence.tls.hostname} (${evidence.tls.profile}, expires ${evidence.tls.validTo})`);
   console.log(`Authentication policy: ${evidence.authEnvironment} (TOTP enforced)`);
 }
@@ -105,9 +126,12 @@ async function main() {
   const suppliedConsoleUrl = hasOption('--console') ? normalizeConsoleUrl(option('--console', '')) : undefined;
   const authEnvironment = hasOption('--auth-environment') ? option('--auth-environment', '') : undefined;
   if (context) process.env.OPENSPHERE_KUBE_CONTEXT = context;
+  if (hasOption('--backup-target-secret')) {
+    throw new Error('The retired --backup-target-secret option is not accepted; --recovery-target-secret is read-only preflight input');
+  }
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
-  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.3.0-edge.1');
+  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.4.0-edge.1');
 
   if (command === 'install-cli') {
     const installed = await installConsoleCli({
@@ -124,7 +148,8 @@ async function main() {
 
   if (command === 'resolve') {
     validateChannel(channel);
-    const lock = await resolveChannel(channel);
+    const registryCredentials = await registryCredentialsOption();
+    const lock = await resolveChannel(channel, { registryCredentials });
     await writeLock(lockPath, lock);
     console.log(`[완료] ${channel} 채널을 ${lock.releaseDigest}로 잠금`);
     console.log(`Lock: ${lockPath}`);
@@ -138,7 +163,7 @@ async function main() {
       storageClass: option('--storage-class', undefined),
       consoleUrl: suppliedConsoleUrl,
       authEnvironment,
-      backupTargetSecret: option('--backup-target-secret', ''),
+      recoveryTargetSecret: option('--recovery-target-secret', ''),
       shellTlsSecret: option('--shell-tls-secret', ''),
       readSecret
     });
@@ -147,7 +172,14 @@ async function main() {
   }
 
   if (command === 'bootstrap') {
+    const progress = createProgressReporter();
+    progress.begin(
+      'OpenSphere bootstrap',
+      `release=${channel}, context=${context || 'current'}, console=${suppliedConsoleUrl ?? 'default'}`
+    );
+    progress.step('입력 옵션과 설치 정책 검증');
     validateChannel(channel);
+    const registryCredentials = await registryCredentialsOption();
     const selectedAuthEnvironment = selectAuthEnvironment(channel, authEnvironment);
     const requestedShellTlsSecret = hasOption('--shell-tls-secret') ? option('--shell-tls-secret', '') : undefined;
     assertReleaseShellTlsReference(channel, requestedShellTlsSecret ? parseShellTlsSecretRef(requestedShellTlsSecret) : undefined);
@@ -156,11 +188,15 @@ async function main() {
       displayName: option('--admin-display-name', 'OpenSphere Administrator'),
       email: option('--admin-email', 'admin@opensphere.local')
     });
+    progress.done(`auth=${selectedAuthEnvironment}, registry=${registryCredentials ? 'explicit' : 'automatic'}`);
     // Validate user input before touching the cluster. Besides providing a
     // clearer error, this keeps invalid bootstrap attempts side-effect free.
-    const migrated = await migrateLegacyInstallationLock();
-    if (migrated) console.log(`[마이그레이션] 기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
+    progress.step('kubectl 및 Kubernetes API 연결 확인', `context=${context || 'current'}`);
     assertKubectl();
+    progress.done('client와 server 응답 확인');
+    progress.step('기존 OpenSphere 설치 상태와 release lock 확인');
+    const migrated = await migrateLegacyInstallationLock();
+    if (migrated) progress.item('마이그레이션', `기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
     let lock;
     const installed = readInstallationLock();
     if (installed) {
@@ -174,7 +210,8 @@ async function main() {
         }
       }
       lock = installed;
-      console.log(`[재개] cluster release lock ${lock.releaseDigest}`);
+      progress.item('재개', `cluster release lock ${lock.releaseDigest}`);
+      progress.done('관리형 설치 재개');
     } else {
       const unmanaged = existingOpenSphereNamespaces();
       if (unmanaged.length) {
@@ -185,11 +222,21 @@ async function main() {
         if (lock.channel !== channel) {
           throw new Error(`Supplied lock channel ${lock.channel} differs from requested channel ${channel}`);
         }
-        console.log(`[사용] 명시적 release lock ${lock.releaseDigest}`);
+        progress.item('사용', `명시적 release lock ${lock.releaseDigest}`);
+        progress.done('명시적 lock 사용');
       } else {
-        lock = await resolveChannel(channel);
+        progress.done('신규 설치 상태');
+        progress.step(
+          '릴리스 anchor, Release BOM 및 12개 이미지 공급망 검증',
+          `channel=${channel}`
+        );
+        lock = await resolveChannel(channel, {
+          registryCredentials,
+          onProgress: (event) => reportReleaseProgress(progress, event)
+        });
         await writeLock(lockPath, lock);
-        console.log(`[완료] ${channel} 채널을 ${lock.releaseDigest}로 새로 잠금`);
+        progress.done(`${channel} → ${lock.releaseDigest}`);
+        progress.item('잠금', `검증된 release lock 저장: ${lockPath}`);
       }
     }
     const bootstrapResult = await bootstrap(lock, {
@@ -198,22 +245,26 @@ async function main() {
       storageClass: option('--storage-class', undefined),
       consoleUrl: suppliedConsoleUrl ?? defaultConsoleUrl(channel, selectedAuthEnvironment),
       authEnvironment: selectedAuthEnvironment,
-      backupTargetSecret: hasOption('--backup-target-secret') ? option('--backup-target-secret', '') : undefined,
       shellTlsSecret: requestedShellTlsSecret,
       openOnboarding: !hasOption('--no-open-browser'),
+      registryCredentials,
+      progress,
     });
+    progress.step('Console-native os CLI 다운로드·무결성 검증·설치');
     const installedCli = await installConsoleCliFromCluster({
       consoleUrl: bootstrapResult.consoleUrl,
       installDirectory: option('--install-dir', undefined),
       updatePath: hasOption('--add-to-path')
     });
-    console.log(`[완료] Console-native os ${installedCli.version} 설치 (${installedCli.target})`);
-    if (!installedCli.pathUpdated) console.log('[안내] 현재 PATH는 변경하지 않았습니다. 원하면 --add-to-path를 지정하세요.');
+    progress.done(`${installedCli.version} → ${installedCli.target}`);
+    if (!installedCli.pathUpdated) progress.item('안내', '현재 PATH는 변경하지 않았습니다. 원하면 다음 설치에서 --add-to-path를 지정하세요.');
+    progress.finish('OpenSphere bootstrap 완료', bootstrapResult.consoleUrl);
     return;
   }
 
   if (command === 'upgrade') {
     validateChannel(channel);
+    const registryCredentials = await registryCredentialsOption();
     assertKubectl();
     const migrated = await migrateLegacyInstallationLock();
     if (migrated) console.log(`[마이그레이션] 기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
@@ -225,14 +276,14 @@ async function main() {
       if (target.channel !== channel) throw new Error(`Supplied lock channel ${target.channel} differs from requested channel ${channel}`);
       console.log(`[사용] 명시적 target release lock ${target.releaseDigest}`);
     } else {
-      target = await resolveChannel(channel);
+      target = await resolveChannel(channel, { registryCredentials });
       await writeLock(lockPath, target);
       console.log(`[완료] ${channel} target을 ${target.releaseDigest}로 잠금`);
     }
     const result = await upgrade(installed, target, {
       storageClass: option('--storage-class', undefined),
       consoleUrl: suppliedConsoleUrl,
-      backupTargetSecret: hasOption('--backup-target-secret') ? option('--backup-target-secret', '') : undefined
+      registryCredentials
     });
     const installedCli = await installConsoleCliFromCluster({
       installDirectory: option('--install-dir', undefined),
@@ -256,15 +307,6 @@ async function main() {
     });
     console.log(`[완료] ${evidence.channel} ${evidence.releaseDigest} 검증`);
     console.log(`${evidence.podCount} pods / ${evidence.serviceCount} services / runtime images locked`);
-    return;
-  }
-
-  if (command === 'rotate-service-credentials') {
-    assertKubectl();
-    const migrated = await migrateLegacyInstallationLock();
-    if (migrated) console.log(`[마이그레이션] 기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
-    const result = await rotateServiceCredentials();
-    console.log(`[완료] Console service credentials 회전 (${result.consoleUrl})`);
     return;
   }
 

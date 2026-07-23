@@ -1,5 +1,10 @@
 # OpenSphere Console edge — 시정 재감사 요청서
 
+> **Historical / superseded.** 이 문서는 2026-07-14 구형 Kanidm/CBS 기준선의
+> 감사 기록이다. 현재 설치 계약은 Supabase/Gitea 기반 Setup CLI 0.4 README와
+> `migration-adr-006-console-supabase-data-identity-backbone.md`를 따른다.
+> 아래 명령과 ready 조건을 현재 설치 절차로 재사용하지 않는다.
+
 - 작성일: 2026-07-14
 - 요청 범위: 2026-07-14 통합 기술감사(`INT-AUD-001`~`016`)의 P0/P1 시정 기준선
 - 구현 기준선: `OpenSphere-console@4c44bbb`, `OpenSphere-Setup-CLI@8ad7c8d`

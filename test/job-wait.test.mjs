@@ -27,7 +27,7 @@ test('waitForJobCompletion fails immediately on Failed and includes pod logs', (
     return jobWith('Failed', 'BackoffLimitExceeded', 'Job has reached the specified backoff limit');
   };
   assert.throws(
-    () => waitForJobCompletion('opensphere-backbone', 'restore', {
+    () => waitForJobCompletion('opensphere-console-data', 'restore', {
       kubectlFn,
       now: () => 0,
       sleep: () => assert.fail('failed Job must not sleep')

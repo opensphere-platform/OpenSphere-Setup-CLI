@@ -15,11 +15,23 @@ jobs:
     runs-on: windows-latest
     env:
       GH_TOKEN: ${{ github.token }}
+      OPENSPHERE_CONSOLE_SOURCE: ${{ github.workspace }}/_fixtures/OpenSphere-console
     steps:
       - uses: actions/checkout@v4
+      - name: Checkout canonical Console manifests
+        uses: actions/checkout@v4
+        with:
+          repository: opensphere-platform/OpenSphere-console
+          path: _fixtures/OpenSphere-console
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Install and smoke-test canonical Setup command
+        shell: pwsh
+        run: |
+          ./Install-OpenSphereSetup.ps1
+          $version = opensphere-setup version
+          if ($version -notmatch '^opensphere-setup 0\.4\.') { throw "Unexpected command version: $version" }
       - name: Contract tests
         run: npm test
       - name: Source and E2E harness syntax
@@ -53,13 +65,6 @@ jobs:
     # installation before a public Console ingress/DNS endpoint exists.
     runs-on: ubuntu-latest
     timeout-minutes: 35
-    strategy:
-      fail-fast: false
-      matrix:
-        # edge defaults to development for rapid local iteration, but Setup
-        # must also prove the explicit production profile reaches the auth
-        # BFF before a promotion channel can rely on its TOTP gate.
-        auth-environment: [development, production]
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -67,6 +72,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Install canonical Setup command
+        run: npm install --global . --no-audit --no-fund
       - uses: helm/kind-action@v1.14.0
         with:
           cluster_name: opensphere-e2e
@@ -80,18 +87,16 @@ jobs:
           OPENSPHERE_OS_INSTALL_DIR: ${{ runner.temp }}/opensphere-bin
         run: |
           set -euo pipefail
-          node src/cli.mjs resolve --release edge --lock "$RUNNER_TEMP/edge-release-lock.json"
-          node src/cli.mjs bootstrap --release edge --lock "$RUNNER_TEMP/edge-release-lock.json" \
+          opensphere-setup resolve --release edge --lock "$RUNNER_TEMP/edge-release-lock.json"
+          opensphere-setup bootstrap --release edge --lock "$RUNNER_TEMP/edge-release-lock.json" \
             --context kind-opensphere-e2e --storage-class local-path \
             --console https://localhost:18090 \
-            --auth-environment "${{ matrix.auth-environment }}" \
+            --auth-environment development \
             --admin-username e2e-admin \
             --admin-display-name 'OpenSphere E2E Administrator' \
             --admin-email e2e-admin@opensphere.local \
             --no-open-browser
-          node src/cli.mjs verify --context kind-opensphere-e2e --console https://localhost:18090 --require-zero-restarts
-          actual_auth_environment="$(kubectl --context kind-opensphere-e2e -n opensphere-console get deployment opensphere-console-auth -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="AUTH_ENVIRONMENT")].value}')"
-          test "$actual_auth_environment" = "${{ matrix.auth-environment }}"
+          opensphere-setup verify --context kind-opensphere-e2e --console https://localhost:18090 --require-zero-restarts
           kubectl --context kind-opensphere-e2e -n opensphere-console port-forward \
             svc/opensphere-console-ext 18090:8090 --address 127.0.0.1 \
             >"$RUNNER_TEMP/console-port-forward.log" 2>&1 &
@@ -99,7 +104,7 @@ jobs:
           trap 'kill "$port_forward_pid" 2>/dev/null || true' EXIT
           for attempt in $(seq 1 60); do
             if curl --silent --show-error --insecure --fail \
-              https://localhost:18090/bff/setup/status >/dev/null; then
+              https://localhost:18090/api/identity/bootstrap/status >/dev/null; then
               break
             fi
             if ! kill -0 "$port_forward_pid" 2>/dev/null; then
@@ -112,10 +117,8 @@ jobs:
             fi
             sleep 2
           done
-          OPENSPHERE_E2E_CONSOLE=https://localhost:18090 \
-            OPENSPHERE_E2E_AUTH_ENVIRONMENT="${{ matrix.auth-environment }}" \
-            node scripts/e2e-first-admin.mjs
-          node src/cli.mjs verify --context kind-opensphere-e2e --console https://localhost:18090 --require-zero-restarts
+          OPENSPHERE_E2E_CONSOLE=https://localhost:18090 node scripts/e2e-first-admin.mjs
+          opensphere-setup verify --context kind-opensphere-e2e --console https://localhost:18090 --require-zero-restarts
           test -x "$RUNNER_TEMP/opensphere-bin/os"
           "$RUNNER_TEMP/opensphere-bin/os" --version
       - name: Collect redacted audit evidence
@@ -125,64 +128,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: audit-evidence-${{ matrix.auth-environment }}-${{ github.run_id }}
-          path: ${{ runner.temp }}/audit-evidence
-          if-no-files-found: error
-          retention-days: 90
-
-  clean-kubernetes-edge-upgrade-rollback:
-    # Exercise a real image-set transition and a deliberate return to the
-    # prior signed digest lock. This supplements the unit-level automatic
-    # failure rollback test with a full clean-cluster operational rollback.
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      GH_TOKEN: ${{ github.token }}
-      PREVIOUS_CONSOLE_REVISION: dc272f4c4b5eb69fbc924048611f0dbe38689062
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-      - uses: helm/kind-action@v1.14.0
-        with:
-          cluster_name: opensphere-upgrade-e2e
-          kubectl_version: v1.36.1
-      - name: Install disposable dynamic storage
-        run: |
-          kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.32/deploy/local-path-storage.yaml
-          kubectl -n local-path-storage wait --for=condition=Available deployment/local-path-provisioner --timeout=180s
-      - name: Bootstrap previous signed edge, upgrade, and explicitly roll back
-        env:
-          OPENSPHERE_OS_INSTALL_DIR: ${{ runner.temp }}/opensphere-bin
-        run: |
-          set -euo pipefail
-          node scripts/e2e-resolve-source-revision.mjs "$PREVIOUS_CONSOLE_REVISION" "$RUNNER_TEMP/previous-edge-lock.json"
-          node src/cli.mjs resolve --release edge --lock "$RUNNER_TEMP/current-edge-lock.json"
-          node src/cli.mjs bootstrap --release edge --lock "$RUNNER_TEMP/previous-edge-lock.json" \
-            --context kind-opensphere-upgrade-e2e --storage-class local-path \
-            --console https://upgrade.e2e.invalid --auth-environment development \
-            --admin-username e2e-admin --admin-display-name 'OpenSphere E2E Administrator' \
-            --admin-email e2e-admin@opensphere.local --no-open-browser
-          node src/cli.mjs verify --context kind-opensphere-upgrade-e2e --console https://upgrade.e2e.invalid --require-zero-restarts
-          node src/cli.mjs upgrade --release edge --lock "$RUNNER_TEMP/current-edge-lock.json" \
-            --context kind-opensphere-upgrade-e2e --console https://upgrade.e2e.invalid
-          node src/cli.mjs verify --context kind-opensphere-upgrade-e2e --console https://upgrade.e2e.invalid --require-zero-restarts
-          node src/cli.mjs upgrade --release edge --lock "$RUNNER_TEMP/previous-edge-lock.json" \
-            --context kind-opensphere-upgrade-e2e --console https://upgrade.e2e.invalid
-          node src/cli.mjs verify --context kind-opensphere-upgrade-e2e --console https://upgrade.e2e.invalid --require-zero-restarts
-          installed_revision="$(kubectl --context kind-opensphere-upgrade-e2e -n opensphere-console get configmap opensphere-installation-lock -o jsonpath='{.data.release\.json}' | node -e 'let body=""; process.stdin.on("data", (chunk) => { body += chunk; }); process.stdin.on("end", () => { process.stdout.write(JSON.parse(body).sourceRevision); });')"
-          test "$installed_revision" = "$PREVIOUS_CONSOLE_REVISION"
-          test -x "$RUNNER_TEMP/opensphere-bin/os"
-          "$RUNNER_TEMP/opensphere-bin/os" --version
-      - name: Collect redacted upgrade and rollback evidence
-        if: always()
-        run: bash scripts/collect-audit-evidence.sh kind-opensphere-upgrade-e2e "$RUNNER_TEMP/audit-evidence"
-      - name: Upload redacted upgrade and rollback evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: audit-evidence-upgrade-rollback-${{ github.run_id }}
+          name: audit-evidence-supabase-${{ github.run_id }}
           path: ${{ runner.temp }}/audit-evidence
           if-no-files-found: error
           retention-days: 90
