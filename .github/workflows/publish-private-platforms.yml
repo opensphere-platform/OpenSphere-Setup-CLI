@@ -1,0 +1,235 @@
+name: Publish private platform Setup CLI
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Private release tag, for example setup-v0.5.0-edge.1
+        required: true
+        type: string
+      prerelease:
+        description: Mark the GitHub Release as a prerelease
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: private-platform-setup-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}/${{ matrix.architecture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            platform: windows
+            architecture: amd64
+            pwsh_asset: PowerShell-7.6.4-win-x64.zip
+            kubectl_os: windows
+            kubectl_arch: amd64
+            archive: opensphere-setup-windows-amd64.zip
+          - runner: ubuntu-24.04
+            platform: linux
+            architecture: amd64
+            pwsh_asset: powershell-7.6.4-linux-x64.tar.gz
+            kubectl_os: linux
+            kubectl_arch: amd64
+            archive: opensphere-setup-linux-amd64.tar.gz
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            architecture: arm64
+            pwsh_asset: powershell-7.6.4-linux-arm64.tar.gz
+            kubectl_os: linux
+            kubectl_arch: arm64
+            archive: opensphere-setup-linux-arm64.tar.gz
+          - runner: macos-15-intel
+            platform: darwin
+            architecture: amd64
+            pwsh_asset: powershell-7.6.4-osx-x64.tar.gz
+            kubectl_os: darwin
+            kubectl_arch: amd64
+            archive: opensphere-setup-darwin-amd64.tar.gz
+          - runner: macos-14
+            platform: darwin
+            architecture: arm64
+            pwsh_asset: powershell-7.6.4-osx-arm64.tar.gz
+            kubectl_os: darwin
+            kubectl_arch: arm64
+            archive: opensphere-setup-darwin-arm64.tar.gz
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      NODE_RELEASE: 26.5.0
+      POWERSHELL_RELEASE: 7.6.4
+      KUBECTL_RELEASE: v1.36.3
+      OPENSPHERE_CONSOLE_SOURCE: ${{ github.workspace }}/_fixtures/OpenSphere-console
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout canonical Console manifests
+        uses: actions/checkout@v4
+        with:
+          repository: opensphere-platform/OpenSphere-console
+          path: _fixtures/OpenSphere-console
+
+      - name: Refuse public distribution
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $visibility = gh api "repos/$env:GITHUB_REPOSITORY" --jq .visibility
+          if ($visibility -ne 'private') { throw "Refusing public Setup distribution: $visibility" }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+          cache: npm
+
+      - name: Install and test
+        shell: pwsh
+        run: |
+          npm ci
+          npm test
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_RELEASE }}
+
+      - name: Bundle and build native SEA
+        shell: pwsh
+        run: |
+          npm run build:bundle
+          New-Item -ItemType Directory -Force .release/sea | Out-Null
+          $extension = if ('${{ matrix.platform }}' -eq 'windows') { '.exe' } else { '' }
+          node scripts/build-linux-sea.mjs `
+            --node-executable (node -p "process.execPath") `
+            --output ".release/sea/opensphere-setup$extension"
+
+      - name: Download and verify bundled PowerShell
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .release/pwsh | Out-Null
+          $asset = '${{ matrix.pwsh_asset }}'
+          $base = "https://github.com/PowerShell/PowerShell/releases/download/v$env:POWERSHELL_RELEASE"
+          Invoke-WebRequest "$base/$asset" -OutFile ".release/$asset"
+          Invoke-WebRequest "$base/hashes.sha256" -OutFile .release/powershell-hashes.sha256
+          $line = Get-Content .release/powershell-hashes.sha256 | Where-Object { $_ -match [regex]::Escape($asset) } | Select-Object -First 1
+          if (-not $line) { throw "PowerShell checksum missing for $asset" }
+          $expected = ($line -split '\s+')[0].ToLowerInvariant()
+          $actual = (Get-FileHash ".release/$asset" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "PowerShell checksum mismatch" }
+          if ($asset.EndsWith('.zip')) {
+            Expand-Archive ".release/$asset" .release/pwsh
+          } else {
+            tar -xzf ".release/$asset" -C .release/pwsh
+          }
+
+      - name: Download and verify bundled kubectl
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force .release/tools | Out-Null
+          $name = if ('${{ matrix.platform }}' -eq 'windows') { 'kubectl.exe' } else { 'kubectl' }
+          $url = "https://dl.k8s.io/release/$env:KUBECTL_RELEASE/bin/${{ matrix.kubectl_os }}/${{ matrix.kubectl_arch }}/$name"
+          Invoke-WebRequest $url -OutFile ".release/tools/$name"
+          $expected = (Invoke-WebRequest "$url.sha256").Content.Trim().ToLowerInvariant()
+          $actual = (Get-FileHash ".release/tools/$name" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "kubectl checksum mismatch" }
+
+      - name: Acquire Linux libatomic runtime
+        if: matrix.platform == 'linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .release/libatomic
+          docker run --rm \
+            -v "$PWD/.release/libatomic:/out" \
+            debian:bookworm-slim \
+            sh -ec 'apt-get update >/dev/null; cd /out; apt-get download libatomic1 >/dev/null; dpkg-deb -x ./*.deb extracted'
+          library="$(find .release/libatomic/extracted -type f -name 'libatomic.so.1.*' -print -quit)"
+          test -n "$library"
+          cp "$library" .release/libatomic/libatomic.so.1
+
+      - name: Package self-contained runtime
+        shell: pwsh
+        run: |
+          $extension = if ('${{ matrix.platform }}' -eq 'windows') { '.exe' } else { '' }
+          $kubectl = if ('${{ matrix.platform }}' -eq 'windows') { '.release/tools/kubectl.exe' } else { '.release/tools/kubectl' }
+          $arguments = @(
+            'scripts/package-portable-runtime.mjs',
+            '--sea', ".release/sea/opensphere-setup$extension",
+            '--pwsh-directory', '.release/pwsh',
+            '--kubectl', $kubectl,
+            '--platform', '${{ matrix.platform }}',
+            '--architecture', '${{ matrix.architecture }}',
+            '--version', (node -p "require('./package.json').version"),
+            '--output', "dist/${{ matrix.archive }}"
+          )
+          if ('${{ matrix.platform }}' -eq 'linux') {
+            $arguments += @('--libatomic', '.release/libatomic/libatomic.so.1')
+          }
+          node @arguments
+
+      - name: Attest archive provenance
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: dist/${{ matrix.archive }}
+
+      - name: Upload platform archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: setup-${{ matrix.platform }}-${{ matrix.architecture }}
+          path: dist/${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      IS_PRERELEASE: ${{ inputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: setup-*
+          path: dist
+          merge-multiple: true
+
+      - name: Validate release input and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="setup-v$(node -p "require('./package.json').version")"
+          test "$RELEASE_TAG" = "$expected"
+          cd dist
+          sha256sum opensphere-setup-* > SHA256SUMS
+          test "$(find . -maxdepth 1 -type f -name 'opensphere-setup-*' | wc -l)" -eq 5
+
+      - name: Publish authenticated private GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(
+            "$RELEASE_TAG"
+            dist/opensphere-setup-*
+            dist/SHA256SUMS
+            --repo "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "OpenSphere Setup CLI ${RELEASE_TAG#setup-v}"
+            --notes-file docs/PRIVATE-PLATFORM-RELEASE-NOTES.md
+          )
+          if [[ "$IS_PRERELEASE" == "true" ]]; then args+=(--prerelease); fi
+          gh release create "${args[@]}"

@@ -1,6 +1,6 @@
 {
   "name": "@opensphere/setup-cli",
-  "version": "0.4.0-edge.3",
+  "version": "0.5.0-edge.1",
   "private": true,
   "type": "module",
   "bin": {

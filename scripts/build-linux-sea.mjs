@@ -51,4 +51,4 @@ try {
   await rm(configPath, { force: true });
 }
 
-console.log(`[완료] Linux SEA: ${output}`);
+console.log(`[완료] OpenSphere Setup SEA: ${output}`);

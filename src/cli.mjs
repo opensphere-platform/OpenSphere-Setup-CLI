@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './portable-runtime.mjs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { bootstrap, existingOpenSphereNamespaces, migrateLegacyInstallationLock, readInstallationLock, uninstallManagedInstallation, upgrade } from './bootstrap.mjs';
@@ -79,7 +80,7 @@ async function readLock(lockPath) {
 }
 
 function help() {
-  console.log(`OpenSphere Setup CLI 0.4.0-edge.3
+  console.log(`OpenSphere Setup CLI 0.5.0-edge.1
 
 Usage:
   opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
@@ -142,7 +143,7 @@ async function main() {
   }
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
-  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.4.0-edge.3');
+  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.1');
 
   if (command === 'install-cli') {
     const installed = await installConsoleCli({

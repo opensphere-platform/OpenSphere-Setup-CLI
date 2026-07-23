@@ -27,19 +27,19 @@ npm install --global . --no-audit --no-fund
 opensphere-setup version
 ```
 
-비공개 실제 Linux 관리 노드에는 저장소 clone이나 Node.js 설치 대신 GitHub Release의
-`opensphere-setup-linux-amd64` 또는 `opensphere-setup-linux-arm64` 단일 실행 파일을 사용한다.
-인증 다운로드, SHA-256 검증과 설치 절차는
-[`docs/PRIVATE-LINUX-INSTALL.md`](docs/PRIVATE-LINUX-INSTALL.md)가 정본이다. Setup 저장소가
-public이면 Linux Release 발행 workflow는 fail-closed한다.
+비공개 실제 관리 호스트에는 저장소 clone이나 개발 런타임 설치 대신 GitHub Release의
+Windows amd64, Linux amd64/arm64, macOS amd64/arm64 자체 포함 아카이브를 사용한다.
+인증 다운로드, SHA-256·artifact attestation 검증과 설치 절차는
+[`docs/PRIVATE-PLATFORM-INSTALL.md`](docs/PRIVATE-PLATFORM-INSTALL.md)가 정본이다. Setup
+저장소가 public이면 platform Release 발행 workflow는 fail-closed한다.
 
 `node src/cli.mjs`와 저장소의 `opensphere-setup.cmd`는 내부 개발·진단용 구현 세부사항이며
 설치 문서나 운영 runbook의 사용자 명령으로 사용하지 않는다.
 
 소스 설치 요구 사항은 Node.js 24 이상, PowerShell 7(`pwsh`), GitHub CLI(`gh`),
-`kubectl`, Kubernetes Ready 노드, 기본 또는 명시한 동적 StorageClass이다. 비공개 Linux
-단일 실행 파일은 Node.js와 `libatomic`을 포함하지만 `pwsh`, `gh`, `kubectl`은 운영 도구로
-필요하다.
+`kubectl`, Kubernetes Ready 노드, 기본 또는 명시한 동적 StorageClass이다. 비공개 platform
+아카이브는 Node.js, PowerShell, kubectl과 Linux의 libatomic을 포함한다. 대상 호스트에
+필요한 외부 도구는 Git, 인증된 GitHub CLI(`gh`), 접근 가능한 Kubernetes cluster뿐이다.
 
 지원 계약:
 

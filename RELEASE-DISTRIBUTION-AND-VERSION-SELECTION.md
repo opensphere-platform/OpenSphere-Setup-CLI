@@ -1,6 +1,6 @@
 # OpenSphere Release Distribution and Version Selection
 
-Status: Supabase/Gitea architecture, Setup CLI 0.4
+Status: Supabase/Gitea architecture, Setup CLI 0.5
 
 ## 결정
 
@@ -45,9 +45,11 @@ Kanidm, 구형 Auth BFF, 별도 Console PostgreSQL, RustFS와 CBS image set은 r
 Console anchor가 마지막에 이동하므로 Setup은 부분 발행 중 혼합 revision을 승인하지 않는다.
 
 Setup CLI 자체는 OpenSphere OS image release와 별도로 비공개 GitHub Release에서 발행한다.
-`OpenSphere-Setup-CLI/.github/workflows/publish-private-linux.yml`은 저장소 visibility가
-`private`인지 먼저 확인하고, Linux `amd64`/`arm64` Node SEA 실행 파일과 `SHA256SUMS`만
-Release asset으로 발행한다. 공개 npm 발행과 공개 download URL은 사용하지 않는다.
+`OpenSphere-Setup-CLI/.github/workflows/publish-private-platforms.yml`은 저장소 visibility가
+`private`인지 먼저 확인하고, Windows `amd64`, Linux `amd64`/`arm64`, macOS
+`amd64`/`arm64` 자체 포함 아카이브와 `SHA256SUMS`를 Release asset으로 발행한다. 각
+아카이브에는 Node SEA, PowerShell, kubectl과 플랫폼별 필수 runtime이 들어간다. 공개 npm
+발행과 공개 download URL은 사용하지 않는다.
 
 ## 소비
 
