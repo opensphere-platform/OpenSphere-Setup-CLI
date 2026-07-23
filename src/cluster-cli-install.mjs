@@ -1,9 +1,9 @@
 import { installConsoleCli } from './install-cli.mjs';
 import { withServicePortForward } from './port-forward.mjs';
-import { normalizeConsoleUrl } from './console-url.mjs';
+import { defaultConsoleUrl, normalizeConsoleUrl } from './console-url.mjs';
 
 export async function installConsoleCliFromCluster({
-  consoleUrl = 'https://localhost:8090',
+  consoleUrl = defaultConsoleUrl('edge', 'development'),
   installDirectory,
   updatePath = false
 } = {}, {
@@ -13,7 +13,7 @@ export async function installConsoleCliFromCluster({
   return tunnel({
     namespace: 'opensphere-console',
     service: 'opensphere-console-ext',
-    remotePort: 8090,
+    remotePort: 'https',
     label: 'Console artifact download',
     protocol: new URL(normalizeConsoleUrl(consoleUrl)).protocol.slice(0, -1)
   }, (consoleUrl) => install({

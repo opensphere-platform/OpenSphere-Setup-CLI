@@ -100,7 +100,7 @@ jobs:
             --no-open-browser
           opensphere-setup verify --context kind-opensphere-e2e --console https://localhost:18090 --require-zero-restarts
           kubectl --context kind-opensphere-e2e -n opensphere-console port-forward \
-            svc/opensphere-console-ext 18090:8090 --address 127.0.0.1 \
+            svc/opensphere-console-ext 18090:https --address 127.0.0.1 \
             >"$RUNNER_TEMP/console-port-forward.log" 2>&1 &
           port_forward_pid=$!
           trap 'kill "$port_forward_pid" 2>/dev/null || true' EXIT

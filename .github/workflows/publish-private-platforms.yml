@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Private release tag, for example setup-v0.5.0-edge.5
+        description: Private release tag, for example setup-v0.5.0-edge.6
         required: true
         type: string
       prerelease:
@@ -245,11 +245,23 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected="setup-v$(node -p "require('./package.json').version")"
+          version="$(node -p "require('./package.json').version")"
+          expected="setup-v$version"
           test "$RELEASE_TAG" = "$expected"
+          node --input-type=module - "$RELEASE_TAG" <<'NODE'
+          import { readFile, writeFile } from 'node:fs/promises';
+          const releaseTag = process.argv[2];
+          const source = await readFile('scripts/Install-OpenSphereSetupRelease.ps1', 'utf8');
+          const installer = source.replaceAll('__OPENSPHERE_SETUP_RELEASE_TAG__', releaseTag);
+          if (installer.includes('__OPENSPHERE_SETUP_RELEASE_TAG__')) {
+            throw new Error('Windows installer release tag materialization failed');
+          }
+          await writeFile('dist/Install-OpenSphereSetup.ps1', installer, 'utf8');
+          NODE
           cd dist
-          sha256sum opensphere-setup-* > SHA256SUMS
+          sha256sum opensphere-setup-* Install-OpenSphereSetup.ps1 > SHA256SUMS
           test "$(find . -maxdepth 1 -type f -name 'opensphere-setup-*' | wc -l)" -eq 5
+          test -s Install-OpenSphereSetup.ps1
 
       - name: Publish authenticated private GitHub Release
         shell: bash
@@ -258,6 +270,7 @@ jobs:
           args=(
             "$RELEASE_TAG"
             dist/opensphere-setup-*
+            dist/Install-OpenSphereSetup.ps1
             dist/SHA256SUMS
             --repo "$GITHUB_REPOSITORY"
             --target "$GITHUB_SHA"
@@ -275,7 +288,7 @@ jobs:
             -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")"
           test "$(jq -r '.immutable' <<<"$release")" = "true"
-          for file in dist/opensphere-setup-* dist/SHA256SUMS; do
+          for file in dist/opensphere-setup-* dist/Install-OpenSphereSetup.ps1 dist/SHA256SUMS; do
             name="$(basename "$file")"
             local_digest="sha256:$(sha256sum "$file" | awk '{print $1}')"
             remote_digest="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release")"

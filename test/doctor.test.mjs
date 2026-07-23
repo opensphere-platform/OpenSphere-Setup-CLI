@@ -34,8 +34,8 @@ test('doctor checks the fresh loopback Console port and skips remote origins', a
     },
     close(callback) { callback(); }
   });
-  const local = await assertFreshConsolePortAvailable('https://localhost:8090', { createServer });
-  assert.deepEqual(listened, { host: '127.0.0.1', port: 8090, exclusive: true });
+  const local = await assertFreshConsolePortAvailable('https://localhost:1114', { createServer });
+  assert.deepEqual(listened, { host: '127.0.0.1', port: 1114, exclusive: true });
   assert.equal(local.checked, true);
   const remote = await assertFreshConsolePortAvailable('https://console.example.test', { createServer });
   assert.equal(remote.checked, false);

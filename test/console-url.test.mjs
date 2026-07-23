@@ -13,9 +13,9 @@ test('Console endpoint is one exact origin shared by browser, Supabase and CLI',
 });
 
 test('every managed channel has one canonical HTTPS localhost default', () => {
-  assert.equal(defaultConsoleUrl('edge', 'development'), 'https://localhost:8090');
-  assert.equal(defaultConsoleUrl('edge', 'production'), 'https://localhost:8090');
-  assert.equal(defaultConsoleUrl('stable', 'production'), 'https://localhost:8090');
+  assert.equal(defaultConsoleUrl('edge', 'development'), 'https://localhost:1114');
+  assert.equal(defaultConsoleUrl('edge', 'production'), 'https://localhost:1114');
+  assert.equal(defaultConsoleUrl('stable', 'production'), 'https://localhost:1114');
   assert.equal(normalizeConsoleUrl('http://localhost:8090/'), 'http://localhost:8090');
   assert.equal(normalizeConsoleUrl('http://127.0.0.1:8090'), 'http://127.0.0.1:8090');
 });

@@ -1,4 +1,5 @@
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
+export const DEFAULT_CONSOLE_URL = 'https://localhost:1114';
 
 /** Canonical browser origin for a managed Console installation. */
 export function normalizeConsoleUrl(value) {
@@ -16,7 +17,7 @@ export function normalizeConsoleUrl(value) {
 }
 
 export function defaultConsoleUrl(channel, authEnvironment) {
-  return 'https://localhost:8090';
+  return DEFAULT_CONSOLE_URL;
 }
 
 // c8bde85 temporarily made loopback HTTP the edge/development default. A managed

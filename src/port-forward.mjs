@@ -14,7 +14,9 @@ export function freePort() {
 }
 
 export function portForwardArgs({ namespace, service, localPort, remotePort, context = process.env.OPENSPHERE_KUBE_CONTEXT }) {
-  if (!namespace || !service || !Number.isInteger(localPort) || !Number.isInteger(remotePort)) {
+  const validRemotePort = Number.isInteger(remotePort)
+    || (typeof remotePort === 'string' && /^[a-z]([-a-z0-9]*[a-z0-9])?$/.test(remotePort));
+  if (!namespace || !service || !Number.isInteger(localPort) || !validRemotePort) {
     throw new Error('Port-forward requires namespace, service, localPort and remotePort');
   }
   return [

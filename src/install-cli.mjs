@@ -5,6 +5,7 @@ import https from 'node:https';
 import { chmod, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
+import { defaultConsoleUrl } from './console-url.mjs';
 
 function platformDescriptor(platform = process.platform, arch = process.arch) {
   const os = { win32: 'windows', linux: 'linux', darwin: 'darwin' }[platform];
@@ -122,7 +123,7 @@ async function replaceAtomically(target, bytes) {
 }
 
 export async function installConsoleCli({
-  consoleUrl = 'https://localhost:8090',
+  consoleUrl = defaultConsoleUrl('edge', 'development'),
   installDirectory = defaultInstallDirectory(),
   insecureSkipTlsVerify = false,
   platform = process.platform,

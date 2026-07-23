@@ -41,7 +41,7 @@ gh auth status
 gh repo view opensphere-platform/OpenSphere-Setup-CLI \
   --json visibility,viewerPermission
 
-release=setup-v0.5.0-edge.5
+release=setup-v0.5.0-edge.6
 architecture="$(test "$(uname -m)" = arm64 && echo arm64 || echo amd64)"
 gh release download "$release" \
   --repo opensphere-platform/OpenSphere-Setup-CLI \
@@ -62,12 +62,12 @@ SETUP="$PWD/opensphere-setup-darwin-${architecture}/opensphere-setup"
   --release edge \
   --context docker-desktop \
   --storage-class hostpath \
-  --console https://localhost:8090
+  --console https://localhost:1114
 ```
 
 진단이 실패하면 bootstrap을 실행하지 않는다. `doctor`는 Kubernetes를 변경하지 않으며
 로컬 필수 명령, Kubernetes v1.30+, 노드 플랫폼·Ready·권한, StorageClass, localhost
-포트 8090, GitHub/GHCR 공급망 경로와 41개 필수 manifest·migration·installer의 실제
+포트 1114, GitHub/GHCR 공급망 경로와 41개 필수 manifest·migration·installer의 실제
 다운로드·렌더링을 한 번에 검사한다.
 
 ## 4. 설치
@@ -79,7 +79,7 @@ SETUP="$PWD/opensphere-setup-darwin-${architecture}/opensphere-setup"
   --release edge \
   --context docker-desktop \
   --storage-class hostpath \
-  --console https://localhost:8090
+  --console https://localhost:1114
 ```
 
 비공개 GHCR package:
@@ -90,7 +90,7 @@ printf '%s' "$GHCR_TOKEN" | "$SETUP" bootstrap \
   --release edge \
   --context docker-desktop \
   --storage-class hostpath \
-  --console https://localhost:8090 \
+  --console https://localhost:1114 \
   --registry-username '<github-login>' \
   --registry-token-stdin
 unset GHCR_TOKEN
@@ -121,7 +121,7 @@ Keychain 암호 확인이 표시될 수 있다. 개발 환경에서 CA 등록을
   --release edge \
   --context docker-desktop \
   --storage-class hostpath \
-  --console http://localhost:8090
+  --console http://localhost:1114
 ```
 
 원격 환경과 candidate/stable에는 외부 HTTPS 인증서 Secret이 필요하며 HTTP를 사용하지 않는다.
@@ -134,7 +134,7 @@ SHA-256과 서명 manifest를 확인하고 `$HOME/.local/bin/os`에 설치한다
 ```bash
 "$SETUP" verify \
   --context docker-desktop \
-  --console https://localhost:8090
+  --console https://localhost:1114
 
 kubectl --context docker-desktop -n opensphere-console \
   get configmap opensphere-installation-evidence

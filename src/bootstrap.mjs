@@ -327,7 +327,7 @@ export function renderManifest(
   spec,
   sourceYaml,
   storageClass,
-  consoleUrl = 'https://localhost:8090',
+  consoleUrl = defaultConsoleUrl('edge', 'development'),
   authEnvironment = 'development'
 ) {
   let yaml = sourceYaml;
@@ -367,7 +367,7 @@ export async function fetchManifest(
   lock,
   spec,
   storageClass,
-  consoleUrl = 'https://localhost:8090',
+  consoleUrl = defaultConsoleUrl('edge', 'development'),
   authEnvironment = 'development'
 ) {
   const sourceYaml = await fetchReleaseArtifact(lock, spec.path);

@@ -10,7 +10,7 @@ OpenSphere Setup CLI는 비공개 GitHub Release에서 다음 5개 자체 포함
 | macOS | Intel | `opensphere-setup-darwin-amd64.tar.gz` |
 | macOS | Apple Silicon | `opensphere-setup-darwin-arm64.tar.gz` |
 
-아카이브에는 Node SEA, PowerShell, kubectl과 필요한 런타임이 포함된다. Linux 패키지는
+아카이브에는 OpenSphere Setup 실행 runtime, PowerShell, kubectl과 필요한 라이브러리가 포함된다. Linux 패키지는
 `libatomic.so.1`도 포함한다. 따라서 대상 호스트에 Node.js, npm, PowerShell, kubectl,
 libatomic을 별도로 설치할 필요가 없다.
 
@@ -31,41 +31,33 @@ gh auth status
 
 토큰을 자동화에 사용할 경우 argv에 직접 넣지 말고 `GH_TOKEN` secret으로 전달한다.
 
-## 2. Windows amd64
+## 2. Windows amd64 — 자동 설치
 
 ```powershell
-$release = 'setup-v0.5.0-edge.5'
-$target = Join-Path $PWD 'opensphere-setup-download'
-New-Item -ItemType Directory -Force $target | Out-Null
-
+$release = 'setup-v0.5.0-edge.6'
+$installer = Join-Path $env:TEMP 'Install-OpenSphereSetup.ps1'
 gh release download $release `
   --repo opensphere-platform/OpenSphere-Setup-CLI `
-  --pattern 'opensphere-setup-windows-amd64.zip' `
-  --pattern 'SHA256SUMS' `
-  --dir $target
-
-Set-Location $target
-$expected = ((Get-Content SHA256SUMS |
-  Where-Object { $_ -match 'opensphere-setup-windows-amd64\.zip$' }) -split '\s+')[0]
-$actual = (Get-FileHash .\opensphere-setup-windows-amd64.zip -Algorithm SHA256).Hash
-if ($actual.ToLowerInvariant() -ne $expected.ToLowerInvariant()) {
-  throw 'OpenSphere Setup archive checksum mismatch'
-}
-
+  --pattern 'Install-OpenSphereSetup.ps1' `
+  --output $installer
 gh release verify $release `
   --repo opensphere-platform/OpenSphere-Setup-CLI
-gh release verify-asset $release .\opensphere-setup-windows-amd64.zip `
+gh release verify-asset $release $installer `
   --repo opensphere-platform/OpenSphere-Setup-CLI
-Expand-Archive .\opensphere-setup-windows-amd64.zip -DestinationPath .
-.\opensphere-setup-windows-amd64\opensphere-setup.exe version
+& $installer
+opensphere-setup version
 ```
+
+이 installer가 Windows archive 다운로드, immutable release·asset attestation·SHA-256 검증,
+압축 해제, `%LOCALAPPDATA%\OpenSphere\Setup\<version>` 배치, 사용자 PATH 등록과 최종
+`version` 검사를 수행한다. Node.js, npm, PowerShell 7, kubectl은 호스트에 요구하지 않는다.
 
 ## 3. Linux
 
 아키텍처에 맞춰 `amd64` 또는 `arm64`를 선택한다.
 
 ```bash
-release=setup-v0.5.0-edge.5
+release=setup-v0.5.0-edge.6
 architecture=amd64
 target="$PWD/opensphere-setup-download"
 mkdir -p "$target"
@@ -90,7 +82,7 @@ tar -xzf "opensphere-setup-linux-${architecture}.tar.gz"
 Intel은 `amd64`, Apple Silicon은 `arm64`를 선택한다.
 
 ```bash
-release=setup-v0.5.0-edge.5
+release=setup-v0.5.0-edge.6
 architecture=arm64
 target="$PWD/opensphere-setup-download"
 mkdir -p "$target"
@@ -123,18 +115,19 @@ Developer ID 서명·notarization release gate가 필요하다.
 Docker Desktop 예시다.
 
 ```powershell
-.\opensphere-setup-windows-amd64\opensphere-setup.exe doctor `
+opensphere-setup doctor `
   --release edge `
   --context docker-desktop `
-  --storage-class hostpath `
-  --console https://localhost:8090
+  --storage-class hostpath
 
-.\opensphere-setup-windows-amd64\opensphere-setup.exe bootstrap `
+opensphere-setup bootstrap `
   --release edge `
   --context docker-desktop `
-  --storage-class hostpath `
-  --console https://localhost:8090
+  --storage-class hostpath
 ```
+
+Console 기본 origin은 `https://localhost:1114`이다. 다른 origin을 명시적으로 사용할 때만
+`--console`을 지정한다.
 
 Linux와 macOS에서는 같은 인수를 `./opensphere-setup`에 전달한다. 비공개 GHCR image를
 사용하면 `gh auth status`가 성공하고 계정에 package read 권한이 있는지 먼저 확인한다.

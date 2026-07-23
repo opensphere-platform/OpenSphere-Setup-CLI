@@ -23,7 +23,7 @@ opensphere-setup doctor \
   --release edge \
   --context docker-desktop \
   --storage-class hostpath \
-  --console https://localhost:8090
+  --console https://localhost:1114
 
 kubectl --context docker-desktop -n opensphere-console \
   get configmap opensphere-installation-lock -o yaml
@@ -32,7 +32,7 @@ kubectl --context docker-desktop get pods,pvc -A
 
 opensphere-setup verify \
   --context docker-desktop \
-  --console https://localhost:8090
+  --console https://localhost:1114
 ```
 
 installation lock의 Secret 값이나 인증 토큰을 지원 자료에 복사하지 않는다.
@@ -44,7 +44,7 @@ opensphere-setup bootstrap \
   --release edge \
   --context docker-desktop \
   --storage-class hostpath \
-  --console https://localhost:8090
+  --console https://localhost:1114
 ```
 
 클러스터 lock이 있으면 mutable edge tag를 다시 선택하지 않고 저장된 immutable release

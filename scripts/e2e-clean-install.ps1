@@ -163,7 +163,7 @@ function Invoke-FreshSetupAndOnboarding {
   $arguments = @(
     '--context', $Context,
     '-n', 'opensphere-console',
-    'port-forward', 'svc/opensphere-console-ext', "${port}:8090",
+    'port-forward', 'svc/opensphere-console-ext', "${port}:https",
     '--address', '127.0.0.1'
   )
   $forward = Start-Process -FilePath $kubectl -ArgumentList $arguments -WindowStyle Hidden `

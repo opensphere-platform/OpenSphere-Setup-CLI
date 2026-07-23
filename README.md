@@ -139,7 +139,7 @@ opensphere-setup doctor `
   --release edge `
   --context docker-desktop `
   --storage-class hostpath `
-  --console https://localhost:8090
+  --console https://localhost:1114
 ```
 
 `doctor`는 Setup 호스트 플랫폼, Node runtime, `kubectl`·`pwsh`·`gh`, Kubernetes
@@ -156,7 +156,7 @@ opensphere-setup bootstrap `
   --release edge `
   --context docker-desktop `
   --storage-class hostpath `
-  --console https://localhost:8090
+  --console https://localhost:1114
 ```
 
 StorageClass 이름을 생략하면 preflight가 기본 StorageClass를 선택한다. 설치가 끝나면 브라우저의
@@ -196,10 +196,7 @@ opensphere-setup bootstrap --release edge --context docker-desktop
 ## 검증
 
 ```powershell
-opensphere-setup verify `
-  --context docker-desktop `
-  --console https://localhost:8090 `
-  --require-zero-restarts
+opensphere-setup verify --context docker-desktop --console https://localhost:1114 --require-zero-restarts
 ```
 
 검증 범위:
