@@ -89,8 +89,9 @@ response = expect(await request('GET', '/api/identity', undefined, {
   accept: 'application/json'
 }), 200, 'use Supabase administrator session on the managed identity API');
 const identity = JSON.parse(response.text);
-const operator = (identity.operators ?? []).find((item) => item.userId === created.userId);
-if (!operator || !(operator.roles ?? []).includes('console-admins')) {
+const operator = (identity.users ?? []).find((item) => item.id === created.userId);
+const operatorRoles = (operator?.groups ?? []).map((group) => group?.name).filter(Boolean);
+if (!operator || !operatorRoles.includes('console-admins')) {
   throw new Error('First Supabase administrator is missing the canonical Console admin role');
 }
 

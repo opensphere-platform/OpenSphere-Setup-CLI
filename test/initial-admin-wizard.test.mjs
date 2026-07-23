@@ -30,7 +30,10 @@ test('clean-cluster acceptance uses Supabase bootstrap and password login contra
   assert.match(acceptance, /\/api\/identity\/bootstrap\/status/);
   assert.match(acceptance, /\/api\/identity\/bootstrap/);
   assert.match(acceptance, /\/auth\/v1\/token\?grant_type=password/);
+  assert.match(acceptance, /identity\.users/);
+  assert.match(acceptance, /group\?\.name/);
   assert.match(acceptance, /console-admins/);
+  assert.doesNotMatch(acceptance, /identity\.operators|operator\.roles/);
   assert.doesNotMatch(acceptance, /\/bff\/|\/oauth2\/openid\/|KANIDM/i);
   assert.doesNotMatch(acceptance, /console\.log\([^\n]*(password|secret)/i);
 });
