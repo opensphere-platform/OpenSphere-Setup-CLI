@@ -1,0 +1,119 @@
+name: Publish private Linux Setup CLI
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Private release tag, for example setup-v0.4.0-edge.2
+        required: true
+        type: string
+      prerelease:
+        description: Mark the GitHub Release as a prerelease
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: private-linux-setup-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      NODE_RELEASE: 26.5.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse public distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          visibility="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .visibility)"
+          if [[ "$visibility" != "private" ]]; then
+            echo "Refusing to publish Setup CLI from a public repository: visibility=$visibility" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_RELEASE }}
+          cache: npm
+
+      - name: Install build dependencies and test
+        run: |
+          npm ci
+          npm test
+
+      - name: Bundle Setup CLI
+        run: npm run build:bundle
+
+      - name: Download official Linux Node executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .release/node
+          for node_arch in x64 arm64; do
+            archive="node-v${NODE_RELEASE}-linux-${node_arch}.tar.xz"
+            curl --fail --silent --show-error --location \
+              "https://nodejs.org/dist/v${NODE_RELEASE}/${archive}" \
+              --output ".release/node/${archive}"
+            tar -xJf ".release/node/${archive}" -C .release/node
+          done
+
+      - name: Build amd64 and arm64 single executables
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          node scripts/build-linux-sea.mjs \
+            --node-executable ".release/node/node-v${NODE_RELEASE}-linux-x64/bin/node" \
+            --output dist/opensphere-setup-linux-amd64
+          node scripts/build-linux-sea.mjs \
+            --node-executable ".release/node/node-v${NODE_RELEASE}-linux-arm64/bin/node" \
+            --output dist/opensphere-setup-linux-arm64
+          file dist/opensphere-setup-linux-amd64 dist/opensphere-setup-linux-arm64
+          test "$(dist/opensphere-setup-linux-amd64 version)" = "opensphere-setup 0.4.0-edge.2"
+          sha256sum dist/opensphere-setup-linux-amd64 dist/opensphere-setup-linux-arm64 \
+            | sed 's#dist/##' > dist/SHA256SUMS
+
+      - name: Upload build evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: opensphere-setup-private-linux-${{ github.run_id }}
+          path: |
+            dist/opensphere-setup-linux-amd64
+            dist/opensphere-setup-linux-arm64
+            dist/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish authenticated private GitHub Release
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          IS_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          expected="setup-v$(node -p "require('./package.json').version")"
+          if [[ "$RELEASE_TAG" != "$expected" ]]; then
+            echo "Release tag must equal package version: expected=$expected actual=$RELEASE_TAG" >&2
+            exit 1
+          fi
+          args=(
+            "$RELEASE_TAG"
+            dist/opensphere-setup-linux-amd64
+            dist/opensphere-setup-linux-arm64
+            dist/SHA256SUMS
+            --repo "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "OpenSphere Setup CLI ${RELEASE_TAG#setup-v}"
+            --notes-file docs/PRIVATE-LINUX-RELEASE-NOTES.md
+          )
+          if [[ "$IS_PRERELEASE" == "true" ]]; then args+=(--prerelease); fi
+          gh release create "${args[@]}"

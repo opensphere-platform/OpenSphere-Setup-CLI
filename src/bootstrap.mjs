@@ -35,6 +35,7 @@ import {
   secretHasGhcrCredential
 } from './registry-pull-secret.mjs';
 import { reportReleaseProgress } from './progress.mjs';
+import { materializeRuntimeAsset } from './runtime-assets.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RAW_ROOT = 'https://raw.githubusercontent.com/opensphere-platform/OpenSphere-console';
@@ -881,11 +882,16 @@ export async function bootstrap(lock, {
       shellTlsSecretRefText(effectiveShellTls)
     );
 
-    run('pwsh', [
-      '-NoProfile', '-NonInteractive', '-File', join(HERE, 'New-Certificates.ps1'),
-      '-OutputDirectory', work,
-      '-DnsNames', new URL(effectiveConsoleUrl).hostname
-    ]);
+    const certificateGenerator = await materializeRuntimeAsset('New-Certificates.ps1', HERE);
+    try {
+      run('pwsh', [
+        '-NoProfile', '-NonInteractive', '-File', certificateGenerator.path,
+        '-OutputDirectory', work,
+        '-DnsNames', new URL(effectiveConsoleUrl).hostname
+      ]);
+    } finally {
+      await certificateGenerator.cleanup();
+    }
     const certificate = join(work, 'tls.crt');
     const key = join(work, 'tls.key');
     const ca = join(work, 'ca.crt');
@@ -902,10 +908,15 @@ export async function bootstrap(lock, {
     ) {
       const localCa = join(work, 'opensphere-local-development-ca.crt');
       await writeFile(localCa, await readFile(ca, 'utf8'), 'utf8');
-      run('pwsh', [
-        '-NoProfile', '-NonInteractive', '-File', join(HERE, 'Install-LocalDevelopmentCa.ps1'),
-        '-CertificatePath', localCa
-      ]);
+      const caInstaller = await materializeRuntimeAsset('Install-LocalDevelopmentCa.ps1', HERE);
+      try {
+        run('pwsh', [
+          '-NoProfile', '-NonInteractive', '-File', caInstaller.path,
+          '-CertificatePath', localCa
+        ]);
+      } finally {
+        await caInstaller.cleanup();
+      }
       progress?.item('신뢰', 'localhost 개발 CA를 현재 Windows 사용자 인증서 저장소에 등록');
     }
     progress?.done(externalShellTls ? shellTlsSecretRefText(effectiveShellTls) : 'managed shell-tls');

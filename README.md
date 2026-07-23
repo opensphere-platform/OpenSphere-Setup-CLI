@@ -27,6 +27,12 @@ npm install --global . --no-audit --no-fund
 opensphere-setup version
 ```
 
+비공개 실제 Linux 관리 노드에는 저장소 clone이나 Node.js 설치 대신 GitHub Release의
+`opensphere-setup-linux-amd64` 또는 `opensphere-setup-linux-arm64` 단일 실행 파일을 사용한다.
+인증 다운로드, SHA-256 검증과 설치 절차는
+[`docs/PRIVATE-LINUX-INSTALL.md`](docs/PRIVATE-LINUX-INSTALL.md)가 정본이다. Setup 저장소가
+public이면 Linux Release 발행 workflow는 fail-closed한다.
+
 `node src/cli.mjs`와 저장소의 `opensphere-setup.cmd`는 내부 개발·진단용 구현 세부사항이며
 설치 문서나 운영 runbook의 사용자 명령으로 사용하지 않는다.
 

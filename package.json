@@ -1,12 +1,13 @@
 {
   "name": "@opensphere/setup-cli",
-  "version": "0.4.0-edge.1",
+  "version": "0.4.0-edge.2",
   "private": true,
   "type": "module",
   "bin": {
     "opensphere-setup": "src/cli.mjs"
   },
   "scripts": {
+    "build:bundle": "ncc build src/cli.mjs -o .release/bundle --no-cache",
     "install:command": "pwsh -NoProfile -File ./Install-OpenSphereSetup.ps1",
     "test": "node --test test/*.test.mjs",
     "pretest:e2e:edge": "npm install --global . --no-audit --no-fund",
@@ -14,6 +15,9 @@
   },
   "engines": {
     "node": ">=24"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "0.38.4"
   },
   "license": "UNLICENSED"
 }

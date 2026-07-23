@@ -1,2 +1,6 @@
 .opensphere-setup/
 .opensphere-e2e/
+.codex-tmp/
+.release/
+dist/
+node_modules/
