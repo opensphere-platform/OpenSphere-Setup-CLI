@@ -9,7 +9,7 @@
   "scripts": {
     "build:bundle": "ncc build src/cli.mjs -o .release/bundle --no-cache",
     "install:command": "pwsh -NoProfile -File ./Install-OpenSphereSetup.ps1",
-    "test": "node --test test/*.test.mjs",
+    "test": "node --test --test-isolation=none test/*.test.mjs",
     "pretest:e2e:edge": "npm install --global . --no-audit --no-fund",
     "test:e2e:edge": "pwsh -NoProfile -File scripts/e2e-clean-install.ps1 -Channel edge -FullClusterReset"
   },

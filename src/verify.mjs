@@ -55,6 +55,7 @@ const REQUIRED_SERVICES = Object.freeze([
   ['opensphere-console', 'opensphere-console-backend'],
   ['opensphere-console', 'opensphere-console-dupa-controller'],
   ['opensphere-console', 'opensphere-notification-dispatcher'],
+  ['opensphere-console', 'opensphere-external-channel-executor'],
   ['opensphere-console', 'opensphere-console-oaa-gateway'],
   ['opensphere-console', 'oaa-governed-adapter'],
   ['opensphere-console', 'opensphere-console-ext']
@@ -70,6 +71,7 @@ const WORKLOADS = Object.freeze([
   { component: 'backend', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-backend', container: 'api' },
   { component: 'dupaController', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-dupa-controller', container: 'controller' },
   { component: 'notificationDispatcher', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-notification-dispatcher', container: 'dispatcher' },
+  { component: 'notificationDispatcher', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-external-channel-executor', container: 'executor' },
   { component: 'oaaGateway', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-oaa-gateway', container: 'gateway' },
   { component: 'oaaGovernedAdapter', namespace: 'opensphere-console', kind: 'deployment', name: 'oaa-governed-adapter', container: 'reconciler' },
   { component: 'console', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console', container: 'shell' }
@@ -138,11 +140,17 @@ function verifyRegistryPullPath(lock) {
   return { secret: REGISTRY_PULL_SECRET, credentialRequired, namespaces: [...NAMESPACES] };
 }
 
-function verifyPersistentStorage() {
+function verifyPersistentStorage(expectedStorageClass) {
   for (const [namespace, name] of REQUIRED_PVCS) {
     const claim = getJson(['-n', namespace, 'get', 'pvc', name]);
     if (claim.status?.phase !== 'Bound') {
       throw new Error(`PersistentVolumeClaim is not Bound: ${namespace}/${name} (${claim.status?.phase ?? 'Unknown'})`);
+    }
+    if (claim.spec?.storageClassName !== expectedStorageClass) {
+      throw new Error(
+        `PersistentVolumeClaim uses StorageClass ${claim.spec?.storageClassName ?? '<default>'}`
+        + ` instead of installation StorageClass ${expectedStorageClass}: ${namespace}/${name}`
+      );
     }
   }
   return REQUIRED_PVCS.length;
@@ -428,6 +436,26 @@ async function verifyConsoleBackend() {
   });
 }
 
+export function recordInstallationEvidence(evidence, { apply = kubectl } = {}) {
+  const manifest = {
+    apiVersion: 'v1',
+    kind: 'ConfigMap',
+    metadata: {
+      name: 'opensphere-installation-evidence',
+      namespace: 'opensphere-console',
+      labels: {
+        'app.kubernetes.io/managed-by': 'opensphere-setup',
+        'opensphere.io/evidence-kind': 'installation-verification'
+      }
+    },
+    data: {
+      'evidence.json': JSON.stringify(evidence, null, 2)
+    }
+  };
+  apply(['apply', '-f', '-'], { capture: true, input: JSON.stringify(manifest) });
+  return manifest;
+}
+
 export async function verifyInstallation(lock, {
   requireZeroRestarts = false,
   consoleUrl,
@@ -442,7 +470,7 @@ export async function verifyInstallation(lock, {
   const config = verifyInstallationLock(lock);
   const secretCount = verifySecrets();
   const registryPull = verifyRegistryPullPath(lock);
-  const pvcCount = verifyPersistentStorage();
+  const pvcCount = verifyPersistentStorage(config.storageClass);
   const serviceEndpoints = await eventually(async () => verifyServiceEndpoints());
   const runtime = await eventually(async () => verifyWorkloads(lock, { requireZeroRestarts }));
   const postgresql = verifySupabaseDatabase();
@@ -452,9 +480,10 @@ export async function verifyInstallation(lock, {
   if (consoleUrl && config.consoleUrl !== consoleUrl) {
     throw new Error(`Verified Console URL differs from installation config (${consoleUrl} != ${config.consoleUrl})`);
   }
-  return {
+  const evidence = {
     channel: lock.channel,
     releaseDigest: lock.releaseDigest,
+    verifiedAt: new Date().toISOString(),
     podCount: runtime.podCount,
     serviceCount: serviceEndpoints.length,
     pvcCount,
@@ -467,4 +496,6 @@ export async function verifyInstallation(lock, {
     gitea,
     backend
   };
+  recordInstallationEvidence(evidence);
+  return evidence;
 }

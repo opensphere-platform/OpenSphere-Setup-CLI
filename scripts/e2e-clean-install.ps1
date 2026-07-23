@@ -56,7 +56,8 @@ $ManagedSecrets = @(
   'opensphere-console/opensphere-oaa-runtime',
   'opensphere-console/opensphere-gitea-control-plane',
   'opensphere-console/opensphere-console-cli-runtime',
-  'opensphere-console/opensphere-notification-runtime'
+  'opensphere-console/opensphere-notification-runtime',
+  'opensphere-console/opensphere-external-channel-runtime'
 )
 
 function Invoke-Kubectl {

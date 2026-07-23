@@ -36,8 +36,24 @@ public이면 Linux Release 발행 workflow는 fail-closed한다.
 `node src/cli.mjs`와 저장소의 `opensphere-setup.cmd`는 내부 개발·진단용 구현 세부사항이며
 설치 문서나 운영 runbook의 사용자 명령으로 사용하지 않는다.
 
-요구 사항은 Node.js 24 이상, PowerShell 7(`pwsh`), `kubectl`, Kubernetes Ready 노드,
-기본 또는 명시한 동적 StorageClass이다.
+소스 설치 요구 사항은 Node.js 24 이상, PowerShell 7(`pwsh`), GitHub CLI(`gh`),
+`kubectl`, Kubernetes Ready 노드, 기본 또는 명시한 동적 StorageClass이다. 비공개 Linux
+단일 실행 파일은 Node.js와 `libatomic`을 포함하지만 `pwsh`, `gh`, `kubectl`은 운영 도구로
+필요하다.
+
+지원 계약:
+
+| 항목 | 지원/요구 |
+|---|---|
+| Setup 실행 호스트 | Windows amd64, Linux amd64/arm64, macOS amd64/arm64 |
+| Kubernetes | v1.30 이상 |
+| Kubernetes 노드 | linux/amd64, linux/arm64 |
+| 영속 볼륨 요청 | Supabase 70Gi + Gitea 18Gi = 총 88Gi |
+| Docker Desktop 검증 시작 프로필 | 10 CPU, 16GiB RAM; 최소값이 아니라 검증된 시작점 |
+
+StorageClass가 88Gi를 provision할 수 있는지와 실제 물리 디스크 여유 공간은 운영자가 확인한다.
+macOS 준비·설치·인증서 신뢰 절차는
+[`docs/MACOS-INSTALL.md`](docs/MACOS-INSTALL.md)를 따른다.
 
 ## 현재 설치 방법론
 
@@ -112,6 +128,21 @@ opensphere-console-change/opensphere-gitea-data
 
 ## Fresh bootstrap
 
+설치 전에 클러스터를 변경하지 않는 진단을 먼저 실행한다.
+
+```powershell
+opensphere-setup doctor `
+  --release edge `
+  --context docker-desktop `
+  --storage-class hostpath `
+  --console https://localhost:8090
+```
+
+`doctor`는 Setup 호스트 플랫폼, Node runtime, `kubectl`·`pwsh`·`gh`, Kubernetes
+v1.30+, Ready 노드와 권한, StorageClass, 신규 설치 포트, Release BOM·provenance·SBOM
+네트워크 경로를 확인한다. PVC 88Gi는 요청량으로 보고하며 실제 provisioner 용량을 대신
+보증하지 않는다.
+
 Docker Desktop Kubernetes 개발 환경:
 
 ```powershell
@@ -181,6 +212,12 @@ opensphere-setup verify `
 
 검증 결과는 `opensphere-installation-evidence` ConfigMap에 비밀값 없이 기록한다.
 
+```powershell
+kubectl --context docker-desktop -n opensphere-console `
+  get configmap opensphere-installation-evidence `
+  -o jsonpath="{.data.evidence\\.json}"
+```
+
 ## 업그레이드
 
 ```powershell
@@ -190,6 +227,18 @@ opensphere-setup upgrade --release edge --context docker-desktop
 Setup은 target과 현재 rollback artifact를 먼저 모두 검증·materialize한 다음 target을 적용한다.
 target 검증이 실패하면 이전 Supabase/Gitea release를 다시 적용하고 이전 release 검증까지
 완료해야 rollback 성공으로 본다. PostgreSQL migration은 forward-compatible 원칙을 전제로 한다.
+
+lock 기록 전후, workload 일부 적용, Console 완료 후 `os` CLI 설치 실패, StorageClass 불일치
+등의 복구 판단은
+[`docs/PARTIAL-FAILURE-RECOVERY.md`](docs/PARTIAL-FAILURE-RECOVERY.md)를 따른다.
+
+## OAA 기능 준비 상태
+
+기본 설치는 OAA schema와 PostgreSQL lexical search를 제공한다. 별도 OpenAI-compatible
+embedding provider, API key와 1536차원 모델이 검증되기 전에는 semantic vector search가
+`Degraded`이고 lexical fallback이 사용된다. 이는 플랫폼 bootstrap 실패가 아니지만 OAA의
+`fullyOperational` 조건은 아니다. 설치 후 OAA 관리 화면에서 provider를 등록하고 실제
+`/embeddings` probe가 성공해 `semanticSearch.ready=true`인지 확인한다.
 
 ## 채널 상태
 
@@ -246,6 +295,7 @@ src/cli.mjs                    명령 진입점
 src/release.mjs                서명 BOM·attestation·digest lock
 src/bootstrap.mjs              설치·재개·업그레이드·rollback·제거
 src/verify.mjs                 설치 후 데이터/서비스/이미지 검증
+src/doctor.mjs                 무변경 로컬·클러스터 설치 사전진단
 src/reset-initial-admin.mjs    edge 개발용 Supabase 관리자 초기화
 scripts/e2e-clean-install.ps1  Docker Desktop clean-install 반복 검증
 scripts/e2e-first-admin.mjs    Supabase 최초 관리자 Wizard E2E

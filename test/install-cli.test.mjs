@@ -7,12 +7,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { installConsoleCli } from '../src/install-cli.mjs';
 
-async function fixture({ advertisedBytes, servedBytes = advertisedBytes }) {
+async function fixture({
+  advertisedBytes,
+  servedBytes = advertisedBytes,
+  os = 'windows',
+  arch = 'amd64',
+  href = '/api/cli/os.exe'
+}) {
   const digest = createHash('sha256').update(advertisedBytes).digest('hex');
   const manifest = {
     name: 'os', ownership: 'console-native', version: '0.4.0',
     links: [{
-      os: 'windows', arch: 'amd64', href: '/api/cli/os.exe',
+      os, arch, href,
       size: advertisedBytes.byteLength, sha256: digest
     }]
   };
@@ -21,7 +27,7 @@ async function fixture({ advertisedBytes, servedBytes = advertisedBytes }) {
       response.setHeader('content-type', 'application/json');
       return response.end(JSON.stringify(manifest));
     }
-    if (request.url === '/api/cli/os.exe') {
+    if (request.url === href) {
       response.setHeader('content-type', 'application/octet-stream');
       return response.end(servedBytes);
     }
@@ -49,6 +55,30 @@ test('installs the Console-owned artifact only after size and digest verificatio
     assert.equal(installed.version, '0.4.0');
     assert.equal(installed.pathUpdated, false);
     assert.deepEqual(await readFile(join(directory, 'os.exe')), bytes);
+  } finally {
+    await source.close();
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test('installs the native Apple Silicon artifact on macOS', async () => {
+  const bytes = Buffer.from('verified-darwin-arm64-cli');
+  const source = await fixture({
+    advertisedBytes: bytes,
+    os: 'darwin',
+    arch: 'arm64',
+    href: '/api/cli/opensphere-cli-darwin-arm64'
+  });
+  const directory = await mkdtemp(join(tmpdir(), 'opensphere-os-install-'));
+  try {
+    const installed = await installConsoleCli({
+      consoleUrl: source.url,
+      installDirectory: directory,
+      platform: 'darwin',
+      arch: 'arm64'
+    });
+    assert.equal(installed.version, '0.4.0');
+    assert.deepEqual(await readFile(join(directory, 'os')), bytes);
   } finally {
     await source.close();
     await rm(directory, { recursive: true, force: true });

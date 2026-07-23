@@ -149,7 +149,9 @@ export const SUPABASE_MIGRATIONS = Object.freeze([
   '0020_oaa_owner_control_permissions.sql',
   '0021_oaa_infrastructure_owner_permissions.sql',
   '0022_oaa_recovery_owner_permissions.sql',
-  '0023_ceph_prerequisite_consumer.sql'
+  '0023_ceph_prerequisite_consumer.sql',
+  '0024_ai_consumer_contract.sql',
+  '0025_external_channels_backup.sql'
 ]);
 
 export const SUPABASE_MANIFEST = Object.freeze({
@@ -180,6 +182,7 @@ export const CORE_ROLLOUTS = Object.freeze([
   ['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s'],
   ['opensphere-console', 'deployment/opensphere-console-backend', '600s'],
   ['opensphere-console', 'deployment/opensphere-notification-dispatcher', '600s'],
+  ['opensphere-console', 'deployment/opensphere-external-channel-executor', '600s'],
   ['opensphere-console', 'deployment/opensphere-console-oaa-gateway', '600s'],
   ['opensphere-console', 'deployment/oaa-governed-adapter', '600s'],
   ['opensphere-console', 'deployment/opensphere-console', '600s']
@@ -232,10 +235,11 @@ function ensureGenericSecret(namespace, name, literals = {}, files = {}) {
   return true;
 }
 
-function ensureTlsSecret(namespace, name, certificatePath, keyPath) {
+function ensureTlsSecret(namespace, name, certificatePath, keyPath, caPath) {
   return ensureGenericSecret(namespace, name, {}, {
     'tls.crt': certificatePath,
-    'tls.key': keyPath
+    'tls.key': keyPath,
+    ...(caPath ? { 'ca.crt': caPath } : {})
   });
 }
 
@@ -322,6 +326,7 @@ export function renderManifest(
     yaml = yaml.replace(new RegExp(pattern, 'g'), image);
   }
   yaml = yaml.replace(/storageClassName:\s*standard/g, `storageClassName: ${storageClass}`);
+  yaml = yaml.replaceAll('__OPENSPHERE_STORAGE_CLASS__', storageClass);
   const normalizedConsoleUrl = normalizeConsoleUrl(consoleUrl);
   yaml = yaml.replaceAll('__OPENSPHERE_CONSOLE_URL__', normalizedConsoleUrl);
   yaml = yaml.replaceAll('__OPENSPHERE_SUPABASE_NAMESPACE__', 'opensphere-console-data');
@@ -401,7 +406,8 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
     '-NoProfile', '-NonInteractive', '-File',
     join(foundation.root, 'backend', 'supabase', 'install.ps1'),
     '-ConsoleUrl', consoleUrl,
-    '-Namespace', 'opensphere-console-data'
+    '-Namespace', 'opensphere-console-data',
+    '-StorageClass', storageClass
   ];
   if (context) supabaseArgs.push('-KubeContext', context);
   progress?.item('설치', 'Supabase Data & Identity Backbone');
@@ -896,7 +902,7 @@ export async function bootstrap(lock, {
     const key = join(work, 'tls.key');
     const ca = join(work, 'ca.crt');
     if (externalShellTls) ensureExternalShellTlsSecret(effectiveShellTls, externalShellTls);
-    else ensureTlsSecret('opensphere-console', 'shell-tls', certificate, key);
+    else ensureTlsSecret('opensphere-console', 'shell-tls', certificate, key, ca);
 
     const hostname = new URL(effectiveConsoleUrl).hostname;
     if (
@@ -930,7 +936,12 @@ export async function bootstrap(lock, {
       'internal-token': hex(32),
       'event-token': hex(32)
     });
-    progress?.done('CLI·notification runtime Secret 준비');
+    ensureGenericSecret('opensphere-console', 'opensphere-external-channel-runtime', {
+      'credential-encryption-key': randomBytes(32).toString('base64'),
+      'backup-encryption-key': randomBytes(32).toString('base64'),
+      'internal-token': hex(32)
+    });
+    progress?.done('CLI·notification·external-channel runtime Secret 준비');
 
     progress?.step('서명된 release artifact 다운로드와 digest 고정 manifest 생성');
     const prepared = await prepareRelease(

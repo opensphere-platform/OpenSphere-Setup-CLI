@@ -12,6 +12,7 @@ import {
   SUPABASE_MIGRATIONS
 } from '../src/bootstrap.mjs';
 import { COMPONENTS } from '../src/release.mjs';
+import { DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB } from '../src/doctor.mjs';
 
 const CONSOLE_SOURCE = process.env.OPENSPHERE_CONSOLE_SOURCE
   ? pathToFileURL(`${resolve(process.env.OPENSPHERE_CONSOLE_SOURCE)}${sep}`)
@@ -40,11 +41,12 @@ test('fresh bootstrap is Supabase Data & Identity plus separate Gitea change aut
   ]);
 });
 
-test('all current Supabase migrations, including notification and recovery ownership, are release material', () => {
+test('all current Supabase migrations, including external backup and AI consumer contracts, are release material', () => {
   assert.equal(SUPABASE_MIGRATIONS[0], '0001_console_backbone.sql');
-  assert.equal(SUPABASE_MIGRATIONS.at(-1), '0023_ceph_prerequisite_consumer.sql');
+  assert.equal(SUPABASE_MIGRATIONS.at(-1), '0025_external_channels_backup.sql');
   assert.equal(SUPABASE_MIGRATIONS.includes('0011_notification_delivery.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0022_oaa_recovery_owner_permissions.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0024_ai_consumer_contract.sql'), true);
   assert.equal(new Set(SUPABASE_MIGRATIONS).size, SUPABASE_MIGRATIONS.length);
 });
 
@@ -123,6 +125,32 @@ test('every canonical Console manifest renders with only governed immutable imag
       );
     }
   }
+});
+
+test('selected StorageClass is rendered into every Supabase PVC', () => {
+  const lock = localReleaseLock();
+  const source = readFileSync(new URL(SUPABASE_MANIFEST.path, CONSOLE_SOURCE), 'utf8');
+  const rendered = renderManifest(
+    lock,
+    SUPABASE_MANIFEST,
+    source,
+    'hostpath',
+    'https://localhost:8090',
+    'development'
+  );
+  const pvcCount = [...rendered.matchAll(/^kind:\s*PersistentVolumeClaim\s*$/gm)].length;
+  const selectedClassCount = [...rendered.matchAll(/^\s*storageClassName:\s*hostpath\s*$/gm)].length;
+  assert.equal(pvcCount, 2);
+  assert.equal(selectedClassCount, pvcCount);
+});
+
+test('doctor PVC capacity report matches the canonical Supabase and Gitea manifests', () => {
+  const manifests = [SUPABASE_MANIFEST, GITEA_MANIFEST]
+    .map((spec) => readFileSync(new URL(spec.path, CONSOLE_SOURCE), 'utf8'))
+    .join('\n');
+  const requestedGiB = [...manifests.matchAll(/requests:\s*\{\s*storage:\s*(\d+)Gi\s*\}/g)]
+    .reduce((sum, match) => sum + Number(match[1]), 0);
+  assert.equal(requestedGiB, DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB);
 });
 
 test('active Setup bootstrap source has no retired runtime orchestration', () => {

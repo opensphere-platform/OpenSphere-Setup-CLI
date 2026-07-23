@@ -13,6 +13,13 @@ import { assertReleaseShellTlsReference, parseShellTlsSecretRef } from './shell-
 import { preflightPromotion } from './promotion-preflight.mjs';
 import { resetInitialAdministrator } from './reset-initial-admin.mjs';
 import { createProgressReporter, reportReleaseProgress } from './progress.mjs';
+import {
+  DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB,
+  assertFreshConsolePortAvailable,
+  formatLocalEnvironment,
+  inspectLocalEnvironment
+} from './doctor.mjs';
+import { preflight } from './preflight.mjs';
 
 function option(names, fallback) {
   const aliases = Array.isArray(names) ? names : [names];
@@ -80,6 +87,10 @@ Usage:
   opensphere-setup preflight --release <candidate|stable> --console <https-origin>
       --recovery-target-secret <namespace/name> --shell-tls-secret <namespace/name>
       [--context <kube-context>] [--storage-class <name>]
+  opensphere-setup doctor --release <edge|candidate|stable>
+      [--context <kube-context>] [--storage-class <name>]
+      [--console <https-origin|loopback-http-origin>]
+      [--registry-username <github-login> --registry-token-stdin]
   opensphere-setup bootstrap --release <channel> [--lock <verified-lock-file>]
   opensphere-setup bootstrap -r <channel> [--lock <verified-lock-file>]
       [--context <kube-context>] [--admin-username <name>]
@@ -171,6 +182,50 @@ async function main() {
     return;
   }
 
+  if (command === 'doctor') {
+    const progress = createProgressReporter();
+    progress.begin(
+      'OpenSphere 읽기 전용 설치 진단',
+      `release=${channel}, context=${context || 'current'}`
+    );
+    progress.step('로컬 실행 환경 확인');
+    validateChannel(channel);
+    const registryCredentials = await registryCredentialsOption();
+    const local = inspectLocalEnvironment();
+    progress.done(formatLocalEnvironment(local));
+
+    progress.step('Kubernetes API·노드·권한·StorageClass 확인');
+    const cluster = preflight({
+      storageClass: option('--storage-class', undefined),
+      channel
+    });
+    progress.done(`${cluster.serverVersion}, ${cluster.nodeCount} nodes, StorageClass ${cluster.storageClass}`);
+    const doctorConsoleUrl = suppliedConsoleUrl
+      ?? defaultConsoleUrl(channel, selectAuthEnvironment(channel, authEnvironment));
+    if (!readInstallationLock()) {
+      progress.step('신규 설치 Console 포트 점유 확인', doctorConsoleUrl);
+      const port = await assertFreshConsolePortAvailable(doctorConsoleUrl);
+      progress.done(port.checked ? `${port.host}:${port.port} 사용 가능` : '원격 origin — 로컬 포트 검사 생략');
+    }
+
+    progress.step('Release BOM·이미지 provenance·SBOM 네트워크 검증', `channel=${channel}`);
+    const lock = await resolveChannel(channel, {
+      registryCredentials,
+      onProgress: (event) => reportReleaseProgress(progress, event)
+    });
+    progress.done(lock.releaseDigest);
+    progress.item(
+      '용량',
+      `PVC 요청 합계 ${DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB}Gi; 실제 여유 공간은 StorageClass 운영자가 별도 확인`
+    );
+    progress.item(
+      'TLS',
+      `${doctorConsoleUrl} 인증서 신뢰 상태는 설치 호스트에서 확인`
+    );
+    progress.finish('설치 전 진단 통과', '클러스터 변경 없음');
+    return;
+  }
+
   if (command === 'bootstrap') {
     const progress = createProgressReporter();
     progress.begin(
@@ -189,6 +244,9 @@ async function main() {
       email: option('--admin-email', 'admin@opensphere.local')
     });
     progress.done(`auth=${selectedAuthEnvironment}, registry=${registryCredentials ? 'explicit' : 'automatic'}`);
+    progress.step('로컬 실행 환경 fail-fast 검증');
+    const localEnvironment = inspectLocalEnvironment();
+    progress.done(formatLocalEnvironment(localEnvironment));
     // Validate user input before touching the cluster. Besides providing a
     // clearer error, this keeps invalid bootstrap attempts side-effect free.
     progress.step('kubectl 및 Kubernetes API 연결 확인', `context=${context || 'current'}`);
@@ -217,6 +275,10 @@ async function main() {
       if (unmanaged.length) {
         throw new Error(`OpenSphere namespaces exist without an installation lock: ${unmanaged.join(', ')}`);
       }
+      const freshConsoleUrl = suppliedConsoleUrl
+        ?? defaultConsoleUrl(channel, selectedAuthEnvironment);
+      const port = await assertFreshConsolePortAvailable(freshConsoleUrl);
+      if (port.checked) progress.item('포트', `${port.host}:${port.port} 사용 가능`);
       if (explicitLock) {
         lock = await readLock(lockPath);
         if (lock.channel !== channel) {
