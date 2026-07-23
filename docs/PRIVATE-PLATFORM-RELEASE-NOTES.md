@@ -11,6 +11,11 @@ runtime assets and third-party notices. The target host needs Git, authenticated
 GitHub CLI (`gh`) and access to a Kubernetes cluster. Node.js, npm, PowerShell,
 kubectl and libatomic are not host prerequisites.
 
+Every archive is extracted on its native build runner and smoke-tested by running
+OpenSphere Setup, bundled PowerShell and bundled kubectl. macOS edge executables
+receive an ad-hoc code signature before packaging and are verified again after
+extraction.
+
 The repository enforces GitHub Immutable Releases. Verify the release and downloaded
 archive with `gh release verify` and `gh release verify-asset`, then confirm
 `SHA256SUMS` before extraction. This edge release is not a substitute for Windows

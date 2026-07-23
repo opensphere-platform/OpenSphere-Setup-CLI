@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Private release tag, for example setup-v0.5.0-edge.1
+        description: Private release tag, for example setup-v0.5.0-edge.4
         required: true
         type: string
       prerelease:
@@ -110,6 +110,10 @@ jobs:
           node scripts/build-linux-sea.mjs `
             --node-executable (node -p "process.execPath") `
             --output ".release/sea/opensphere-setup$extension"
+          if ('${{ matrix.platform }}' -eq 'darwin') {
+            codesign --force --sign - .release/sea/opensphere-setup
+            codesign --verify --strict --verbose=4 .release/sea/opensphere-setup
+          }
 
       - name: Download and verify bundled PowerShell
         shell: pwsh
@@ -174,6 +178,37 @@ jobs:
             $arguments += @('--libatomic', '.release/libatomic/libatomic.so.1')
           }
           node @arguments
+
+      - name: Smoke-test packaged runtime
+        shell: pwsh
+        run: |
+          $platform = '${{ matrix.platform }}'
+          $architecture = '${{ matrix.architecture }}'
+          $archive = "dist/${{ matrix.archive }}"
+          $smoke = '.release/smoke'
+          New-Item -ItemType Directory -Force $smoke | Out-Null
+          if ($platform -eq 'windows') {
+            Expand-Archive $archive $smoke
+          } else {
+            tar -xzf $archive -C $smoke
+          }
+          $root = Join-Path $smoke "opensphere-setup-$platform-$architecture"
+          $setup = Join-Path $root $(if ($platform -eq 'windows') { 'opensphere-setup.exe' } else { 'opensphere-setup' })
+          $pwsh = Join-Path $root "runtime/pwsh/$(if ($platform -eq 'windows') { 'pwsh.exe' } else { 'pwsh' })"
+          $kubectl = Join-Path $root "runtime/bin/$(if ($platform -eq 'windows') { 'kubectl.exe' } else { 'kubectl' })"
+          $packageVersion = node -p "require('./package.json').version"
+          $expected = "opensphere-setup $packageVersion"
+          $actual = & $setup version
+          if ($LASTEXITCODE -ne 0 -or $actual -ne $expected) {
+            throw "Setup smoke test failed: $actual (expected $expected)"
+          }
+          & $pwsh -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.ToString()'
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled PowerShell smoke test failed' }
+          & $kubectl version --client -o json
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled kubectl smoke test failed' }
+          if ($platform -eq 'darwin') {
+            codesign --verify --strict --verbose=4 $setup
+          }
 
       - name: Upload platform archive
         uses: actions/upload-artifact@v4

@@ -172,6 +172,21 @@ export const GITEA_MANIFEST = Object.freeze({
   ]
 });
 
+export const FOUNDATION_ARTIFACT_PATHS = Object.freeze([
+  'backend/supabase/install.ps1',
+  ...SUPABASE_MIGRATIONS.map((name) => `backend/supabase/migrations/${name}`),
+  'backend/gitea/bootstrap/install.ps1',
+  'backend/gitea/bootstrap/configure-signing.ps1',
+  'backend/gitea/bootstrap/control-plane-bootstrap.ps1'
+]);
+
+export const INSTALL_ARTIFACT_PATHS = Object.freeze([
+  ...FOUNDATION_ARTIFACT_PATHS,
+  SUPABASE_MANIFEST.path,
+  GITEA_MANIFEST.path,
+  ...BASE_MANIFESTS.map(({ path }) => path)
+]);
+
 export const CORE_ROLLOUTS = Object.freeze([
   ['opensphere-console-data', 'statefulset/opensphere-supabase-postgres', '600s'],
   ['opensphere-console-data', 'deployment/opensphere-supabase-auth', '600s'],
@@ -377,14 +392,7 @@ async function materializeFoundationInstallers(
     fetchManifest(lock, SUPABASE_MANIFEST, storageClass, consoleUrl, authEnvironment),
     fetchManifest(lock, GITEA_MANIFEST, storageClass, consoleUrl, authEnvironment)
   ]);
-  const paths = [
-    'backend/supabase/install.ps1',
-    ...SUPABASE_MIGRATIONS.map((name) => `backend/supabase/migrations/${name}`),
-    'backend/gitea/bootstrap/install.ps1',
-    'backend/gitea/bootstrap/configure-signing.ps1',
-    'backend/gitea/bootstrap/control-plane-bootstrap.ps1'
-  ];
-  const artifacts = await Promise.all(paths.map(async (path) => ({
+  const artifacts = await Promise.all(FOUNDATION_ARTIFACT_PATHS.map(async (path) => ({
     path,
     contents: await fetchReleaseArtifact(lock, path)
   })));
@@ -774,6 +782,33 @@ async function prepareRelease(
   return { foundation, base, all: [...foundation.release, ...base] };
 }
 
+export async function preflightReleaseArtifacts(lock, {
+  storageClass,
+  consoleUrl,
+  authEnvironment
+}, {
+  createTemporaryDirectory = () => mkdtemp(join(tmpdir(), 'opensphere-artifact-preflight-')),
+  prepare = prepareRelease,
+  removeDirectory = (path) => rm(path, { recursive: true, force: true })
+} = {}) {
+  const root = await createTemporaryDirectory();
+  try {
+    const prepared = await prepare(
+      lock,
+      root,
+      storageClass,
+      consoleUrl,
+      authEnvironment
+    );
+    return {
+      artifactCount: INSTALL_ARTIFACT_PATHS.length,
+      manifestGroupCount: prepared.all.length
+    };
+  } finally {
+    await removeDirectory(root);
+  }
+}
+
 function installPreparedRelease(lock, prepared, storageClass, consoleUrl, label, progress) {
   runFoundationInstallers(lock, prepared.foundation, storageClass, consoleUrl, progress);
   applyRelease(prepared.base, label, progress);
@@ -866,6 +901,21 @@ export async function bootstrap(lock, {
   progress?.done(`${cluster.serverVersion}, ${cluster.nodeCount} nodes, StorageClass ${cluster.storageClass}`);
   const work = await mkdtemp(join(tmpdir(), 'opensphere-setup-supabase-'));
   try {
+    progress?.step('서명된 release artifact 전체 다운로드와 digest 고정 manifest 생성');
+    const prepared = await prepareRelease(
+      lock,
+      work,
+      cluster.storageClass,
+      effectiveConsoleUrl,
+      effectiveAuthEnvironment
+    );
+    progress?.done(`${INSTALL_ARTIFACT_PATHS.length} artifacts, ${prepared.all.length} manifest groups`);
+
+    const externalShellTls = effectiveShellTls
+      ? readSecret(effectiveShellTls.namespace, effectiveShellTls.name)
+      : undefined;
+    if (externalShellTls) inspectExternalShellTlsSecret(externalShellTls, effectiveConsoleUrl);
+
     progress?.step('관리 namespace와 GHCR image pull 경로 준비');
     for (const namespace of MANAGED_NAMESPACES) {
       ensureNamespace(namespace);
@@ -875,10 +925,6 @@ export async function bootstrap(lock, {
     progress?.done(`GHCR credentials=${registry.credentialSource}`);
 
     progress?.step('Console HTTPS 인증서와 TLS Secret 준비');
-    const externalShellTls = effectiveShellTls
-      ? readSecret(effectiveShellTls.namespace, effectiveShellTls.name)
-      : undefined;
-    if (externalShellTls) inspectExternalShellTlsSecret(externalShellTls, effectiveConsoleUrl);
     recordInstallationState(
       lock,
       cluster.storageClass,
@@ -943,15 +989,6 @@ export async function bootstrap(lock, {
     });
     progress?.done('CLI·notification·external-channel runtime Secret 준비');
 
-    progress?.step('서명된 release artifact 다운로드와 digest 고정 manifest 생성');
-    const prepared = await prepareRelease(
-      lock,
-      work,
-      cluster.storageClass,
-      effectiveConsoleUrl,
-      effectiveAuthEnvironment
-    );
-    progress?.done(`${prepared.all.length} manifest groups`);
     progress?.step('Supabase·Gitea foundation 및 OpenSphere workload 적용');
     installPreparedRelease(
       lock,

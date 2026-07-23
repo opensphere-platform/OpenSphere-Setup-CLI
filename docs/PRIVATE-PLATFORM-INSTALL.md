@@ -34,7 +34,7 @@ gh auth status
 ## 2. Windows amd64
 
 ```powershell
-$release = 'setup-v0.5.0-edge.3'
+$release = 'setup-v0.5.0-edge.4'
 $target = Join-Path $PWD 'opensphere-setup-download'
 New-Item -ItemType Directory -Force $target | Out-Null
 
@@ -65,7 +65,7 @@ Expand-Archive .\opensphere-setup-windows-amd64.zip -DestinationPath .
 아키텍처에 맞춰 `amd64` 또는 `arm64`를 선택한다.
 
 ```bash
-release=setup-v0.5.0-edge.3
+release=setup-v0.5.0-edge.4
 architecture=amd64
 target="$PWD/opensphere-setup-download"
 mkdir -p "$target"
@@ -90,7 +90,7 @@ tar -xzf "opensphere-setup-linux-${architecture}.tar.gz"
 Intel은 `amd64`, Apple Silicon은 `arm64`를 선택한다.
 
 ```bash
-release=setup-v0.5.0-edge.3
+release=setup-v0.5.0-edge.4
 architecture=arm64
 target="$PWD/opensphere-setup-download"
 mkdir -p "$target"
@@ -113,8 +113,9 @@ tar -xzf "opensphere-setup-darwin-${architecture}.tar.gz"
 ```
 
 GitHub Immutable Releases가 tag와 asset 변경을 잠그고 release attestation을 생성한다.
-`edge` 아카이브의 이 검증은 Windows Authenticode와 Apple Developer ID notarization을
-대체하지 않으며, 운영 승격에서는 별도 release gate가 필요하다.
+macOS `edge` SEA는 생성 후 ad-hoc 서명하고 아카이브를 다시 풀어 실행까지 검증한다.
+이 서명은 Apple Developer ID notarization을 대체하지 않으며, 운영 승격에서는 별도
+Developer ID 서명·notarization release gate가 필요하다.
 
 ## 5. 설치 전 검사와 bootstrap
 

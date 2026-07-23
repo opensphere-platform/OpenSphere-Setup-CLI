@@ -31,7 +31,9 @@ jobs:
         run: |
           ./Install-OpenSphereSetup.ps1
           $version = opensphere-setup version
-          if ($version -notmatch '^opensphere-setup 0\.4\.') { throw "Unexpected command version: $version" }
+          $packageVersion = node -p "require('./package.json').version"
+          $expected = "opensphere-setup $packageVersion"
+          if ($version -ne $expected) { throw "Unexpected command version: $version (expected $expected)" }
       - name: Contract tests
         run: npm test
       - name: Source and E2E harness syntax

@@ -139,9 +139,10 @@ opensphere-setup doctor `
 ```
 
 `doctor`는 Setup 호스트 플랫폼, Node runtime, `kubectl`·`pwsh`·`gh`, Kubernetes
-v1.30+, Ready 노드와 권한, StorageClass, 신규 설치 포트, Release BOM·provenance·SBOM
-네트워크 경로를 확인한다. PVC 88Gi는 요청량으로 보고하며 실제 provisioner 용량을 대신
-보증하지 않는다.
+v1.30+, Ready 노드와 권한, StorageClass, 신규 설치 포트, Release BOM·provenance·SBOM을
+확인한 뒤 41개 필수 manifest·migration·installer를 실제 source revision에서 모두
+다운로드·렌더링한다. 이 단계가 실패하면 namespace, installation lock과 Secret을 만들지
+않는다. PVC 88Gi는 요청량으로 보고하며 실제 provisioner 용량을 대신 보증하지 않는다.
 
 Docker Desktop Kubernetes 개발 환경:
 

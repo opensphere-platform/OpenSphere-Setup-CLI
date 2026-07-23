@@ -2,7 +2,15 @@
 import './portable-runtime.mjs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { bootstrap, existingOpenSphereNamespaces, migrateLegacyInstallationLock, readInstallationLock, uninstallManagedInstallation, upgrade } from './bootstrap.mjs';
+import {
+  bootstrap,
+  existingOpenSphereNamespaces,
+  migrateLegacyInstallationLock,
+  preflightReleaseArtifacts,
+  readInstallationLock,
+  uninstallManagedInstallation,
+  upgrade
+} from './bootstrap.mjs';
 import { installConsoleCli } from './install-cli.mjs';
 import { installConsoleCliFromCluster } from './cluster-cli-install.mjs';
 import { normalizeRegistryCredentials, resolveChannel, validateChannel, validateLock } from './release.mjs';
@@ -80,7 +88,7 @@ async function readLock(lockPath) {
 }
 
 function help() {
-  console.log(`OpenSphere Setup CLI 0.5.0-edge.3
+  console.log(`OpenSphere Setup CLI 0.5.0-edge.4
 
 Usage:
   opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
@@ -143,7 +151,7 @@ async function main() {
   }
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
-  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.3');
+  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.4');
 
   if (command === 'install-cli') {
     const installed = await installConsoleCli({
@@ -215,6 +223,13 @@ async function main() {
       onProgress: (event) => reportReleaseProgress(progress, event)
     });
     progress.done(lock.releaseDigest);
+    progress.step('필수 manifest·migration·installer 전체 다운로드 검증');
+    const artifacts = await preflightReleaseArtifacts(lock, {
+      storageClass: cluster.storageClass,
+      consoleUrl: doctorConsoleUrl,
+      authEnvironment: selectAuthEnvironment(channel, authEnvironment)
+    });
+    progress.done(`${artifacts.artifactCount} artifacts, ${artifacts.manifestGroupCount} manifest groups`);
     progress.item(
       '용량',
       `PVC 요청 합계 ${DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB}Gi; 실제 여유 공간은 StorageClass 운영자가 별도 확인`

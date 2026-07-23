@@ -15,6 +15,10 @@ test('private release publisher fails closed for a public repository', () => {
   assert.match(workflow, /opensphere-setup-linux-arm64/);
   assert.match(workflow, /opensphere-setup-darwin-amd64/);
   assert.match(workflow, /opensphere-setup-darwin-arm64/);
+  assert.match(workflow, /codesign --force --sign -/);
+  assert.match(workflow, /Smoke-test packaged runtime/);
+  assert.match(workflow, /Bundled PowerShell smoke test failed/);
+  assert.match(workflow, /Bundled kubectl smoke test failed/);
   assert.match(workflow, /SHA256SUMS/);
   assert.match(workflow, /\.immutable/);
   assert.match(workflow, /remote_digest/);
