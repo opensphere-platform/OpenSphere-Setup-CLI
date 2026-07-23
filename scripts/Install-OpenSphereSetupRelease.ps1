@@ -22,9 +22,6 @@ function Invoke-GitHubCli {
 if (-not $env:LOCALAPPDATA) {
   throw 'LOCALAPPDATA is required for the per-user OpenSphere installation.'
 }
-if ($ReleaseTag -eq '__OPENSPHERE_SETUP_RELEASE_TAG__') {
-  throw 'This installer template must be materialized by the private release workflow.'
-}
 if ($ReleaseTag -notmatch '^setup-v(?<version>[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)$') {
   throw "Invalid OpenSphere Setup release tag: $ReleaseTag"
 }

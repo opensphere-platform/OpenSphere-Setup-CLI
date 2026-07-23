@@ -27,6 +27,15 @@ test('Windows release installer automates authenticated download and verificatio
 
 test('private release materializes and publishes the version-bound installer', () => {
   assert.match(installer, /__OPENSPHERE_SETUP_RELEASE_TAG__/);
+  const materialized = installer.replaceAll(
+    '__OPENSPHERE_SETUP_RELEASE_TAG__',
+    'setup-v0.5.0-edge.7'
+  );
+  assert.doesNotMatch(materialized, /__OPENSPHERE_SETUP_RELEASE_TAG__/);
+  assert.doesNotMatch(
+    materialized,
+    /\$ReleaseTag\s+-eq\s+'setup-v0\.5\.0-edge\.7'/
+  );
   assert.match(workflow, /Install-OpenSphereSetup\.ps1/);
   assert.match(workflow, /Install-OpenSphereSetupRelease\.ps1/);
   assert.match(workflow, /__OPENSPHERE_SETUP_RELEASE_TAG__/);

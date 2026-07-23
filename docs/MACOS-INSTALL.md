@@ -41,7 +41,7 @@ gh auth status
 gh repo view opensphere-platform/OpenSphere-Setup-CLI \
   --json visibility,viewerPermission
 
-release=setup-v0.5.0-edge.6
+release=setup-v0.5.0-edge.7
 architecture="$(test "$(uname -m)" = arm64 && echo arm64 || echo amd64)"
 gh release download "$release" \
   --repo opensphere-platform/OpenSphere-Setup-CLI \
