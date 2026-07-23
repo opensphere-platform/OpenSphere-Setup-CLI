@@ -27,8 +27,15 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       NODE_RELEASE: 26.5.0
+      OPENSPHERE_CONSOLE_SOURCE: ${{ github.workspace }}/_fixtures/OpenSphere-console
     steps:
       - uses: actions/checkout@v4
+
+      - name: Checkout canonical Console manifests
+        uses: actions/checkout@v4
+        with:
+          repository: opensphere-platform/OpenSphere-console
+          path: _fixtures/OpenSphere-console
 
       - name: Refuse public distribution
         shell: bash
@@ -42,13 +49,18 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_RELEASE }}
+          node-version: '24.18.0'
           cache: npm
 
-      - name: Install build dependencies and test
+      - name: Install dependencies and test supported runtime
         run: |
           npm ci
           npm test
+
+      - name: Select SEA build runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_RELEASE }}
 
       - name: Bundle Setup CLI
         run: npm run build:bundle
