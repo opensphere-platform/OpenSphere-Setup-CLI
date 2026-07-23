@@ -9,6 +9,7 @@ const recoverySecret = (endpoint = 'https://recovery.example.test') => ({
     bucket: encode('opensphere-audit'),
     access_key: encode('not-logged'),
     secret_key: encode('not-logged'),
+    encryption_key: encode('0123456789abcdef0123456789abcdef'),
     'ca.crt': encode('not-logged'),
     region: encode('ap-chuncheon-1')
   }

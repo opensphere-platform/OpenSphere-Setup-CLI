@@ -88,7 +88,8 @@ test('canonical baseline contains the complete Supabase/Gitea release repositori
     'opensphere-console-supabase-auth',
     'opensphere-console-supabase-rest',
     'opensphere-console-supabase-storage',
-    'opensphere-console-gitea-postgres'
+    'opensphere-console-gitea-postgres',
+    'opensphere-console-recovery'
   ]);
 });
 
@@ -96,7 +97,7 @@ test('base runtime requires OAA Core as native Main Shell runtime', () => {
   assert.deepEqual(BASE_RUNTIME_COMPONENTS, [
     'console', 'backend', 'dupaController', 'oaaGateway', 'oaaGovernedAdapter',
     'notificationDispatcher', 'gitea', 'supabasePostgres', 'supabaseAuth',
-    'supabaseRest', 'supabaseStorage', 'giteaPostgres'
+    'supabaseRest', 'supabaseStorage', 'giteaPostgres', 'recovery'
   ]);
   assert.equal(BASE_RUNTIME_COMPONENTS.includes('oaaGateway'), true);
 });

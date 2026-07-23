@@ -46,7 +46,8 @@ export const COMPONENTS = Object.freeze({
   supabaseAuth: 'opensphere-console-supabase-auth',
   supabaseRest: 'opensphere-console-supabase-rest',
   supabaseStorage: 'opensphere-console-supabase-storage',
-  giteaPostgres: 'opensphere-console-gitea-postgres'
+  giteaPostgres: 'opensphere-console-gitea-postgres',
+  recovery: 'opensphere-console-recovery'
 });
 
 // Per CONSTITUTION-0004 v1.3.0, OAA Core is Main Shell native required
@@ -65,7 +66,8 @@ export const BASE_RUNTIME_COMPONENTS = Object.freeze([
   'supabaseAuth',
   'supabaseRest',
   'supabaseStorage',
-  'giteaPostgres'
+  'giteaPostgres',
+  'recovery'
 ]);
 
 // A resolved image is a multi-platform index.  Do not let a channel appear

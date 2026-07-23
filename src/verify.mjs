@@ -12,6 +12,7 @@ import {
 const NAMESPACES = Object.freeze([
   'opensphere-console-data',
   'opensphere-console-change',
+  'opensphere-console-recovery',
   'opensphere-console',
   'opensphere-oaa-credentials',
   'opensphere-foundation',
@@ -68,6 +69,8 @@ const WORKLOADS = Object.freeze([
   { component: 'supabaseStorage', namespace: 'opensphere-console-data', kind: 'deployment', name: 'opensphere-supabase-storage', container: 'storage' },
   { component: 'giteaPostgres', namespace: 'opensphere-console-change', kind: 'deployment', name: 'opensphere-gitea-postgres', container: 'postgres' },
   { component: 'gitea', namespace: 'opensphere-console-change', kind: 'deployment', name: 'opensphere-gitea', container: 'gitea' },
+  { component: 'recovery', namespace: 'opensphere-console-data', kind: 'cronjob', name: 'opensphere-supabase-recovery-backup', container: 'recovery' },
+  { component: 'recovery', namespace: 'opensphere-console-change', kind: 'cronjob', name: 'opensphere-gitea-recovery-backup', container: 'recovery' },
   { component: 'backend', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-backend', container: 'api' },
   { component: 'dupaController', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-dupa-controller', container: 'controller' },
   { component: 'notificationDispatcher', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-notification-dispatcher', container: 'dispatcher' },
@@ -188,13 +191,16 @@ function verifyWorkloads(lock, { requireZeroRestarts }) {
   const resources = [];
   for (const spec of WORKLOADS) {
     const resource = getJson(['-n', spec.namespace, 'get', spec.kind, spec.name]);
-    const container = (resource.spec?.template?.spec?.containers ?? []).find(({ name }) => name === spec.container);
+    const podSpec = spec.kind === 'cronjob'
+      ? resource.spec?.jobTemplate?.spec?.template?.spec
+      : resource.spec?.template?.spec;
+    const container = (podSpec?.containers ?? []).find(({ name }) => name === spec.container);
     if (!container) throw new Error(`Workload container is missing: ${spec.namespace}/${spec.name}/${spec.container}`);
     const expectedImage = lock.components?.[spec.component]?.image;
     if (!expectedImage || container.image !== expectedImage) {
       throw new Error(`Runtime image differs from release lock: ${spec.namespace}/${spec.name} (${container.image} != ${expectedImage})`);
     }
-    const pullSecrets = (resource.spec?.template?.spec?.imagePullSecrets ?? []).map(({ name }) => name);
+    const pullSecrets = (podSpec?.imagePullSecrets ?? []).map(({ name }) => name);
     if (!pullSecrets.includes(REGISTRY_PULL_SECRET)) {
       throw new Error(`Workload does not reference the governed registry pull Secret: ${spec.namespace}/${spec.name}`);
     }

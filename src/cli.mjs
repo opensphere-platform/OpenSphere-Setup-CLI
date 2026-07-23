@@ -30,6 +30,7 @@ import {
 } from './doctor.mjs';
 import { preflight } from './preflight.mjs';
 import { printOpenSphereBanner } from './banner.mjs';
+import { startRecoveryDrill } from './recovery-drill.mjs';
 
 function option(names, fallback) {
   const aliases = Array.isArray(names) ? names : [names];
@@ -108,12 +109,15 @@ Usage:
        [--storage-class <name>] [--console <https-origin|loopback-http-origin>]
        [--auth-environment <development|production>]
        [--shell-tls-secret <namespace/name>]
+       [--recovery-target-secret <namespace/name>]
        [--registry-username <github-login> --registry-token-stdin]
        [--no-open-browser] [--add-to-path]
   opensphere-setup upgrade --release <edge|candidate|stable> [--lock <verified-lock-file>]
       [--context <kube-context>] [--storage-class <name>] [--console <https-origin>]
       [--add-to-path] [--registry-username <github-login> --registry-token-stdin]
   opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
+  opensphere-setup recovery-drill --component <supabase|gitea> --manifest-key <s3-object-key>
+      --confirm ISOLATED-RECOVERY-DRILL [--context <kube-context>]
   opensphere-setup reset-initial-admin --confirm RESET-INITIAL-ADMIN [--context <kube-context>]
   opensphere-setup uninstall --purge-data --confirm DELETE-OPENSPHERE [--context <kube-context>]
   opensphere-setup install-cli [--console <url>] [--install-dir <directory>]
@@ -148,7 +152,7 @@ async function main() {
   const authEnvironment = hasOption('--auth-environment') ? option('--auth-environment', '') : undefined;
   if (context) process.env.OPENSPHERE_KUBE_CONTEXT = context;
   if (hasOption('--backup-target-secret')) {
-    throw new Error('The retired --backup-target-secret option is not accepted; --recovery-target-secret is read-only preflight input');
+    throw new Error('The retired --backup-target-secret option is not accepted; use --recovery-target-secret <namespace/name>');
   }
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
@@ -308,7 +312,7 @@ async function main() {
       } else {
         progress.done('신규 설치 상태');
         progress.step(
-          '릴리스 anchor, Release BOM 및 12개 이미지 공급망 검증',
+          '릴리스 anchor, Release BOM 및 13개 이미지 공급망 검증',
           `channel=${channel}`
         );
         lock = await resolveChannel(channel, {
@@ -327,6 +331,7 @@ async function main() {
       consoleUrl: suppliedConsoleUrl ?? defaultConsoleUrl(channel, selectedAuthEnvironment),
       authEnvironment: selectedAuthEnvironment,
       shellTlsSecret: requestedShellTlsSecret,
+      recoveryTargetSecret: hasOption('--recovery-target-secret') ? option('--recovery-target-secret', '') : undefined,
       openOnboarding: !hasOption('--no-open-browser'),
       registryCredentials,
       progress,
@@ -388,6 +393,21 @@ async function main() {
     });
     console.log(`[완료] ${evidence.channel} ${evidence.releaseDigest} 검증`);
     console.log(`${evidence.podCount} pods / ${evidence.serviceCount} services / runtime images locked`);
+    return;
+  }
+
+  if (command === 'recovery-drill') {
+    if (option('--confirm', '') !== 'ISOLATED-RECOVERY-DRILL') {
+      throw new Error('recovery-drill requires --confirm ISOLATED-RECOVERY-DRILL');
+    }
+    assertKubectl();
+    const lock = readInstallationLock();
+    if (!lock) throw new Error('No managed OpenSphere installation lock was found');
+    const result = startRecoveryDrill(lock, {
+      component: option('--component', ''),
+      manifestKey: option('--manifest-key', '')
+    });
+    console.log(`[완료] 격리 recovery drill ${result.component}: ${result.namespace}/${result.name}`);
     return;
   }
 

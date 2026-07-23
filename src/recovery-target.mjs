@@ -1,4 +1,4 @@
-const REQUIRED_KEYS = Object.freeze(['endpoint', 'bucket', 'access_key', 'secret_key', 'ca.crt']);
+const REQUIRED_KEYS = Object.freeze(['endpoint', 'bucket', 'access_key', 'secret_key', 'encryption_key', 'ca.crt']);
 
 function decode(data, key) {
   const encoded = data?.[key];
@@ -25,6 +25,9 @@ export function inspectRecoveryTarget(secret) {
   if (!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket)) throw new Error('Recovery target bucket must be a valid S3 bucket name');
   const region = decode(secret.data, 'region') || 'us-east-1';
   if (!/^[a-z0-9-]{2,32}$/.test(region)) throw new Error('Recovery target region is invalid');
+  if (Buffer.byteLength(decode(secret.data, 'encryption_key'), 'utf8') < 32) {
+    throw new Error('Recovery target encryption_key must contain at least 32 UTF-8 bytes');
+  }
 
   const hostname = url.hostname.toLowerCase();
   const inCluster = hostname === 'localhost' || hostname.endsWith('.svc') || hostname.endsWith('.svc.cluster.local') || /^127\./.test(hostname) || hostname === '::1';

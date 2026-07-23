@@ -34,6 +34,11 @@ import {
   releaseNeedsRegistryCredentials,
   secretHasGhcrCredential
 } from './registry-pull-secret.mjs';
+import {
+  inspectRecoveryTarget,
+  parseRecoveryTargetSecretRef,
+  recoveryTargetData
+} from './recovery-target.mjs';
 import { reportReleaseProgress } from './progress.mjs';
 import { materializeRuntimeAsset } from './runtime-assets.mjs';
 
@@ -43,12 +48,14 @@ const RELEASE_INVENTORY_CONFIGMAP = 'opensphere-release-inventory';
 const PRUNABLE_MANIFEST_KINDS = new Set([
   'ClusterRole', 'ClusterRoleBinding', 'ConfigMap', 'CronJob', 'Deployment',
   'NetworkPolicy', 'PodDisruptionBudget', 'Role', 'RoleBinding', 'Service',
-  'ServiceAccount', 'StatefulSet'
+  'ServiceAccount', 'StatefulSet', 'ValidatingAdmissionPolicy',
+  'ValidatingAdmissionPolicyBinding'
 ]);
 
 export const MANAGED_NAMESPACES = Object.freeze([
   'opensphere-console-data',
   'opensphere-console-change',
+  'opensphere-console-recovery',
   'opensphere-console',
   'opensphere-oaa-credentials',
   'opensphere-foundation',
@@ -75,6 +82,17 @@ export const MANAGED_CLUSTER_RBAC = Object.freeze([
   'clusterrole/dupa-clidownload-reader',
   'clusterrole/opensphere-console-backend',
   'clusterrole/opensphere-console-oaa-gateway-environment-reader'
+]);
+
+// These resources are cluster-scoped, so namespace deletion cannot remove
+// them. Bindings are deliberately deleted before their policies.
+export const MANAGED_CLUSTER_POLICIES = Object.freeze([
+  'validatingadmissionpolicybinding/opensphere-console-manual-ui-contract',
+  'validatingadmissionpolicy/opensphere-console-manual-ui-contract',
+  'validatingadmissionpolicybinding/opensphere-console-image-integrity-workload',
+  'validatingadmissionpolicy/opensphere-console-image-integrity-workload',
+  'validatingadmissionpolicybinding/opensphere-console-image-integrity-cronjob',
+  'validatingadmissionpolicy/opensphere-console-image-integrity-cronjob'
 ]);
 
 export const BASE_MANIFESTS = Object.freeze([
@@ -104,6 +122,13 @@ export const BASE_MANIFESTS = Object.freeze([
     ]]
   },
   {
+    path: 'backend/recovery/recovery-jobs.yaml',
+    replacements: [[
+      '(?:__OPENSPHERE_RECOVERY_IMAGE__|ghcr\\.io/opensphere-platform/opensphere-console-recovery@sha256:[a-f0-9]+)',
+      'recovery'
+    ]]
+  },
+  {
     path: 'backend/opensphere-console-oaa-gateway/deploy.yaml',
     replacements: [[
       '(?:ghcr\\.io/opensphere-platform/)?opensphere-console-oaa-gateway(?:@sha256:[A-Za-z0-9_]+|:[A-Za-z0-9][A-Za-z0-9._-]*)',
@@ -117,6 +142,13 @@ export const BASE_MANIFESTS = Object.freeze([
       'oaaGovernedAdapter'
     ]]
   },
+  // This is part of the released install set, rather than an operator-side
+  // optional file.  It supplies the Main Shell PDBs and ingress boundaries;
+  // it intentionally does not pretend that a single-replica RWO data plane
+  // is HA (that remains a separately certified production prerequisite).
+  { path: 'deploy/production-hardening.yaml' },
+  { path: 'deploy/manual-ui-admission-policy.yaml' },
+  { path: 'deploy/console-image-admission-policy.yaml' },
   {
     path: 'deploy/opensphere-console.yaml',
     replacements: [[
@@ -151,7 +183,8 @@ export const SUPABASE_MIGRATIONS = Object.freeze([
   '0022_oaa_recovery_owner_permissions.sql',
   '0023_ceph_prerequisite_consumer.sql',
   '0024_ai_consumer_contract.sql',
-  '0025_external_channels_backup.sql'
+  '0025_external_channels_backup.sql',
+  '0026_schema_migration_ledger.sql'
 ]);
 
 export const SUPABASE_MANIFEST = Object.freeze({
@@ -246,6 +279,31 @@ function ensureGenericSecret(namespace, name, literals = {}, files = {}) {
     metadata: { name, namespace },
     type: existing?.type || 'Opaque',
     data
+  })}\n`);
+  return true;
+}
+
+function ensureRecoveryTargetSecret(namespace, source) {
+  const candidate = recoveryTargetData(source);
+  let existing = null;
+  try { existing = readSecret(namespace, 'opensphere-platform-recovery-target'); } catch {}
+  if (existing) {
+    const changed = Object.keys(candidate).some((key) => existing.data?.[key] !== candidate[key]);
+    if (changed) {
+      throw new Error(`Recovery target rotation is a governed migration; refusing to replace ${namespace}/opensphere-platform-recovery-target during bootstrap`);
+    }
+    return false;
+  }
+  applyYaml(`${JSON.stringify({
+    apiVersion: 'v1',
+    kind: 'Secret',
+    metadata: {
+      name: 'opensphere-platform-recovery-target',
+      namespace,
+      labels: { 'opensphere.io/authority': 'external-recovery-target' }
+    },
+    type: 'Opaque',
+    data: candidate
   })}\n`);
   return true;
 }
@@ -415,7 +473,8 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
     join(foundation.root, 'backend', 'supabase', 'install.ps1'),
     '-ConsoleUrl', consoleUrl,
     '-Namespace', 'opensphere-console-data',
-    '-StorageClass', storageClass
+    '-StorageClass', storageClass,
+    '-SourceRevision', lock.sourceRevision
   ];
   if (context) supabaseArgs.push('-KubeContext', context);
   progress?.item('설치', 'Supabase Data & Identity Backbone');
@@ -733,12 +792,14 @@ export async function uninstallManagedInstallation({ runtime = {} } = {}) {
   for (const namespace of MANAGED_NAMESPACES) operations.waitForManagedNamespaceDeletion(namespace);
   for (const volume of persistentVolumes) operations.deleteManagedPersistentVolume(volume);
   for (const crd of MANAGED_CRDS) operations.deleteManagedCrd(crd);
+  for (const resource of MANAGED_CLUSTER_POLICIES) operations.deleteManagedClusterRbac(resource);
   for (const resource of MANAGED_CLUSTER_RBAC) operations.deleteManagedClusterRbac(resource);
   return {
     releaseDigest: installed.releaseDigest,
     namespaces: [...MANAGED_NAMESPACES],
     persistentVolumes,
     customResourceDefinitions: [...MANAGED_CRDS],
+    clusterPolicies: [...MANAGED_CLUSTER_POLICIES],
     clusterRbac: [...MANAGED_CLUSTER_RBAC]
   };
 }
@@ -827,6 +888,7 @@ export async function bootstrap(lock, {
   openOnboarding = true,
   authEnvironment,
   shellTlsSecret,
+  recoveryTargetSecret,
   registryCredentials,
   progress
 } = {}) {
@@ -878,6 +940,7 @@ export async function bootstrap(lock, {
     throw new Error(`Installation uses Console URL ${effectiveConsoleUrl}; changing it requires endpoint migration`);
   }
   const requestedShellTls = shellTlsSecret ? parseShellTlsSecretRef(shellTlsSecret) : undefined;
+  const requestedRecoveryTarget = recoveryTargetSecret ? parseRecoveryTargetSecretRef(recoveryTargetSecret) : undefined;
   const storedShellTls = storedConfig?.shellTlsSecret
     ? parseShellTlsSecretRef(storedConfig.shellTlsSecret)
     : undefined;
@@ -915,6 +978,10 @@ export async function bootstrap(lock, {
       ? readSecret(effectiveShellTls.namespace, effectiveShellTls.name)
       : undefined;
     if (externalShellTls) inspectExternalShellTlsSecret(externalShellTls, effectiveConsoleUrl);
+    const externalRecoveryTarget = requestedRecoveryTarget
+      ? readSecret(requestedRecoveryTarget.namespace, requestedRecoveryTarget.name)
+      : undefined;
+    if (externalRecoveryTarget) inspectRecoveryTarget(externalRecoveryTarget);
 
     progress?.step('관리 namespace와 GHCR image pull 경로 준비');
     for (const namespace of MANAGED_NAMESPACES) {
@@ -923,6 +990,16 @@ export async function bootstrap(lock, {
     }
     const registry = ensureRegistryPullSecrets(lock, registryCredentials);
     progress?.done(`GHCR credentials=${registry.credentialSource}`);
+
+    if (externalRecoveryTarget) {
+      progress?.step('외부 S3 recovery target을 데이터·변경·격리 drill namespace에 최소 복제');
+      for (const namespace of ['opensphere-console-data', 'opensphere-console-change', 'opensphere-console-recovery']) {
+        ensureRecoveryTargetSecret(namespace, externalRecoveryTarget);
+      }
+      progress?.done('Recovery target Secret 준비 (백업 Job은 Change Control 승인 전 suspend)');
+    } else {
+      progress?.item('Recovery', '외부 recovery target 미지정 — backup/drill Job은 fail-closed 상태로 유지');
+    }
 
     progress?.step('Console HTTPS 인증서와 TLS Secret 준비');
     recordInstallationState(

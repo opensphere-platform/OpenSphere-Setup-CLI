@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MANAGED_CLUSTER_RBAC, MANAGED_CRDS, MANAGED_NAMESPACES, uninstallManagedInstallation } from '../src/bootstrap.mjs';
+import { MANAGED_CLUSTER_POLICIES, MANAGED_CLUSTER_RBAC, MANAGED_CRDS, MANAGED_NAMESPACES, uninstallManagedInstallation } from '../src/bootstrap.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CLI = join(ROOT, 'src', 'cli.mjs');
@@ -27,6 +27,17 @@ test('managed cluster RBAC retains OAA environment-reader lifecycle ownership bu
   assert.equal(MANAGED_CLUSTER_RBAC.some((resource) => resource.includes('controlled-operator')), false);
 });
 
+test('managed uninstall owns the two Console admission policy bindings and policies', () => {
+  assert.deepEqual(MANAGED_CLUSTER_POLICIES, [
+    'validatingadmissionpolicybinding/opensphere-console-manual-ui-contract',
+    'validatingadmissionpolicy/opensphere-console-manual-ui-contract',
+    'validatingadmissionpolicybinding/opensphere-console-image-integrity-workload',
+    'validatingadmissionpolicy/opensphere-console-image-integrity-workload',
+    'validatingadmissionpolicybinding/opensphere-console-image-integrity-cronjob',
+    'validatingadmissionpolicy/opensphere-console-image-integrity-cronjob'
+  ]);
+});
+
 test('managed uninstall deletes namespaces, retained PVs, then only OpenSphere CRDs', async () => {
   const events = [];
   const result = await uninstallManagedInstallation({
@@ -46,6 +57,7 @@ test('managed uninstall deletes namespaces, retained PVs, then only OpenSphere C
     namespaces: [...MANAGED_NAMESPACES],
     persistentVolumes: ['pvc-retained-a', 'pvc-retained-b'],
     customResourceDefinitions: [...MANAGED_CRDS],
+    clusterPolicies: [...MANAGED_CLUSTER_POLICIES],
     clusterRbac: [...MANAGED_CLUSTER_RBAC]
   });
   assert.deepEqual(events, [
@@ -54,6 +66,7 @@ test('managed uninstall deletes namespaces, retained PVs, then only OpenSphere C
     'delete-pv:pvc-retained-a',
     'delete-pv:pvc-retained-b',
     ...MANAGED_CRDS.map((name) => `delete-crd:${name}`),
+    ...MANAGED_CLUSTER_POLICIES.map((name) => `delete-rbac:${name}`),
     ...MANAGED_CLUSTER_RBAC.map((name) => `delete-rbac:${name}`)
   ]);
 });

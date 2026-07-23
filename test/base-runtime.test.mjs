@@ -41,23 +41,27 @@ test('fresh bootstrap is Supabase Data & Identity plus separate Gitea change aut
   ]);
 });
 
-test('all current Supabase migrations, including external backup and AI consumer contracts, are release material', () => {
+test('all current Supabase migrations, including external backup, AI consumer contracts and provenance ledger, are release material', () => {
   assert.equal(SUPABASE_MIGRATIONS[0], '0001_console_backbone.sql');
-  assert.equal(SUPABASE_MIGRATIONS.at(-1), '0025_external_channels_backup.sql');
+  assert.equal(SUPABASE_MIGRATIONS.at(-1), '0026_schema_migration_ledger.sql');
   assert.equal(SUPABASE_MIGRATIONS.includes('0011_notification_delivery.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0022_oaa_recovery_owner_permissions.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0024_ai_consumer_contract.sql'), true);
   assert.equal(new Set(SUPABASE_MIGRATIONS).size, SUPABASE_MIGRATIONS.length);
 });
 
-test('base Main Shell includes Backend, DUPA, notification, OAA and governed adapter', () => {
+test('base Main Shell includes Backend, DUPA, notification, OAA, governed adapter and production guardrails', () => {
   const paths = BASE_MANIFESTS.map(({ path }) => path);
   for (const path of [
     'backend/opensphere-console-backend/deploy.yaml',
     'backend/dupa-control/opensphere-console-dupa-controller.yaml',
     'backend/notification-dispatcher/deploy.yaml',
+    'backend/recovery/recovery-jobs.yaml',
     'backend/opensphere-console-oaa-gateway/deploy.yaml',
     'backend/oaa-governed-adapter/deploy.yaml',
+    'deploy/production-hardening.yaml',
+    'deploy/manual-ui-admission-policy.yaml',
+    'deploy/console-image-admission-policy.yaml',
     'deploy/opensphere-console.yaml'
   ]) assert.equal(paths.includes(path), true, path);
   assert.equal(paths.some((path) => /kanidm|backbone/.test(path)), false);
@@ -86,6 +90,7 @@ test('every release base workload references the Setup-managed GHCR pull Secret'
     'backend/opensphere-console-backend/deploy.yaml',
     'backend/dupa-control/opensphere-console-dupa-controller.yaml',
     'backend/notification-dispatcher/deploy.yaml',
+    'backend/recovery/recovery-jobs.yaml',
     'backend/opensphere-console-oaa-gateway/deploy.yaml',
     'backend/oaa-governed-adapter/deploy.yaml',
     'deploy/opensphere-console.yaml'
@@ -100,6 +105,21 @@ test('every release base workload references the Setup-managed GHCR pull Secret'
       workloads,
       `${file} must attach the managed pull Secret to every workload Pod template`
     );
+  }
+});
+
+test('production guardrails are released with PDBs and stateless control-plane topology spread', () => {
+  const hardening = readFileSync(new URL('deploy/production-hardening.yaml', CONSOLE_SOURCE), 'utf8');
+  assert.match(hardening, /kind: PodDisruptionBudget[\s\S]+name: opensphere-console/);
+  assert.match(hardening, /kind: PodDisruptionBudget[\s\S]+name: opensphere-console-backend/);
+  assert.match(hardening, /kind: NetworkPolicy[\s\S]+name: opensphere-console-ingress/);
+  for (const file of [
+    'deploy/opensphere-console.yaml',
+    'backend/opensphere-console-backend/deploy.yaml',
+    'backend/opensphere-console-oaa-gateway/deploy.yaml'
+  ]) {
+    const source = readFileSync(new URL(file, CONSOLE_SOURCE), 'utf8');
+    assert.match(source, /topologySpreadConstraints:[\s\S]+topologyKey: kubernetes\.io\/hostname[\s\S]+whenUnsatisfiable: DoNotSchedule/);
   }
 });
 

@@ -5,7 +5,7 @@ Status: Supabase/Gitea architecture, Setup CLI 0.5
 ## 결정
 
 OpenSphere 설치 입력은 mutable tag 목록이 아니라, Console anchor digest에 첨부된 서명
-`OpenSphereReleaseBOM`이다. BOM은 한 source revision에서 빌드된 12개 필수 이미지를 하나의
+`OpenSphereReleaseBOM`이다. BOM은 한 source revision에서 빌드된 13개 필수 이미지를 하나의
 원자적 release로 묶는다.
 
 필수 컴포넌트:
@@ -33,10 +33,10 @@ Kanidm, 구형 Auth BFF, 별도 Console PostgreSQL, RustFS와 CBS image set은 r
 `OpenSphere-console/.github/workflows/publish-edge-images.yml`이 다음 순서로 발행한다.
 
 1. Console 전체 계약 테스트와 production build
-2. 12개 이미지를 `linux/amd64`, `linux/arm64`로 build/push
+2. 13개 이미지를 `linux/amd64`, `linux/arm64`로 build/push
 3. 각 digest에 GitHub Actions provenance와 SPDX SBOM attestation
 4. 모든 digest와 `io.opensphere.source-revision` 재검증
-5. 12개 컴포넌트 BOM 생성
+5. 13개 컴포넌트 BOM 생성
 6. Console anchor digest에 BOM attestation
 7. non-anchor `edge` tag 이동
 8. Console anchor `edge` tag를 마지막에 이동
@@ -61,7 +61,7 @@ Setup은 다음을 모두 만족해야 release lock을 반환한다.
   `https://opensphere.io/attestations/release-bom/v1`
 - signer workflow와 OIDC issuer가 embedded trust root와 일치
 - source repository와 40자리 source revision 일치
-- 정확히 12개 component, 추가/누락 없음
+- 정확히 13개 component, 추가/누락 없음
 - component image가 공식 repository의 `@sha256:<64 hex>`
 - 모든 component에 provenance와 SPDX SBOM attestation
 - 지원 platform이 `linux/amd64`, `linux/arm64`

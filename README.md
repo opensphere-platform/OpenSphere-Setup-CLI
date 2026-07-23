@@ -64,7 +64,7 @@ macOS 준비·설치·인증서 신뢰 절차는
 Setup은 태그를 그대로 설치하지 않는다.
 
 1. 선택한 채널의 서명된 Release BOM을 조회한다.
-2. GitHub Actions provenance, SPDX SBOM, 소스 revision, 12개 이미지 digest를 검증한다.
+2. GitHub Actions provenance, SPDX SBOM, 소스 revision, 13개 이미지 digest를 검증한다.
 3. 검증된 immutable release lock을 로컬과 클러스터에 기록한다.
 4. 정확히 그 소스 revision의 설치 스크립트, SQL migration, Kubernetes manifest를 받는다.
 5. 모든 이미지 슬롯을 BOM의 `ghcr.io/...@sha256:...` 값으로 치환한다.
@@ -79,7 +79,7 @@ Setup은 태그를 그대로 설치하지 않는다.
 
 ## 기본 런타임
 
-서명 BOM의 필수 12개 컴포넌트:
+서명 BOM의 필수 13개 컴포넌트:
 
 | 컴포넌트 | 역할 |
 |---|---|
@@ -95,6 +95,7 @@ Setup은 태그를 그대로 설치하지 않는다.
 | `supabaseStorage` | Console object storage |
 | `gitea` | 선언 변경·이력 권위 |
 | `giteaPostgres` | Gitea 전용 DB |
+| `recovery` | 암호화된 S3 archive와 격리 restore drill 전용 executor |
 
 권위 경계:
 
@@ -201,7 +202,7 @@ opensphere-setup verify --context docker-desktop --console https://localhost:111
 
 검증 범위:
 
-- 12개 workload 이미지가 release lock digest와 정확히 일치
+- 13개 release 이미지(2개 suspended recovery CronJob 포함)가 release lock digest와 정확히 일치
 - rollout, Pod Ready, 필요 시 restart 0
 - 12개 Service의 ready EndpointSlice
 - 필수 Secret key 존재와 4개 PVC `Bound`
