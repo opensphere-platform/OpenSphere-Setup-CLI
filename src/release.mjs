@@ -30,6 +30,19 @@ export const RELEASE_TRUST = Object.freeze({
   sbomPredicate: 'https://spdx.dev/Document/v2.3'
 });
 
+// Edge is the development channel. A developer with GHCR write permission may
+// publish one host-native platform from the governed local publisher. This
+// trust class is deliberately ineligible for candidate/stable promotion and
+// never substitutes for the GitHub Actions attestation trust above.
+export const LOCAL_EDGE_TRUST = Object.freeze({
+  type: 'localhost-edge/v1',
+  repository: LEGACY_RELEASE_TRUST.repository,
+  publisher: 'scripts/Publish-LocalEdge.ps1',
+  buildAuthority: 'localhost',
+  releaseClass: 'pre-ga',
+  gaEligible: false
+});
+
 function report(onProgress, event) {
   if (typeof onProgress === 'function') onProgress(event);
 }
@@ -77,9 +90,42 @@ export const LEGACY_BASE_RUNTIME_COMPONENTS = Object.freeze(
   BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'recovery')
 );
 
-// A resolved image is a multi-platform index.  Do not let a channel appear
-// installable on arm64 merely because its amd64 variant has the right label.
+// Promotion channels remain multi-platform. Edge may contain only the
+// platform(s) used by the target development cluster.
 export const RELEASE_PLATFORMS = Object.freeze(['linux/amd64', 'linux/arm64']);
+const LOCAL_EDGE_LABELS = Object.freeze({
+  'io.opensphere.channel': 'edge',
+  'opensphere.io/build-authority': 'localhost',
+  'opensphere.io/release-class': 'pre-ga',
+  'opensphere.io/ga-eligible': 'false'
+});
+const RELEASE_METADATA_LABELS = Object.freeze([
+  'io.opensphere.channel',
+  'io.opensphere.release-tag',
+  'io.opensphere.source-revision',
+  'opensphere.io/build-authority',
+  'opensphere.io/release-class',
+  'opensphere.io/ga-eligible'
+]);
+
+export function defaultEdgePlatforms(platform = process.platform, arch = process.arch) {
+  const architecture = arch === 'x64' ? 'amd64' : arch;
+  if (!['amd64', 'arm64'].includes(architecture)) {
+    throw new Error(`Unsupported edge architecture: ${platform}/${arch}`);
+  }
+  return [`linux/${architecture}`];
+}
+
+function canonicalRequiredPlatforms(platforms = RELEASE_PLATFORMS) {
+  if (!Array.isArray(platforms) || platforms.length === 0) {
+    throw new Error('At least one target Linux platform is required');
+  }
+  const unique = [...new Set(platforms)];
+  if (unique.length !== platforms.length || unique.some((platform) => !RELEASE_PLATFORMS.includes(platform))) {
+    throw new Error(`Unsupported or duplicate target platform set: ${platforms.join(', ')}`);
+  }
+  return unique;
+}
 
 function ghToken() {
   if (process.env.GHCR_TOKEN) return process.env.GHCR_TOKEN.trim();
@@ -162,14 +208,15 @@ async function registryToken(repository, fetchImpl, suppliedCredentials) {
   return { token: body.token, credentialsRequired: true };
 }
 
-export function requiredPlatformDescriptors(index, repository) {
+export function requiredPlatformDescriptors(index, repository, requiredPlatforms = RELEASE_PLATFORMS) {
   if (!Array.isArray(index?.manifests)) {
     throw new Error(`${repository} must publish a multi-platform image index`);
   }
+  const required = canonicalRequiredPlatforms(requiredPlatforms);
   const found = new Map(index.manifests
     .filter((entry) => entry?.platform?.os === 'linux' && typeof entry?.platform?.architecture === 'string')
     .map((entry) => [`${entry.platform.os}/${entry.platform.architecture}`, entry]));
-  return RELEASE_PLATFORMS.map((platform) => {
+  return required.map((platform) => {
     const descriptor = found.get(platform);
     if (!/^sha256:[a-f0-9]{64}$/.test(descriptor?.digest ?? '')) {
       throw new Error(`${repository} is missing required ${platform} manifest`);
@@ -178,7 +225,11 @@ export function requiredPlatformDescriptors(index, repository) {
   });
 }
 
-async function inspectRegistryImage(repository, reference, expectedDigest, { fetchImpl = fetch, registryCredentials } = {}) {
+async function inspectRegistryImage(repository, reference, expectedDigest, {
+  fetchImpl = fetch,
+  registryCredentials,
+  requiredPlatforms = RELEASE_PLATFORMS
+} = {}) {
   const authorization = await registryToken(repository, fetchImpl, registryCredentials);
   const token = authorization.token;
   const base = `https://${REGISTRY}/v2/${OWNER}/${repository}`;
@@ -207,7 +258,7 @@ async function inspectRegistryImage(repository, reference, expectedDigest, { fet
     throw new Error(`Registry digest for ${repository} differs from the signed release BOM`);
   }
   const document = await response.json();
-  const descriptors = requiredPlatformDescriptors(document, repository);
+  const descriptors = requiredPlatformDescriptors(document, repository, requiredPlatforms);
   const manifests = await Promise.all(descriptors.map(async (descriptor) => {
     const platformResponse = await fetchWithRetry(`${base}/manifests/${descriptor.digest}`, { headers }, { fetchImpl });
     if (!platformResponse.ok) throw new Error(`Platform manifest unavailable for ${repository}: HTTP ${platformResponse.status}`);
@@ -215,7 +266,7 @@ async function inspectRegistryImage(repository, reference, expectedDigest, { fet
   }));
   const configs = await Promise.all(manifests.map(async (manifest) => {
     if (!/^sha256:[a-f0-9]{64}$/.test(manifest.config?.digest ?? '')) {
-      throw new Error(`Image config descriptor missing for ${repository}:${channel}`);
+      throw new Error(`Image config descriptor missing for ${repository}:${reference}`);
     }
     const configResponse = await fetchWithRetry(`${base}/blobs/${manifest.config.digest}`, {
       headers: { authorization: `Bearer ${token}` }
@@ -227,10 +278,19 @@ async function inspectRegistryImage(repository, reference, expectedDigest, { fet
   if (revisions.size !== 1 || !/^[a-f0-9]{40}$/.test([...revisions][0] ?? '')) {
     throw new Error(`Source revision labels differ across required platforms for ${repository}:${reference}`);
   }
+  const metadata = Object.fromEntries(RELEASE_METADATA_LABELS.map((label) => {
+    const values = new Set(configs.map((config) => config.config?.Labels?.[label]).filter((value) => value !== undefined));
+    if (values.size > 1) {
+      throw new Error(`Release metadata label ${label} differs across required platforms for ${repository}:${reference}`);
+    }
+    return [label, [...values][0]];
+  }));
   const [sourceRevision] = revisions;
   return {
     image: `${REGISTRY}/${OWNER}/${repository}@${digest}`,
     sourceRevision,
+    labels: metadata,
+    platforms: canonicalRequiredPlatforms(requiredPlatforms),
     registryCredentialsRequired: authorization.credentialsRequired
   };
 }
@@ -287,7 +347,7 @@ function canonicalImage(image) {
 }
 
 function canonicalTrust(candidate) {
-  for (const trust of [RELEASE_TRUST, LEGACY_RELEASE_TRUST]) {
+  for (const trust of [RELEASE_TRUST, LEGACY_RELEASE_TRUST, LOCAL_EDGE_TRUST]) {
     const keys = Object.keys(trust);
     if (candidate && Object.keys(candidate).length === keys.length && keys.every((key) => candidate[key] === trust[key])) {
       return trust;
@@ -365,7 +425,8 @@ function canonicalComponentNames(components, { allowLegacyComponentSet = false }
 export function validateReleaseBom(bom, {
   channel,
   subject,
-  allowLegacyComponentSet = false
+  allowLegacyComponentSet = false,
+  requiredPlatforms
 } = {}) {
   if (bom?.apiVersion !== RELEASE_API_VERSION || bom?.kind !== 'OpenSphereReleaseBOM') {
     throw new Error('Invalid signed OpenSphere release BOM');
@@ -376,10 +437,22 @@ export function validateReleaseBom(bom, {
   if (bom.source !== SOURCE || !/^[a-f0-9]{40}$/.test(bom.sourceRevision ?? '')) {
     throw new Error('Signed release BOM source identity is invalid');
   }
-  if (!Array.isArray(bom.supportedPlatforms)
-      || bom.supportedPlatforms.length !== RELEASE_PLATFORMS.length
-      || RELEASE_PLATFORMS.some((platform) => !bom.supportedPlatforms.includes(platform))) {
+  const platforms = Array.isArray(bom.supportedPlatforms) ? [...new Set(bom.supportedPlatforms)] : [];
+  const canonicalPlatformSet = platforms.length === bom.supportedPlatforms?.length
+    && platforms.length > 0
+    && platforms.every((platform) => RELEASE_PLATFORMS.includes(platform))
+    && (bom.channel === 'edge'
+      || (platforms.length === RELEASE_PLATFORMS.length
+        && RELEASE_PLATFORMS.every((platform) => platforms.includes(platform))));
+  if (!canonicalPlatformSet) {
     throw new Error('Signed release BOM platform set is not canonical');
+  }
+  if (requiredPlatforms) {
+    const required = canonicalRequiredPlatforms(requiredPlatforms);
+    const missing = required.filter((platform) => !platforms.includes(platform));
+    if (missing.length) {
+      throw new Error(`Release BOM does not support target platform(s): ${missing.join(', ')}`);
+    }
   }
   const expectedNames = canonicalComponentNames(bom.components, { allowLegacyComponentSet });
   if (!expectedNames) {
@@ -431,7 +504,8 @@ export function verifyReleaseBomAttestation(subject, {
   sleep = delaySync,
   authToken,
   channel,
-  allowLegacyComponentSet = false
+  allowLegacyComponentSet = false,
+  requiredPlatforms
 } = {}) {
   if (!canonicalImage(subject)) throw new Error('Release BOM subject is not a governed digest-pinned image');
   let lastError;
@@ -447,7 +521,8 @@ export function verifyReleaseBomAttestation(subject, {
       const boms = entries
         .map((entry) => validateReleaseBom(entry?.verificationResult?.statement?.predicate, {
           subject,
-          allowLegacyComponentSet
+          allowLegacyComponentSet,
+          requiredPlatforms
         }))
         .filter((bom) => !channel || bom.channel === channel);
       if (boms.length === 0) throw new Error(`no signed Release BOM exists for channel ${channel ?? 'any'}`);
@@ -491,6 +566,70 @@ export function verifyImageSbom(image, options = {}) {
   );
 }
 
+export function assertLocalEdgeImage(image, {
+  repository,
+  sourceRevision,
+  releaseTag
+} = {}) {
+  const labels = image?.labels ?? {};
+  for (const [name, expected] of Object.entries(LOCAL_EDGE_LABELS)) {
+    if (labels[name] !== expected) {
+      throw new Error(`Local edge image ${repository ?? 'component'} has invalid ${name} label`);
+    }
+  }
+  if (!/^[a-f0-9]{40}$/.test(image?.sourceRevision ?? '')
+      || labels['io.opensphere.source-revision'] !== image.sourceRevision) {
+    throw new Error(`Local edge image ${repository ?? 'component'} has invalid source revision labels`);
+  }
+  const observedReleaseTag = labels['io.opensphere.release-tag'];
+  if (!/^\d{12}$/.test(observedReleaseTag ?? '')) {
+    throw new Error(`Local edge image ${repository ?? 'component'} has invalid date release tag`);
+  }
+  if (sourceRevision && image.sourceRevision !== sourceRevision) {
+    throw new Error(`Local edge image ${repository ?? 'component'} source revision differs from the Console anchor`);
+  }
+  if (releaseTag && observedReleaseTag !== releaseTag) {
+    throw new Error(`Local edge image ${repository ?? 'component'} release tag differs from the Console anchor`);
+  }
+  return {
+    sourceRevision: image.sourceRevision,
+    releaseTag: observedReleaseTag,
+    immutableTag: `local-${image.sourceRevision.slice(0, 12)}`
+  };
+}
+
+async function verifyLocalEdgeLock(lock, {
+  inspectImageFn = inspectImageReference,
+  registryCredentials,
+  requiredPlatforms = defaultEdgePlatforms(),
+  onProgress
+} = {}) {
+  const validated = validateLock(lock);
+  if (canonicalTrust(validated.trust) !== LOCAL_EDGE_TRUST || validated.channel !== 'edge') {
+    throw new Error('Only a localhost edge lock may use local image verification');
+  }
+  const metadata = await Promise.all(Object.entries(validated.components).map(async ([name, component]) => {
+    report(onProgress, { type: 'local-component-start', component: name, image: component.image });
+    const inspected = await inspectImageFn(component.repository, component.image, {
+      registryCredentials,
+      requiredPlatforms
+    });
+    if (inspected.image !== component.image) {
+      throw new Error(`Local edge image ${name} differs from the release lock`);
+    }
+    const observed = assertLocalEdgeImage(inspected, {
+      repository: component.repository,
+      sourceRevision: validated.sourceRevision
+    });
+    report(onProgress, { type: 'local-component-complete', component: name, image: component.image });
+    return observed;
+  }));
+  if (new Set(metadata.map(({ releaseTag }) => releaseTag)).size !== 1) {
+    throw new Error('Local edge component release tags differ');
+  }
+  return { ...validated, localVerifiedAt: new Date().toISOString() };
+}
+
 export async function verifyReleaseProvenance(lock, {
   verifyImage = verifyImageProvenance,
   verifySbom = verifyImageSbom,
@@ -519,17 +658,28 @@ export async function verifyReleaseLock(lock, {
   verifyBom = verifyReleaseBomAttestation,
   verifyImage = verifyImageProvenance,
   verifySbom = verifyImageSbom,
+  inspectImageFn = inspectImageReference,
   registryCredentials,
+  requiredPlatforms,
   onProgress,
   allowLegacyComponentSet = false
 } = {}) {
   const validated = validateLock(lock, { allowLegacyComponentSet });
+  if (canonicalTrust(validated.trust) === LOCAL_EDGE_TRUST) {
+    return verifyLocalEdgeLock(validated, {
+      inspectImageFn,
+      registryCredentials,
+      requiredPlatforms,
+      onProgress
+    });
+  }
   const pointer = assertSignedReleaseBom(validated);
   report(onProgress, { type: 'bom-start', image: pointer.subject, channel: validated.channel });
   const verifiedBom = await verifyBom(pointer.subject, {
     channel: validated.channel,
     ...(registryCredentials?.token ? { authToken: registryCredentials.token } : {}),
-    allowLegacyComponentSet
+    allowLegacyComponentSet,
+    requiredPlatforms
   });
   report(onProgress, { type: 'bom-complete', image: pointer.subject, channel: validated.channel });
   if (verifiedBom.digest !== pointer.digest) {
@@ -538,7 +688,8 @@ export async function verifyReleaseLock(lock, {
   const bom = validateReleaseBom(verifiedBom.bom, {
     channel: validated.channel,
     subject: pointer.subject,
-    allowLegacyComponentSet
+    allowLegacyComponentSet,
+    requiredPlatforms
   });
   if (bom.sourceRevision !== validated.sourceRevision) {
     throw new Error('Release lock source revision differs from the signed Release BOM');
@@ -591,6 +742,9 @@ export function validateLock(lock, { allowLegacyComponentSet = false } = {}) {
   if (!trust) {
     throw new Error('Release lock trust root is not canonical');
   }
+  if (trust === LOCAL_EDGE_TRUST && lock.channel !== 'edge') {
+    throw new Error('Localhost build trust is accepted only for the edge channel');
+  }
   if (lock.channel !== 'edge' && trust !== RELEASE_TRUST) {
     throw new Error('candidate and stable release locks require signed SBOM trust v2');
   }
@@ -615,12 +769,72 @@ export function validateLock(lock, { allowLegacyComponentSet = false } = {}) {
       throw new Error(`Component ${name} registry credential requirement is invalid`);
     }
   }
+  if (trust === LOCAL_EDGE_TRUST && lock.releaseBom !== undefined) {
+    throw new Error('Local edge release locks cannot claim a signed Release BOM');
+  }
   if (lock.releaseBom !== undefined) assertSignedReleaseBom(lock);
   const expectedDigest = calculateReleaseDigest(lock.channel, lock.components, trust, lock.releaseBom);
   if (lock.releaseDigest !== expectedDigest) {
     throw new Error('Release lock digest does not match its component set');
   }
   return lock;
+}
+
+function releaseComponent(repository, inspected) {
+  return {
+    repository,
+    image: inspected.image,
+    sourceRevision: inspected.sourceRevision,
+    registryCredentialsRequired: inspected.registryCredentialsRequired
+  };
+}
+
+async function resolveLocalEdgeRelease(reference, anchor, {
+  resolveImageFn = resolveImage,
+  registryCredentials,
+  requiredPlatforms = defaultEdgePlatforms(),
+  onProgress
+} = {}) {
+  if (reference !== 'edge') {
+    throw new Error('Localhost releases may be resolved only through the edge channel');
+  }
+  const targetPlatforms = canonicalRequiredPlatforms(requiredPlatforms);
+  const anchorMetadata = assertLocalEdgeImage(anchor, { repository: COMPONENTS.console });
+  const resolved = await Promise.all(Object.entries(COMPONENTS).map(async ([name, repository]) => {
+    report(onProgress, {
+      type: 'local-component-start',
+      component: name,
+      repository,
+      reference: anchorMetadata.immutableTag
+    });
+    const inspected = await resolveImageFn(repository, anchorMetadata.immutableTag, {
+      registryCredentials,
+      requiredPlatforms: targetPlatforms
+    });
+    if (name === 'console' && inspected.image !== anchor.image) {
+      throw new Error('Local edge immutable Console tag differs from the channel anchor');
+    }
+    assertLocalEdgeImage(inspected, {
+      repository,
+      sourceRevision: anchorMetadata.sourceRevision,
+      releaseTag: anchorMetadata.releaseTag
+    });
+    report(onProgress, { type: 'local-component-complete', component: name, image: inspected.image });
+    return [name, releaseComponent(repository, inspected)];
+  }));
+  const components = Object.fromEntries(resolved);
+  const releaseDigest = calculateReleaseDigest('edge', components, LOCAL_EDGE_TRUST);
+  return validateLock({
+    apiVersion: RELEASE_API_VERSION,
+    kind: 'OpenSphereReleaseLock',
+    channel: 'edge',
+    releaseDigest,
+    resolvedAt: new Date().toISOString(),
+    source: SOURCE,
+    sourceRevision: anchorMetadata.sourceRevision,
+    trust: LOCAL_EDGE_TRUST,
+    components
+  });
 }
 
 async function resolveSignedRelease(reference, channel, {
@@ -630,33 +844,47 @@ async function resolveSignedRelease(reference, channel, {
   registryCredentials,
   verifyImage = verifyImageProvenance,
   verifySbom = verifyImageSbom,
-  onProgress
+  onProgress,
+  requiredPlatforms = channel === 'edge' ? defaultEdgePlatforms() : RELEASE_PLATFORMS,
+  resolvedAnchor
 } = {}) {
   validateChannel(channel);
+  const targetPlatforms = canonicalRequiredPlatforms(requiredPlatforms);
   // The Console digest is the atomic channel anchor. The publisher moves its
   // mutable channel tag only after the signed BOM and every component digest
   // are available, so readers always see the previous complete release or the
   // new complete release, never independently sampled mutable component tags.
-  report(onProgress, {
-    type: 'anchor-start',
-    component: 'console',
-    repository: COMPONENTS.console,
-    reference
-  });
-  const anchor = await resolveImageFn(COMPONENTS.console, reference, { registryCredentials });
-  report(onProgress, {
-    type: 'anchor-complete',
-    component: 'console',
-    image: anchor.image,
-    reference
-  });
+  let anchor = resolvedAnchor;
+  if (!anchor) {
+    report(onProgress, {
+      type: 'anchor-start',
+      component: 'console',
+      repository: COMPONENTS.console,
+      reference
+    });
+    anchor = await resolveImageFn(COMPONENTS.console, reference, {
+      registryCredentials,
+      requiredPlatforms: targetPlatforms
+    });
+    report(onProgress, {
+      type: 'anchor-complete',
+      component: 'console',
+      image: anchor.image,
+      reference
+    });
+  }
   report(onProgress, { type: 'bom-start', image: anchor.image, channel });
   const verifiedBom = await verifyBom(anchor.image, {
     channel,
-    ...(registryCredentials?.token ? { authToken: registryCredentials.token } : {})
+    ...(registryCredentials?.token ? { authToken: registryCredentials.token } : {}),
+    requiredPlatforms: targetPlatforms
   });
   report(onProgress, { type: 'bom-complete', image: anchor.image, channel });
-  const bom = validateReleaseBom(verifiedBom.bom, { channel, subject: anchor.image });
+  const bom = validateReleaseBom(verifiedBom.bom, {
+    channel,
+    subject: anchor.image,
+    requiredPlatforms: targetPlatforms
+  });
   const releaseBom = releaseBomPointer(bom, anchor.image);
   if (verifiedBom.digest !== releaseBom.digest) {
     throw new Error('Verified Release BOM digest differs from its canonical document');
@@ -667,12 +895,15 @@ async function resolveSignedRelease(reference, channel, {
     report(onProgress, { type: 'component-start', component: name, image: signed.image });
     const inspected = name === 'console'
       ? anchor
-      : await inspectImageFn(repository, signed.image, { registryCredentials });
+      : await inspectImageFn(repository, signed.image, {
+        registryCredentials,
+        requiredPlatforms: targetPlatforms
+      });
     if (inspected.image !== signed.image || inspected.sourceRevision !== signed.sourceRevision) {
       throw new Error(`Registry image ${name} differs from the signed Release BOM`);
     }
     report(onProgress, { type: 'component-complete', component: name, image: inspected.image });
-    return [name, { repository, ...inspected }];
+    return [name, releaseComponent(repository, inspected)];
   }));
   const components = Object.fromEntries(resolved);
   const sourceRevision = bom.sourceRevision;
@@ -701,7 +932,36 @@ async function resolveSignedRelease(reference, channel, {
 }
 
 export async function resolveChannel(channel, options = {}) {
-  return resolveSignedRelease(channel, channel, options);
+  validateChannel(channel);
+  const requiredPlatforms = options.requiredPlatforms
+    ?? (channel === 'edge' ? defaultEdgePlatforms() : RELEASE_PLATFORMS);
+  report(options.onProgress, {
+    type: 'anchor-start',
+    component: 'console',
+    repository: COMPONENTS.console,
+    reference: channel
+  });
+  const anchor = await (options.resolveImageFn ?? resolveImage)(COMPONENTS.console, channel, {
+    registryCredentials: options.registryCredentials,
+    requiredPlatforms
+  });
+  report(options.onProgress, {
+    type: 'anchor-complete',
+    component: 'console',
+    image: anchor.image,
+    reference: channel
+  });
+  if (channel === 'edge' && anchor.labels?.['opensphere.io/build-authority'] === 'localhost') {
+    report(options.onProgress, { type: 'local-verification-start', image: anchor.image, channel });
+    const lock = await resolveLocalEdgeRelease(channel, anchor, { ...options, requiredPlatforms });
+    report(options.onProgress, { type: 'local-verification-complete', image: anchor.image, channel });
+    return lock;
+  }
+  return resolveSignedRelease(channel, channel, {
+    ...options,
+    requiredPlatforms,
+    resolvedAnchor: anchor
+  });
 }
 
 // Historical revisions are not install channels.  This narrow resolver exists

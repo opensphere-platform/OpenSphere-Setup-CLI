@@ -1,9 +1,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertAdmissionPolicySupport, assertAvailabilityNodeCount, assertSupportedNodePlatform, REQUIRED_ADMISSION_RESOURCES, SUPPORTED_NODE_PLATFORMS } from '../src/preflight.mjs';
+import {
+  assertAdmissionPolicySupport,
+  assertAvailabilityNodeCount,
+  assertSupportedNodePlatform,
+  nodePlatforms,
+  REQUIRED_ADMISSION_RESOURCES,
+  SUPPORTED_NODE_PLATFORMS
+} from '../src/preflight.mjs';
 
-function node(name, operatingSystem, architecture) {
-  return { metadata: { name }, status: { nodeInfo: { operatingSystem, architecture } } };
+function node(name, operatingSystem, architecture, ready = 'True') {
+  return {
+    metadata: { name },
+    status: {
+      nodeInfo: { operatingSystem, architecture },
+      conditions: [{ type: 'Ready', status: ready }]
+    }
+  };
 }
 
 test('Setup supports the two published Linux image architectures', () => {
@@ -15,6 +28,21 @@ test('Setup supports the two published Linux image architectures', () => {
 test('Setup rejects unsupported node platforms before bootstrap', () => {
   assert.throws(() => assertSupportedNodePlatform(node('windows', 'windows', 'amd64')), /Unsupported node platform windows: windows\/amd64/);
   assert.throws(() => assertSupportedNodePlatform(node('ppc', 'linux', 'ppc64le')), /Unsupported node platform ppc: linux\/ppc64le/);
+});
+
+test('edge image platform requirements are derived from Ready cluster nodes', () => {
+  assert.deepEqual(nodePlatforms([
+    node('amd-1', 'linux', 'amd64'),
+    node('amd-2', 'linux', 'amd64')
+  ]), ['linux/amd64']);
+  assert.deepEqual(nodePlatforms([
+    node('arm', 'linux', 'arm64'),
+    node('amd', 'linux', 'amd64')
+  ]), ['linux/amd64', 'linux/arm64']);
+  assert.throws(
+    () => nodePlatforms([node('not-ready', 'linux', 'amd64', 'False')]),
+    /node is not Ready/
+  );
 });
 
 test('candidate and stable promotion require enough Ready nodes for PDB and topology spread', () => {

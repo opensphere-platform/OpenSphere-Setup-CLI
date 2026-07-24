@@ -34,7 +34,7 @@ gh auth status
 ## 2. Windows amd64 — 자동 설치
 
 ```powershell
-$release = 'setup-v0.5.0-edge.10'
+$release = 'setup-v0.5.0-edge.11'
 $installer = Join-Path $env:TEMP 'Install-OpenSphereSetup.ps1'
 gh release download $release `
   --repo opensphere-platform/OpenSphere-Setup-CLI `
@@ -57,7 +57,7 @@ opensphere-setup version
 아키텍처에 맞춰 `amd64` 또는 `arm64`를 선택한다.
 
 ```bash
-release=setup-v0.5.0-edge.10
+release=setup-v0.5.0-edge.11
 architecture=amd64
 target="$PWD/opensphere-setup-download"
 mkdir -p "$target"
@@ -82,7 +82,7 @@ tar -xzf "opensphere-setup-linux-${architecture}.tar.gz"
 Intel은 `amd64`, Apple Silicon은 `arm64`를 선택한다.
 
 ```bash
-release=setup-v0.5.0-edge.10
+release=setup-v0.5.0-edge.11
 architecture=arm64
 target="$PWD/opensphere-setup-download"
 mkdir -p "$target"

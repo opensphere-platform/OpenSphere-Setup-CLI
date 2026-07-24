@@ -144,10 +144,16 @@ opensphere-setup doctor `
 ```
 
 `doctor`는 Setup 호스트 플랫폼, Node runtime, `kubectl`·`pwsh`·`gh`, Kubernetes
-v1.30+, Ready 노드와 권한, StorageClass, 신규 설치 포트, Release BOM·provenance·SBOM을
-확인한 뒤 41개 필수 manifest·migration·installer를 실제 source revision에서 모두
+v1.30+, Ready 노드와 권한, StorageClass, 신규 설치 포트와 채널별 공급망 정책을
+확인한 뒤 46개 필수 manifest·migration·installer를 실제 source revision에서 모두
 다운로드·렌더링한다. 이 단계가 실패하면 namespace, installation lock과 Secret을 만들지
 않는다. PVC 88Gi는 요청량으로 보고하며 실제 provisioner 용량을 대신 보증하지 않는다.
+
+`edge`는 개발 클러스터의 Linux 노드 아키텍처만 포함한 host-native 이미지도 허용한다.
+로컬 발행본은 `localhost`, `pre-ga`, `ga-eligible=false`, 날짜 태그와 전체 source
+revision 라벨 및 `local-<commit12>` immutable tag가 13개 이미지에서 모두 일치해야 한다.
+`candidate`와 `stable`은 계속 `linux/amd64`·`linux/arm64` 양쪽과 GitHub Actions
+Release BOM·provenance·SPDX SBOM attestation을 모두 요구한다.
 
 Docker Desktop Kubernetes 개발 환경:
 

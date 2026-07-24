@@ -28,7 +28,7 @@ import {
   formatLocalEnvironment,
   inspectLocalEnvironment
 } from './doctor.mjs';
-import { preflight } from './preflight.mjs';
+import { preflight, readNodePlatforms } from './preflight.mjs';
 import { printOpenSphereBanner } from './banner.mjs';
 import { startRecoveryDrill } from './recovery-drill.mjs';
 
@@ -90,7 +90,7 @@ async function readLock(lockPath) {
 }
 
 function help() {
-  console.log(`OpenSphere Setup CLI 0.5.0-edge.10
+  console.log(`OpenSphere Setup CLI 0.5.0-edge.11
 
 Usage:
   opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
@@ -156,7 +156,7 @@ async function main() {
   }
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
-  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.10');
+  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.11');
 
   printOpenSphereBanner({ command });
 
@@ -215,7 +215,7 @@ async function main() {
       storageClass: option('--storage-class', undefined),
       channel
     });
-    progress.done(`${cluster.serverVersion}, ${cluster.nodeCount} nodes, StorageClass ${cluster.storageClass}`);
+    progress.done(`${cluster.serverVersion}, ${cluster.nodeCount} nodes (${cluster.nodePlatforms.join(', ')}), StorageClass ${cluster.storageClass}`);
     const doctorConsoleUrl = suppliedConsoleUrl
       ?? defaultConsoleUrl(channel, selectAuthEnvironment(channel, authEnvironment));
     if (!readInstallationLock()) {
@@ -224,9 +224,10 @@ async function main() {
       progress.done(port.checked ? `${port.host}:${port.port} 사용 가능` : '원격 origin — 로컬 포트 검사 생략');
     }
 
-    progress.step('Release BOM·이미지 provenance·SBOM 네트워크 검증', `channel=${channel}`);
+    progress.step('릴리스 정책·이미지 공급망 네트워크 검증', `channel=${channel}`);
     const lock = await resolveChannel(channel, {
       registryCredentials,
+      requiredPlatforms: cluster.nodePlatforms,
       onProgress: (event) => reportReleaseProgress(progress, event)
     });
     progress.done(lock.releaseDigest);
@@ -274,7 +275,8 @@ async function main() {
     // clearer error, this keeps invalid bootstrap attempts side-effect free.
     progress.step('kubectl 및 Kubernetes API 연결 확인', `context=${context || 'current'}`);
     assertKubectl();
-    progress.done('client와 server 응답 확인');
+    const targetPlatforms = readNodePlatforms();
+    progress.done(`client와 server 응답 확인 — ${targetPlatforms.join(', ')}`);
     progress.step('기존 OpenSphere 설치 상태와 release lock 확인');
     const migrated = await migrateLegacyInstallationLock();
     if (migrated) progress.item('마이그레이션', `기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
@@ -312,11 +314,12 @@ async function main() {
       } else {
         progress.done('신규 설치 상태');
         progress.step(
-          '릴리스 anchor, Release BOM 및 13개 이미지 공급망 검증',
+          '릴리스 anchor 및 13개 이미지 공급망 검증',
           `channel=${channel}`
         );
         lock = await resolveChannel(channel, {
           registryCredentials,
+          requiredPlatforms: targetPlatforms,
           onProgress: (event) => reportReleaseProgress(progress, event)
         });
         await writeLock(lockPath, lock);
@@ -352,6 +355,7 @@ async function main() {
     validateChannel(channel);
     const registryCredentials = await registryCredentialsOption();
     assertKubectl();
+    const targetPlatforms = readNodePlatforms();
     const migrated = await migrateLegacyInstallationLock();
     if (migrated) console.log(`[마이그레이션] 기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
     const installed = readInstallationLock();
@@ -362,7 +366,7 @@ async function main() {
       if (target.channel !== channel) throw new Error(`Supplied lock channel ${target.channel} differs from requested channel ${channel}`);
       console.log(`[사용] 명시적 target release lock ${target.releaseDigest}`);
     } else {
-      target = await resolveChannel(channel, { registryCredentials });
+      target = await resolveChannel(channel, { registryCredentials, requiredPlatforms: targetPlatforms });
       await writeLock(lockPath, target);
       console.log(`[완료] ${channel} target을 ${target.releaseDigest}로 잠금`);
     }

@@ -8,6 +8,7 @@ import {
   COMPONENTS,
   LEGACY_BASE_RUNTIME_COMPONENTS,
   LEGACY_RELEASE_TRUST,
+  LOCAL_EDGE_TRUST,
   migrateLegacyReleaseLock,
   RELEASE_API_VERSION,
   RELEASE_BOM_PREDICATE,
@@ -16,6 +17,7 @@ import {
   resolveSourceRevision,
   releaseBomPointer,
   SOURCE,
+  validateReleaseBom,
   validateChannel,
   validateLock,
   verifyImageProvenance,
@@ -115,11 +117,29 @@ test('release baseline requires native manifests for every supported Linux platf
   assert.equal(requiredPlatformDescriptors(index, 'opensphere-console').length, 2);
   index.manifests.pop();
   assert.throws(() => requiredPlatformDescriptors(index, 'opensphere-console'), /missing required linux\/arm64 manifest/);
+  assert.equal(requiredPlatformDescriptors(index, 'opensphere-console', ['linux/amd64']).length, 1);
 });
 
 test('only governed release channels are accepted', () => {
   for (const channel of ['edge', 'candidate', 'stable']) assert.doesNotThrow(() => validateChannel(channel));
   assert.throws(() => validateChannel('latest'), /Unsupported channel/);
+});
+
+test('only edge may declare one supported target platform', () => {
+  const edge = validBom('edge');
+  edge.supportedPlatforms = ['linux/amd64'];
+  assert.doesNotThrow(() => validateReleaseBom(edge, {
+    channel: 'edge',
+    requiredPlatforms: ['linux/amd64']
+  }));
+  assert.throws(() => validateReleaseBom(edge, {
+    channel: 'edge',
+    requiredPlatforms: ['linux/arm64']
+  }), /does not support target platform/);
+
+  const candidate = validBom('candidate');
+  candidate.supportedPlatforms = ['linux/amd64'];
+  assert.throws(() => validateReleaseBom(candidate), /platform set is not canonical/);
 });
 
 function registryFixture({ privatePackage = false } = {}) {
@@ -194,6 +214,22 @@ test('private package resolution fails closed when no read credential is availab
 test('canonical digest-pinned release lock is accepted', () => {
   const lock = validLock();
   assert.equal(validateLock(lock), lock);
+});
+
+test('localhost build trust is accepted only for edge and cannot claim a signed BOM', () => {
+  const edge = validLock('edge');
+  edge.trust = LOCAL_EDGE_TRUST;
+  edge.releaseDigest = calculateReleaseDigest('edge', edge.components, LOCAL_EDGE_TRUST);
+  assert.equal(validateLock(edge), edge);
+
+  const promoted = structuredClone(edge);
+  promoted.channel = 'candidate';
+  promoted.releaseDigest = calculateReleaseDigest('candidate', promoted.components, LOCAL_EDGE_TRUST);
+  assert.throws(() => validateLock(promoted), /accepted only for the edge channel/);
+
+  edge.releaseBom = releaseBomPointer(validBom('edge'));
+  edge.releaseDigest = calculateReleaseDigest('edge', edge.components, LOCAL_EDGE_TRUST, edge.releaseBom);
+  assert.throws(() => validateLock(edge), /cannot claim a signed Release BOM/);
 });
 
 test('release lock rejects tag-only references', () => {
@@ -434,6 +470,77 @@ test('channel resolution verifies every Supabase/Gitea release attestation befor
   assert.equal(events[0].type, 'anchor-start');
   assert.equal(events.filter(({ type }) => type === 'component-complete').length, Object.keys(COMPONENTS).length);
   assert.equal(events.filter(({ type }) => type === 'sbom-complete').length, Object.keys(COMPONENTS).length);
+});
+
+test('localhost edge resolves one target platform through immutable local tags without GitHub attestations', async () => {
+  const calls = [];
+  const labels = {
+    'io.opensphere.channel': 'edge',
+    'io.opensphere.release-tag': '202607241141',
+    'io.opensphere.source-revision': REVISION,
+    'opensphere.io/build-authority': 'localhost',
+    'opensphere.io/release-class': 'pre-ga',
+    'opensphere.io/ga-eligible': 'false'
+  };
+  const resolved = await resolveChannel('edge', {
+    requiredPlatforms: ['linux/amd64'],
+    async resolveImageFn(repository, reference, options) {
+      calls.push({ repository, reference, platforms: options.requiredPlatforms });
+      return {
+        image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
+        sourceRevision: REVISION,
+        labels,
+        platforms: options.requiredPlatforms,
+        registryCredentialsRequired: false
+      };
+    },
+    verifyBom() {
+      throw new Error('localhost edge must not request a GitHub Release BOM attestation');
+    },
+    verifyImage() {
+      throw new Error('localhost edge must not claim GitHub provenance');
+    },
+    verifySbom() {
+      throw new Error('localhost edge must not claim a GitHub SPDX attestation');
+    }
+  });
+
+  assert.equal(resolved.trust, LOCAL_EDGE_TRUST);
+  assert.equal(resolved.releaseBom, undefined);
+  assert.equal(resolved.sourceRevision, REVISION);
+  assert.deepEqual(calls[0], {
+    repository: COMPONENTS.console,
+    reference: 'edge',
+    platforms: ['linux/amd64']
+  });
+  assert.equal(calls.length, Object.keys(COMPONENTS).length + 1);
+  assert.equal(calls.slice(1).every(({ reference }) => reference === `local-${REVISION.slice(0, 12)}`), true);
+  assert.equal(calls.every(({ platforms }) => platforms.length === 1 && platforms[0] === 'linux/amd64'), true);
+  assert.doesNotThrow(() => validateLock(resolved));
+});
+
+test('localhost edge fails closed when any image lacks its development trust labels', async () => {
+  const labels = {
+    'io.opensphere.channel': 'edge',
+    'io.opensphere.release-tag': '202607241141',
+    'io.opensphere.source-revision': REVISION,
+    'opensphere.io/build-authority': 'localhost',
+    'opensphere.io/release-class': 'pre-ga',
+    'opensphere.io/ga-eligible': 'false'
+  };
+  await assert.rejects(resolveChannel('edge', {
+    requiredPlatforms: ['linux/amd64'],
+    async resolveImageFn(repository, reference) {
+      return {
+        image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
+        sourceRevision: REVISION,
+        labels: repository === COMPONENTS.supabaseAuth
+          ? { ...labels, 'opensphere.io/ga-eligible': 'true' }
+          : labels,
+        registryCredentialsRequired: false
+      };
+    }
+  }), /supabase-auth has invalid opensphere\.io\/ga-eligible label/);
 });
 
 test('release lock rejects missing or additional components', () => {

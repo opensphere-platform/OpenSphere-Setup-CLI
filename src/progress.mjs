@@ -71,6 +71,18 @@ export function reportReleaseProgress(progress, event) {
     case 'bom-complete':
       progress.item('서명', `Release BOM attestation 검증 완료 (${event.channel})`);
       break;
+    case 'local-verification-start':
+      progress.item('개발 신뢰', `localhost edge 라벨·immutable tag 검증 시작 (${imageDigest(event.image)})`);
+      break;
+    case 'local-verification-complete':
+      progress.item('개발 신뢰', `localhost edge 검증 완료 (${event.channel})`);
+      break;
+    case 'local-component-start':
+      progress.item('레지스트리', `${component} local immutable tag·라벨 검사`);
+      break;
+    case 'local-component-complete':
+      progress.item('레지스트리', `${component} local edge 일치 (${imageDigest(event.image)})`);
+      break;
     case 'component-start':
       progress.item('레지스트리', `${component} digest·source revision 검사`);
       break;

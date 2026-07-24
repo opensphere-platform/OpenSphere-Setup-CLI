@@ -83,6 +83,22 @@ export function assertSupportedNodePlatform(node) {
   return platform;
 }
 
+export function nodePlatforms(nodes) {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    throw new Error('Kubernetes cluster has no nodes');
+  }
+  return [...new Set(nodes.map((node) => {
+    const ready = node.status.conditions?.find((condition) => condition.type === 'Ready');
+    if (ready?.status !== 'True') throw new Error(`Kubernetes node is not Ready: ${node.metadata.name}`);
+    return assertSupportedNodePlatform(node);
+  }))].sort();
+}
+
+export function readNodePlatforms() {
+  const nodes = JSON.parse(kubectl(['get', 'nodes', '-o', 'json'], { capture: true })).items;
+  return nodePlatforms(nodes);
+}
+
 export function assertAvailabilityNodeCount(nodes, channel = 'edge') {
   if (!Array.isArray(nodes) || !nodes.length) throw new Error('Kubernetes cluster has no nodes');
   // Edge remains intentionally usable on a developer's one-node cluster.
@@ -103,17 +119,14 @@ export function preflight({ storageClass, channel = 'edge' } = {}) {
   }
   const nodes = JSON.parse(kubectl(['get', 'nodes', '-o', 'json'], { capture: true })).items;
   assertAvailabilityNodeCount(nodes, channel);
-  for (const node of nodes) {
-    const ready = node.status.conditions?.find((condition) => condition.type === 'Ready');
-    if (ready?.status !== 'True') throw new Error(`Kubernetes node is not Ready: ${node.metadata.name}`);
-    assertSupportedNodePlatform(node);
-  }
+  const platforms = nodePlatforms(nodes);
   const admissionResources = ensureAdmissionPolicySupport();
   ensurePermissions();
   return {
     versions,
     serverVersion,
     nodeCount: nodes.length,
+    nodePlatforms: platforms,
     admissionResources,
     storageClass: assertStorageProfile(selectStorageClass(storageClass), channel).name
   };
