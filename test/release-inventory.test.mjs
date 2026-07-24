@@ -8,27 +8,17 @@ test('release inventory decodes manifests without patching live CRDs', () => {
     [{ path: 'release.yaml', yaml: 'multi-document release' }],
     (args, options) => {
       calls.push({ args, options });
-      return JSON.stringify({
-        apiVersion: 'v1',
-        kind: 'List',
-        items: [
-          {
-            apiVersion: 'apps/v1',
-            kind: 'Deployment',
-            metadata: { namespace: 'opensphere-console', name: 'console' }
-          },
-          {
-            apiVersion: 'apiextensions.k8s.io/v1',
-            kind: 'CustomResourceDefinition',
-            metadata: { name: 'uipluginregistrations.plugins.opensphere.io' }
-          }
-        ]
-      });
+      return [
+        'apps/v1\tDeployment\topensphere-console\tconsole',
+        'apiextensions.k8s.io/v1\tCustomResourceDefinition\t\tuipluginregistrations.plugins.opensphere.io',
+        ''
+      ].join('\n');
     }
   );
 
   assert.deepEqual(calls[0].args, [
-    'create', '--dry-run=client', '--validate=false', '-f', '-', '-o', 'json'
+    'create', '--dry-run=client', '--validate=false', '-f', '-',
+    '-o', 'jsonpath={.apiVersion}{"\\t"}{.kind}{"\\t"}{.metadata.namespace}{"\\t"}{.metadata.name}{"\\n"}'
   ]);
   assert.equal(calls[0].options.capture, true);
   assert.equal(calls[0].options.input, 'multi-document release');

@@ -555,20 +555,22 @@ export function releaseResourceInventory(release, kubectlFn = kubectl) {
     // Inventory only needs manifest decoding and client-side defaulting. Using
     // `apply --dry-run=client` unnecessarily calculates a three-way patch
     // against live objects and can fail on an older CRD whose structural
-    // schema differs from the target release before the upgrade starts.
-    const decoded = JSON.parse(kubectlFn([
-      'create', '--dry-run=client', '--validate=false', '-f', '-', '-o', 'json'
-    ], { capture: true, input: manifest.yaml }));
-    const items = decoded.kind === 'List' ? decoded.items ?? [] : [decoded];
-    for (const item of items) {
-      const kind = String(item.kind ?? '');
-      const name = String(item.metadata?.name ?? '');
+    // schema differs from the target release before the upgrade starts. A
+    // JSONPath record format is used because `kubectl create -o json` emits
+    // adjacent JSON objects (not a List) for multi-document YAML.
+    const records = kubectlFn([
+      'create', '--dry-run=client', '--validate=false', '-f', '-',
+      '-o', 'jsonpath={.apiVersion}{"\\t"}{.kind}{"\\t"}{.metadata.namespace}{"\\t"}{.metadata.name}{"\\n"}'
+    ], { capture: true, input: manifest.yaml });
+    for (const record of records.split(/\r?\n/u)) {
+      if (!record) continue;
+      const [apiVersion = '', kind = '', namespace = '', name = ''] = record.split('\t');
       if (!PRUNABLE_MANIFEST_KINDS.has(kind) || !name) continue;
       const resource = {
-        apiVersion: String(item.apiVersion ?? ''),
+        apiVersion,
         kind,
         name,
-        ...(item.metadata?.namespace ? { namespace: String(item.metadata.namespace) } : {})
+        ...(namespace ? { namespace } : {})
       };
       inventory.set(inventoryKey(resource), resource);
     }
