@@ -90,7 +90,7 @@ async function readLock(lockPath) {
 }
 
 function help() {
-  console.log(`OpenSphere Setup CLI 0.5.0-edge.8
+  console.log(`OpenSphere Setup CLI 0.5.0-edge.9
 
 Usage:
   opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
@@ -156,7 +156,7 @@ async function main() {
   }
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
-  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.8');
+  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.9');
 
   printOpenSphereBanner({ command });
 

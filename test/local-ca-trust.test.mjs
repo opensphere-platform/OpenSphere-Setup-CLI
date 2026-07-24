@@ -21,6 +21,10 @@ test('local CA installer validates the exact CA identity and writes only Current
   assert.match(source, /CertificateAuthority/);
   assert.match(source, /StoreName\]::Root/);
   assert.match(source, /StoreLocation\]::CurrentUser/);
+  assert.match(source, /OpenFlags\]::ReadOnly/);
+  assert.match(source, /certutil\.exe/);
+  assert.match(source, /-user -f -addstore Root/);
+  assert.doesNotMatch(source, /OpenFlags\]::ReadWrite|\.Add\(\$certificate\)/);
   assert.doesNotMatch(source, /LocalMachine/);
 });
 

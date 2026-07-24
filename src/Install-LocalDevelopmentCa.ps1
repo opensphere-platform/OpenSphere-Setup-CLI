@@ -24,16 +24,22 @@ try {
     [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser
   )
   try {
-    $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
     $existing = $store.Certificates.Find(
       [System.Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
       $certificate.Thumbprint,
       $false
     )
-    if ($existing.Count -eq 0) { $store.Add($certificate) }
   }
   finally {
     $store.Dispose()
+  }
+  if ($existing.Count -eq 0) {
+    $certutil = Join-Path $env:SystemRoot 'System32\certutil.exe'
+    & $certutil -user -f -addstore Root $resolved | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      throw "certutil failed to add the OpenSphere development CA to CurrentUser Root (exit=$LASTEXITCODE)"
+    }
   }
 }
 finally {
