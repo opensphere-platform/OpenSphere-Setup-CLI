@@ -549,11 +549,15 @@ function inventoryKey(resource) {
   return [resource.apiVersion, resource.kind, resource.namespace ?? '', resource.name].join('|');
 }
 
-function releaseResourceInventory(release) {
+export function releaseResourceInventory(release, kubectlFn = kubectl) {
   const inventory = new Map();
   for (const manifest of release) {
-    const decoded = JSON.parse(kubectl([
-      'apply', '--dry-run=client', '--validate=false', '-f', '-', '-o', 'json'
+    // Inventory only needs manifest decoding and client-side defaulting. Using
+    // `apply --dry-run=client` unnecessarily calculates a three-way patch
+    // against live objects and can fail on an older CRD whose structural
+    // schema differs from the target release before the upgrade starts.
+    const decoded = JSON.parse(kubectlFn([
+      'create', '--dry-run=client', '--validate=false', '-f', '-', '-o', 'json'
     ], { capture: true, input: manifest.yaml }));
     const items = decoded.kind === 'List' ? decoded.items ?? [] : [decoded];
     for (const item of items) {
