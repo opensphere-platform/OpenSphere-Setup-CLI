@@ -9,8 +9,8 @@ import { kubectl, run } from './process.mjs';
 import { preflight } from './preflight.mjs';
 import { fetchWithRetry } from './http.mjs';
 import {
-  assertSignedReleaseBom,
   hostRegistryCredentials,
+  isLocalEdgeLock,
   validateLock,
   verifyReleaseLock
 } from './release.mjs';
@@ -764,6 +764,10 @@ export function readInstallationLock() {
 export async function migrateLegacyInstallationLock() {
   const lock = readStoredInstallationLock();
   if (!lock || lock.releaseBom) return null;
+  if (isLocalEdgeLock(lock)) {
+    validateLock(lock);
+    return null;
+  }
   throw new Error('Legacy Kanidm/PostgreSQL/RustFS installation lock detected; fresh Supabase bootstrap refuses in-place trust migration');
 }
 
@@ -915,13 +919,14 @@ export async function bootstrap(lock, {
   shellTlsSecret,
   recoveryTargetSecret,
   registryCredentials,
+  requiredPlatforms,
   progress
 } = {}) {
-  progress?.step('release lock 구조와 서명된 공급망 재검증');
+  progress?.step('release lock 구조와 채널 공급망 재검증');
   validateLock(lock);
-  assertSignedReleaseBom(lock);
   await verifyReleaseLock(lock, {
     registryCredentials,
+    requiredPlatforms,
     onProgress: (event) => reportReleaseProgress(progress, event)
   });
   promotionBlocked(lock.channel);
@@ -1137,11 +1142,10 @@ export async function bootstrap(lock, {
 export async function upgrade(
   previousLock,
   targetLock,
-  { storageClass, consoleUrl, registryCredentials, runtime = {} } = {}
+  { storageClass, consoleUrl, registryCredentials, requiredPlatforms, runtime = {} } = {}
 ) {
   validateLock(previousLock, { allowLegacyComponentSet: true });
   validateLock(targetLock);
-  assertSignedReleaseBom(targetLock);
   promotionBlocked(targetLock.channel);
   const operations = {
     readInstallationLock,
@@ -1166,9 +1170,10 @@ export async function upgrade(
   await Promise.all([
     operations.verifyReleaseLock(previousLock, {
       registryCredentials,
+      requiredPlatforms,
       allowLegacyComponentSet: true
     }),
-    operations.verifyReleaseLock(targetLock, { registryCredentials })
+    operations.verifyReleaseLock(targetLock, { registryCredentials, requiredPlatforms })
   ]);
   const installed = operations.readInstallationLock();
   if (!installed || installed.releaseDigest !== previousLock.releaseDigest) {

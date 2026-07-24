@@ -232,6 +232,39 @@ test('localhost build trust is accepted only for edge and cannot claim a signed 
   assert.throws(() => validateLock(edge), /cannot claim a signed Release BOM/);
 });
 
+test('localhost edge lock revalidation inspects immutable images without demanding a signed BOM', async () => {
+  const edge = validLock('edge');
+  edge.trust = LOCAL_EDGE_TRUST;
+  edge.releaseDigest = calculateReleaseDigest('edge', edge.components, LOCAL_EDGE_TRUST);
+  const labels = {
+    'io.opensphere.channel': 'edge',
+    'io.opensphere.release-tag': '202607241141',
+    'io.opensphere.source-revision': REVISION,
+    'opensphere.io/build-authority': 'localhost',
+    'opensphere.io/release-class': 'pre-ga',
+    'opensphere.io/ga-eligible': 'false'
+  };
+  const inspected = [];
+  const verified = await verifyReleaseLock(edge, {
+    requiredPlatforms: ['linux/amd64'],
+    async inspectImageFn(repository, image, options) {
+      inspected.push({ repository, image, requiredPlatforms: options.requiredPlatforms });
+      return {
+        image,
+        sourceRevision: REVISION,
+        labels,
+        registryCredentialsRequired: false
+      };
+    },
+    verifyBom() {
+      throw new Error('localhost edge must not require a signed Release BOM');
+    }
+  });
+  assert.equal(inspected.length, Object.keys(COMPONENTS).length);
+  assert.equal(inspected.every(({ requiredPlatforms }) => requiredPlatforms[0] === 'linux/amd64'), true);
+  assert.match(verified.localVerifiedAt, /^\d{4}-\d{2}-\d{2}T/);
+});
+
 test('release lock rejects tag-only references', () => {
   const lock = validLock();
   lock.components.console.image = 'ghcr.io/opensphere-platform/opensphere-console:edge';

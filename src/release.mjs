@@ -356,6 +356,10 @@ function canonicalTrust(candidate) {
   return null;
 }
 
+export function isLocalEdgeLock(lock) {
+  return lock?.channel === 'edge' && canonicalTrust(lock?.trust) === LOCAL_EDGE_TRUST;
+}
+
 function attestationArgs(image, predicateType) {
   return [
     'attestation', 'verify', `oci://${image}`,
@@ -665,7 +669,7 @@ export async function verifyReleaseLock(lock, {
   allowLegacyComponentSet = false
 } = {}) {
   const validated = validateLock(lock, { allowLegacyComponentSet });
-  if (canonicalTrust(validated.trust) === LOCAL_EDGE_TRUST) {
+  if (isLocalEdgeLock(validated)) {
     return verifyLocalEdgeLock(validated, {
       inspectImageFn,
       registryCredentials,

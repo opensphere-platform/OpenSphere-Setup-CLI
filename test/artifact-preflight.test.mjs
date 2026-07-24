@@ -45,6 +45,16 @@ test('bootstrap downloads every release artifact before creating a namespace or 
   assert.ok(artifactPreparation < stateMutation);
 });
 
+test('bootstrap delegates channel-specific trust to release verification instead of forcing a signed BOM', async () => {
+  const source = await readFile(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
+  const bootstrapStart = source.indexOf('export async function bootstrap');
+  const upgradeStart = source.indexOf('export async function upgrade', bootstrapStart);
+  const bootstrapBody = source.slice(bootstrapStart, upgradeStart);
+  assert.match(bootstrapBody, /await verifyReleaseLock\(lock,/);
+  assert.match(bootstrapBody, /requiredPlatforms,/);
+  assert.doesNotMatch(bootstrapBody, /assertSignedReleaseBom/);
+});
+
 test('doctor invokes the same complete artifact preflight before reporting success', async () => {
   const source = await readFile(new URL('../src/cli.mjs', import.meta.url), 'utf8');
   const doctorStart = source.indexOf("if (command === 'doctor')");

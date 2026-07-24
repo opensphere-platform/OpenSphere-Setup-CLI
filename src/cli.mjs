@@ -90,7 +90,7 @@ async function readLock(lockPath) {
 }
 
 function help() {
-  console.log(`OpenSphere Setup CLI 0.5.0-edge.11
+  console.log(`OpenSphere Setup CLI 0.5.0-edge.12
 
 Usage:
   opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
@@ -156,7 +156,7 @@ async function main() {
   }
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
-  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.11');
+  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.12');
 
   printOpenSphereBanner({ command });
 
@@ -337,6 +337,7 @@ async function main() {
       recoveryTargetSecret: hasOption('--recovery-target-secret') ? option('--recovery-target-secret', '') : undefined,
       openOnboarding: !hasOption('--no-open-browser'),
       registryCredentials,
+      requiredPlatforms: targetPlatforms,
       progress,
     });
     progress.step('Console-native os CLI 다운로드·무결성 검증·설치');
@@ -373,7 +374,8 @@ async function main() {
     const result = await upgrade(installed, target, {
       storageClass: option('--storage-class', undefined),
       consoleUrl: suppliedConsoleUrl,
-      registryCredentials
+      registryCredentials,
+      requiredPlatforms: targetPlatforms
     });
     const installedCli = await installConsoleCliFromCluster({
       installDirectory: option('--install-dir', undefined),
