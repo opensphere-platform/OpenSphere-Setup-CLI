@@ -46,6 +46,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const RAW_ROOT = 'https://raw.githubusercontent.com/opensphere-platform/OpenSphere-console';
 const RELEASE_INVENTORY_CONFIGMAP = 'opensphere-release-inventory';
 const LEGACY_RECOVERY_MIGRATION = 'backend/supabase/migrations/0026_schema_migration_ledger.sql';
+const EXTERNAL_CHANNEL_REASON_POLICY_MIGRATION = 'backend/supabase/migrations/0027_external_channel_reason_policy.sql';
+const LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS = new Set([
+  EXTERNAL_CHANNEL_REASON_POLICY_MIGRATION
+]);
 const LEGACY_RECOVERY_MANIFESTS = new Set([
   'backend/recovery/recovery-jobs.yaml',
   'deploy/console-image-admission-policy.yaml'
@@ -400,8 +404,9 @@ function validateAuthEnvironment(value) {
   return selectAuthEnvironment('edge', value);
 }
 
-async function fetchReleaseArtifact(lock, path) {
+async function fetchReleaseArtifact(lock, path, { optional404 = false } = {}) {
   const response = await fetchWithRetry(`${RAW_ROOT}/${lock.sourceRevision}/${path}`);
+  if (optional404 && response.status === 404) return null;
   if (!response.ok) throw new Error(`Release artifact download failed (${path}): HTTP ${response.status}`);
   return response.text();
 }
@@ -470,16 +475,19 @@ async function materializeFoundationInstallers(
   root,
   storageClass,
   consoleUrl,
-  authEnvironment
+  authEnvironment,
+  { optionalArtifacts = new Set() } = {}
 ) {
   const [supabaseManifest, giteaManifest] = await Promise.all([
     fetchManifest(lock, SUPABASE_MANIFEST, storageClass, consoleUrl, authEnvironment),
     fetchManifest(lock, GITEA_MANIFEST, storageClass, consoleUrl, authEnvironment)
   ]);
-  const artifacts = await Promise.all(foundationArtifactPaths(lock).map(async (path) => ({
-    path,
-    contents: await fetchReleaseArtifact(lock, path)
-  })));
+  const artifacts = (await Promise.all(foundationArtifactPaths(lock).map(async (path) => {
+    const contents = await fetchReleaseArtifact(lock, path, {
+      optional404: optionalArtifacts.has(path)
+    });
+    return contents === null ? null : { path, contents };
+  }))).filter(Boolean);
   for (const artifact of artifacts) await writeReleaseArtifact(root, artifact.path, artifact.contents);
   await writeReleaseArtifact(root, SUPABASE_MANIFEST.path, supabaseManifest);
   await writeReleaseArtifact(root, GITEA_MANIFEST.path, giteaManifest);
@@ -864,10 +872,11 @@ async function prepareRelease(
   root,
   storageClass,
   consoleUrl,
-  authEnvironment
+  authEnvironment,
+  options = {}
 ) {
   const [foundation, base] = await Promise.all([
-    materializeFoundationInstallers(lock, root, storageClass, consoleUrl, authEnvironment),
+    materializeFoundationInstallers(lock, root, storageClass, consoleUrl, authEnvironment, options),
     materializeBaseRelease(lock, storageClass, consoleUrl, authEnvironment)
   ]);
   return { foundation, base, all: [...foundation.release, ...base] };
@@ -1212,7 +1221,12 @@ export async function upgrade(
         targetLock, targetWork, config.storageClass, effectiveConsoleUrl, config.authEnvironment
       ),
       operations.prepareRelease(
-        previousLock, rollbackWork, config.storageClass, effectiveConsoleUrl, config.authEnvironment
+        previousLock,
+        rollbackWork,
+        config.storageClass,
+        effectiveConsoleUrl,
+        config.authEnvironment,
+        { optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS }
       )
     ]);
     const previousInventory = operations.readReleaseInventory()

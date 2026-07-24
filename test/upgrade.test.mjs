@@ -87,8 +87,11 @@ function runtime(previous, events, { failTarget = false } = {}) {
       }
     }),
     preflight: () => events.push('preflight'),
-    prepareRelease: async (release) => {
+    prepareRelease: async (release, _root, _storageClass, _consoleUrl, _authEnvironment, options = {}) => {
       events.push(`prepare:${release.sourceRevision}`);
+      if (options.optionalArtifacts?.has('backend/supabase/migrations/0027_external_channel_reason_policy.sql')) {
+        events.push(`prepare-legacy-rollback:${release.sourceRevision}`);
+      }
       return {
         foundation: { root: release.sourceRevision },
         base: [],
@@ -129,6 +132,8 @@ test('upgrade prefetches target and rollback artifacts before target install', a
   const install = events.indexOf(`install:업그레이드:${target.sourceRevision}`);
   assert.ok(targetPrepare >= 0 && rollbackPrepare >= 0 && install >= 0);
   assert.ok(targetPrepare < install && rollbackPrepare < install);
+  assert.ok(events.includes(`prepare-legacy-rollback:${previous.sourceRevision}`));
+  assert.equal(events.includes(`prepare-legacy-rollback:${target.sourceRevision}`), false);
   assert.ok(events.indexOf(`verify:${target.sourceRevision}`) > install);
   assert.ok(events.includes(`prune:release-${previous.sourceRevision}->release-${target.sourceRevision}`));
   assert.ok(events.includes('namespaces'));
