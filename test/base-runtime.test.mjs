@@ -43,10 +43,11 @@ test('fresh bootstrap is Supabase Data & Identity plus separate Gitea change aut
 
 test('all current Supabase migrations, including external backup, AI consumer contracts and provenance ledger, are release material', () => {
   assert.equal(SUPABASE_MIGRATIONS[0], '0001_console_backbone.sql');
-  assert.equal(SUPABASE_MIGRATIONS.at(-1), '0026_schema_migration_ledger.sql');
+  assert.equal(SUPABASE_MIGRATIONS.at(-1), '0027_external_channel_reason_policy.sql');
   assert.equal(SUPABASE_MIGRATIONS.includes('0011_notification_delivery.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0022_oaa_recovery_owner_permissions.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0024_ai_consumer_contract.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0026_schema_migration_ledger.sql'), true);
   assert.equal(new Set(SUPABASE_MIGRATIONS).size, SUPABASE_MIGRATIONS.length);
 });
 

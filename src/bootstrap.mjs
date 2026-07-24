@@ -189,7 +189,8 @@ export const SUPABASE_MIGRATIONS = Object.freeze([
   '0023_ceph_prerequisite_consumer.sql',
   '0024_ai_consumer_contract.sql',
   '0025_external_channels_backup.sql',
-  '0026_schema_migration_ledger.sql'
+  '0026_schema_migration_ledger.sql',
+  '0027_external_channel_reason_policy.sql'
 ]);
 
 export const SUPABASE_MANIFEST = Object.freeze({
