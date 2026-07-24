@@ -42,6 +42,7 @@ $temporary = Join-Path $temporaryBase "opensphere-setup-install-$([Guid]::NewGui
 $download = Join-Path $temporary 'download'
 $expanded = Join-Path $temporary 'expanded'
 $installDirectory = Join-Path ([System.IO.Path]::GetFullPath($InstallRoot)) $version
+$installationStaging = "$installDirectory.installing-$([Guid]::NewGuid().ToString('N'))"
 $BinDirectory = [System.IO.Path]::GetFullPath($BinDirectory)
 
 New-Item -ItemType Directory -Force $download, $expanded | Out-Null
@@ -100,7 +101,16 @@ try {
     }
   } else {
     New-Item -ItemType Directory -Force (Split-Path -Parent $installDirectory) | Out-Null
-    Move-Item -LiteralPath $stagedRoot -Destination $installDirectory
+    # The staged executable was just smoke-tested. Windows security scanners can
+    # briefly retain a handle to it, which makes moving that directory fail even
+    # after the child process exits. Copy into an unexecuted sibling first, then
+    # atomically rename that sibling into the versioned installation directory.
+    Copy-Item -LiteralPath $stagedRoot -Destination $installationStaging -Recurse -Force
+    $copiedSetup = Join-Path $installationStaging 'opensphere-setup.exe'
+    if (-not (Test-Path -LiteralPath $copiedSetup -PathType Leaf)) {
+      throw 'The verified Setup runtime could not be staged for installation.'
+    }
+    Move-Item -LiteralPath $installationStaging -Destination $installDirectory
   }
 
   New-Item -ItemType Directory -Force $binDirectory | Out-Null
@@ -139,6 +149,9 @@ try {
   Write-Host "Command: $shim"
   Write-Host '다음 명령: opensphere-setup doctor --release edge --context docker-desktop --storage-class hostpath'
 } finally {
+  if (Test-Path -LiteralPath $installationStaging) {
+    Remove-Item -LiteralPath $installationStaging -Recurse -Force -ErrorAction SilentlyContinue
+  }
   $resolvedTemporary = [System.IO.Path]::GetFullPath($temporary)
   if ($resolvedTemporary.StartsWith($temporaryBase, [StringComparison]::OrdinalIgnoreCase) -and
       (Split-Path -Leaf $resolvedTemporary).StartsWith('opensphere-setup-install-')) {

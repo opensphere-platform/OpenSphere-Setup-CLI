@@ -22,6 +22,15 @@ test('Windows release installer automates authenticated download and verificatio
   assert.match(installer, /OpenSphere\\bin/);
   assert.match(installer, /SetEnvironmentVariable\('Path'/);
   assert.match(installer, /opensphere-setup\.cmd/);
+  assert.doesNotMatch(installer, /Move-Item -LiteralPath \$stagedRoot/);
+  assert.match(
+    installer,
+    /Copy-Item -LiteralPath \$stagedRoot -Destination \$installationStaging -Recurse -Force/
+  );
+  assert.match(
+    installer,
+    /Move-Item -LiteralPath \$installationStaging -Destination \$installDirectory/
+  );
   assert.doesNotMatch(installer, /Invoke-Expression|\biex\b|curl|Invoke-WebRequest/);
 });
 
