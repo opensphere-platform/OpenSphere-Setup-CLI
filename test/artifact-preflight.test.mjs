@@ -9,7 +9,7 @@ import {
 test('artifact preflight materializes the complete release and always removes its temporary directory', async () => {
   const calls = [];
   const result = await preflightReleaseArtifacts(
-    { sourceRevision: 'a'.repeat(40) },
+    { sourceRevision: 'a'.repeat(40), components: { recovery: {} } },
     {
       storageClass: 'hostpath',
       consoleUrl: 'https://localhost:8090',

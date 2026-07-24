@@ -45,6 +45,11 @@ import { materializeRuntimeAsset } from './runtime-assets.mjs';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RAW_ROOT = 'https://raw.githubusercontent.com/opensphere-platform/OpenSphere-console';
 const RELEASE_INVENTORY_CONFIGMAP = 'opensphere-release-inventory';
+const LEGACY_RECOVERY_MIGRATION = 'backend/supabase/migrations/0026_schema_migration_ledger.sql';
+const LEGACY_RECOVERY_MANIFESTS = new Set([
+  'backend/recovery/recovery-jobs.yaml',
+  'deploy/console-image-admission-policy.yaml'
+]);
 const PRUNABLE_MANIFEST_KINDS = new Set([
   'ClusterRole', 'ClusterRoleBinding', 'ConfigMap', 'CronJob', 'Deployment',
   'NetworkPolicy', 'PodDisruptionBudget', 'Role', 'RoleBinding', 'Service',
@@ -219,6 +224,26 @@ export const INSTALL_ARTIFACT_PATHS = Object.freeze([
   GITEA_MANIFEST.path,
   ...BASE_MANIFESTS.map(({ path }) => path)
 ]);
+
+function isPreRecoveryRelease(lock) {
+  return !lock?.components?.recovery;
+}
+
+function foundationArtifactPaths(lock) {
+  return isPreRecoveryRelease(lock)
+    ? FOUNDATION_ARTIFACT_PATHS.filter((path) => path !== LEGACY_RECOVERY_MIGRATION)
+    : FOUNDATION_ARTIFACT_PATHS;
+}
+
+function baseManifestSpecs(lock) {
+  return isPreRecoveryRelease(lock)
+    ? BASE_MANIFESTS.filter(({ path }) => !LEGACY_RECOVERY_MANIFESTS.has(path))
+    : BASE_MANIFESTS;
+}
+
+function installArtifactCount(lock) {
+  return foundationArtifactPaths(lock).length + 2 + baseManifestSpecs(lock).length;
+}
 
 export const CORE_ROLLOUTS = Object.freeze([
   ['opensphere-console-data', 'statefulset/opensphere-supabase-postgres', '600s'],
@@ -450,7 +475,7 @@ async function materializeFoundationInstallers(
     fetchManifest(lock, SUPABASE_MANIFEST, storageClass, consoleUrl, authEnvironment),
     fetchManifest(lock, GITEA_MANIFEST, storageClass, consoleUrl, authEnvironment)
   ]);
-  const artifacts = await Promise.all(FOUNDATION_ARTIFACT_PATHS.map(async (path) => ({
+  const artifacts = await Promise.all(foundationArtifactPaths(lock).map(async (path) => ({
     path,
     contents: await fetchReleaseArtifact(lock, path)
   })));
@@ -497,7 +522,7 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
 }
 
 async function materializeBaseRelease(lock, storageClass, consoleUrl, authEnvironment) {
-  return Promise.all(BASE_MANIFESTS.map(async (spec) => ({
+  return Promise.all(baseManifestSpecs(lock).map(async (spec) => ({
     path: spec.path,
     yaml: await fetchManifest(lock, spec, storageClass, consoleUrl, authEnvironment)
   })));
@@ -730,7 +755,7 @@ function readStoredInstallationLock() {
 
 export function readInstallationLock() {
   const lock = readStoredInstallationLock();
-  return lock ? validateLock(lock) : null;
+  return lock ? validateLock(lock, { allowLegacyComponentSet: true }) : null;
 }
 
 // The retired Kanidm/PostgreSQL/RustFS release shape is not migratable by a
@@ -862,7 +887,7 @@ export async function preflightReleaseArtifacts(lock, {
       authEnvironment
     );
     return {
-      artifactCount: INSTALL_ARTIFACT_PATHS.length,
+      artifactCount: installArtifactCount(lock),
       manifestGroupCount: prepared.all.length
     };
   } finally {
@@ -972,7 +997,7 @@ export async function bootstrap(lock, {
       effectiveConsoleUrl,
       effectiveAuthEnvironment
     );
-    progress?.done(`${INSTALL_ARTIFACT_PATHS.length} artifacts, ${prepared.all.length} manifest groups`);
+    progress?.done(`${installArtifactCount(lock)} artifacts, ${prepared.all.length} manifest groups`);
 
     const externalShellTls = effectiveShellTls
       ? readSecret(effectiveShellTls.namespace, effectiveShellTls.name)
@@ -1114,7 +1139,7 @@ export async function upgrade(
   targetLock,
   { storageClass, consoleUrl, registryCredentials, runtime = {} } = {}
 ) {
-  validateLock(previousLock);
+  validateLock(previousLock, { allowLegacyComponentSet: true });
   validateLock(targetLock);
   assertSignedReleaseBom(targetLock);
   promotionBlocked(targetLock.channel);
@@ -1133,10 +1158,16 @@ export async function upgrade(
     releaseResourceInventory,
     pruneReleaseResources,
     recordReleaseInventory,
+    ensureManagedNamespaces: () => {
+      for (const namespace of MANAGED_NAMESPACES) ensureNamespace(namespace);
+    },
     ...runtime
   };
   await Promise.all([
-    operations.verifyReleaseLock(previousLock, { registryCredentials }),
+    operations.verifyReleaseLock(previousLock, {
+      registryCredentials,
+      allowLegacyComponentSet: true
+    }),
     operations.verifyReleaseLock(targetLock, { registryCredentials })
   ]);
   const installed = operations.readInstallationLock();
@@ -1163,6 +1194,7 @@ export async function upgrade(
     };
   }
   operations.preflight({ storageClass: config.storageClass, channel: targetLock.channel });
+  operations.ensureManagedNamespaces();
   operations.ensureRegistryPullSecrets(targetLock, registryCredentials);
   const initialAdmin = config.initialAdmin;
   const targetWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-target-'));

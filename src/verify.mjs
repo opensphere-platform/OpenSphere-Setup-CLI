@@ -105,9 +105,12 @@ async function eventually(operation, timeoutMs = 120_000, intervalMs = 2_000) {
   throw lastError;
 }
 
-function verifyInstallationLock(lock) {
+function verifyInstallationLock(lock, { allowLegacyComponentSet = false } = {}) {
   const configMap = getJson(['-n', 'opensphere-console', 'get', 'configmap', 'opensphere-installation-lock']);
-  const stored = validateLock(JSON.parse(configMap.data?.['release.json'] ?? '{}'));
+  const stored = validateLock(
+    JSON.parse(configMap.data?.['release.json'] ?? '{}'),
+    { allowLegacyComponentSet }
+  );
   if (stored.releaseDigest !== lock.releaseDigest) {
     throw new Error(`Cluster release lock differs from requested lock (${stored.releaseDigest} != ${lock.releaseDigest})`);
   }
@@ -468,12 +471,13 @@ export async function verifyInstallation(lock, {
   requireRecoveryDrill = false,
   mode = 'strict'
 } = {}) {
-  validateLock(lock);
   if (!['strict', 'rollback'].includes(mode)) throw new Error(`Unsupported installation verification mode: ${mode}`);
+  const allowLegacyComponentSet = mode === 'rollback';
+  validateLock(lock, { allowLegacyComponentSet });
   if (requireRecoveryDrill) {
     throw new Error('Supabase/Gitea off-backbone integrated recovery drill is not implemented; promotion verification fails closed');
   }
-  const config = verifyInstallationLock(lock);
+  const config = verifyInstallationLock(lock, { allowLegacyComponentSet });
   const secretCount = verifySecrets();
   const registryPull = verifyRegistryPullPath(lock);
   const pvcCount = verifyPersistentStorage(config.storageClass);

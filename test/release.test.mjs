@@ -6,6 +6,7 @@ import {
   calculateLegacyReleaseDigest,
   BASE_RUNTIME_COMPONENTS,
   COMPONENTS,
+  LEGACY_BASE_RUNTIME_COMPONENTS,
   LEGACY_RELEASE_TRUST,
   migrateLegacyReleaseLock,
   RELEASE_API_VERSION,
@@ -100,6 +101,7 @@ test('base runtime requires OAA Core as native Main Shell runtime', () => {
     'supabaseRest', 'supabaseStorage', 'giteaPostgres', 'recovery'
   ]);
   assert.equal(BASE_RUNTIME_COMPONENTS.includes('oaaGateway'), true);
+  assert.deepEqual(LEGACY_BASE_RUNTIME_COMPONENTS, BASE_RUNTIME_COMPONENTS.slice(0, -1));
 });
 
 test('release baseline requires native manifests for every supported Linux platform', () => {
@@ -442,6 +444,36 @@ test('release lock rejects missing or additional components', () => {
   const extra = validLock();
   extra.components.unknown = extra.components.console;
   assert.throws(() => validateLock(extra), /component set is not canonical/);
+});
+
+test('pre-recovery component locks are accepted only as explicit installed rollback baselines', async () => {
+  const bom = validBom();
+  delete bom.components.recovery;
+  const releaseBom = {
+    predicateType: RELEASE_BOM_PREDICATE,
+    subject: bom.components.console.image,
+    digest: calculateReleaseBomDigest(bom)
+  };
+  const lock = {
+    apiVersion: RELEASE_API_VERSION,
+    kind: 'OpenSphereReleaseLock',
+    channel: 'edge',
+    releaseDigest: calculateReleaseDigest('edge', bom.components, RELEASE_TRUST, releaseBom),
+    source: SOURCE,
+    sourceRevision: REVISION,
+    trust: RELEASE_TRUST,
+    releaseBom,
+    components: bom.components
+  };
+
+  assert.throws(() => validateLock(lock), /component set is not canonical/);
+  assert.doesNotThrow(() => validateLock(lock, { allowLegacyComponentSet: true }));
+  await assert.doesNotReject(verifyReleaseLock(lock, {
+    verifyBom: bomVerifier(bom),
+    verifyImage: async () => {},
+    verifySbom: async () => {},
+    allowLegacyComponentSet: true
+  }));
 });
 
 test('channel resolution samples one mutable anchor and reads every other component by signed immutable digest', async () => {

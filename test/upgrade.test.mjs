@@ -2,11 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { terminalPodError, upgrade } from '../src/bootstrap.mjs';
 import {
+  calculateReleaseBomDigest,
   calculateReleaseDigest,
   COMPONENTS,
-  releaseBomPointer,
   RELEASE_API_VERSION,
+  RELEASE_BOM_PREDICATE,
   RELEASE_TRUST,
+  releaseBomPointer,
   SOURCE
 } from '../src/release.mjs';
 
@@ -44,9 +46,33 @@ function lock(revision, digestCharacter) {
   };
 }
 
+function preRecoveryLock(revision, digestCharacter) {
+  const previous = lock(revision, digestCharacter);
+  delete previous.components.recovery;
+  const bom = {
+    apiVersion: RELEASE_API_VERSION,
+    kind: 'OpenSphereReleaseBOM',
+    channel: 'edge',
+    status: 'Active',
+    source: SOURCE,
+    sourceRevision: revision,
+    supportedPlatforms: ['linux/amd64', 'linux/arm64'],
+    components: previous.components
+  };
+  previous.releaseBom = {
+    predicateType: RELEASE_BOM_PREDICATE,
+    subject: previous.components.console.image,
+    digest: calculateReleaseBomDigest(bom)
+  };
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, RELEASE_TRUST, previous.releaseBom);
+  return previous;
+}
+
 function runtime(previous, events, { failTarget = false } = {}) {
   return {
-    verifyReleaseLock: async () => {},
+    verifyReleaseLock: async (release, options) =>
+      events.push(`supply:${release.sourceRevision}:${options?.allowLegacyComponentSet === true}`),
+    ensureManagedNamespaces: () => events.push('namespaces'),
     ensureRegistryPullSecrets: () => events.push('registry'),
     readInstallationLock: () => previous,
     readInstallationConfig: () => ({
@@ -105,6 +131,16 @@ test('upgrade prefetches target and rollback artifacts before target install', a
   assert.ok(targetPrepare < install && rollbackPrepare < install);
   assert.ok(events.indexOf(`verify:${target.sourceRevision}`) > install);
   assert.ok(events.includes(`prune:release-${previous.sourceRevision}->release-${target.sourceRevision}`));
+  assert.ok(events.includes('namespaces'));
+});
+
+test('upgrade accepts an exact pre-recovery installed lock only for the verified rollback side', async () => {
+  const previous = preRecoveryLock('1'.repeat(40), 'a');
+  const target = lock('2'.repeat(40), 'b');
+  const events = [];
+  await upgrade(previous, target, { runtime: runtime(previous, events) });
+  assert.ok(events.includes(`supply:${previous.sourceRevision}:true`));
+  assert.ok(events.includes(`supply:${target.sourceRevision}:false`));
 });
 
 test('failed target verification restores and verifies the previous Supabase/Gitea release', async () => {

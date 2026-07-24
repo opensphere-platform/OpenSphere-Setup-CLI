@@ -70,6 +70,13 @@ export const BASE_RUNTIME_COMPONENTS = Object.freeze([
   'recovery'
 ]);
 
+// Releases published before the governed recovery executor was introduced
+// contain this exact component set. They may be used only as an already
+// installed edge rollback baseline; newly resolved releases remain strict.
+export const LEGACY_BASE_RUNTIME_COMPONENTS = Object.freeze(
+  BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'recovery')
+);
+
 // A resolved image is a multi-platform index.  Do not let a channel appear
 // installable on arm64 merely because its amd64 variant has the right label.
 export const RELEASE_PLATFORMS = Object.freeze(['linux/amd64', 'linux/arm64']);
@@ -344,7 +351,22 @@ function verifyImageAttestation(image, predicateType, subjectError, failureLabel
   throw lastError;
 }
 
-export function validateReleaseBom(bom, { channel, subject } = {}) {
+function canonicalComponentNames(components, { allowLegacyComponentSet = false } = {}) {
+  const names = Object.keys(components ?? {});
+  const candidates = [
+    Object.keys(COMPONENTS),
+    ...(allowLegacyComponentSet ? [LEGACY_BASE_RUNTIME_COMPONENTS] : [])
+  ];
+  return candidates.find((expected) =>
+    names.length === expected.length && expected.every((name) => names.includes(name))
+  ) ?? null;
+}
+
+export function validateReleaseBom(bom, {
+  channel,
+  subject,
+  allowLegacyComponentSet = false
+} = {}) {
   if (bom?.apiVersion !== RELEASE_API_VERSION || bom?.kind !== 'OpenSphereReleaseBOM') {
     throw new Error('Invalid signed OpenSphere release BOM');
   }
@@ -359,12 +381,12 @@ export function validateReleaseBom(bom, { channel, subject } = {}) {
       || RELEASE_PLATFORMS.some((platform) => !bom.supportedPlatforms.includes(platform))) {
     throw new Error('Signed release BOM platform set is not canonical');
   }
-  const names = Object.keys(bom.components ?? {});
-  const expectedNames = Object.keys(COMPONENTS);
-  if (names.length !== expectedNames.length || expectedNames.some((name) => !names.includes(name))) {
+  const expectedNames = canonicalComponentNames(bom.components, { allowLegacyComponentSet });
+  if (!expectedNames) {
     throw new Error('Signed release BOM component set is not canonical');
   }
-  for (const [name, repository] of Object.entries(COMPONENTS)) {
+  for (const name of expectedNames) {
+    const repository = COMPONENTS[name];
     const component = bom.components[name];
     if (component?.repository !== repository) {
       throw new Error(`Signed release BOM component ${name} repository is not canonical`);
@@ -408,7 +430,8 @@ export function verifyReleaseBomAttestation(subject, {
   baseDelayMs = 500,
   sleep = delaySync,
   authToken,
-  channel
+  channel,
+  allowLegacyComponentSet = false
 } = {}) {
   if (!canonicalImage(subject)) throw new Error('Release BOM subject is not a governed digest-pinned image');
   let lastError;
@@ -422,7 +445,10 @@ export function verifyReleaseBomAttestation(subject, {
       const entries = JSON.parse(output);
       if (!Array.isArray(entries) || entries.length === 0) throw new Error('verified attestation output is empty');
       const boms = entries
-        .map((entry) => validateReleaseBom(entry?.verificationResult?.statement?.predicate, { subject }))
+        .map((entry) => validateReleaseBom(entry?.verificationResult?.statement?.predicate, {
+          subject,
+          allowLegacyComponentSet
+        }))
         .filter((bom) => !channel || bom.channel === channel);
       if (boms.length === 0) throw new Error(`no signed Release BOM exists for channel ${channel ?? 'any'}`);
       const digests = new Set(boms.map(calculateReleaseBomDigest));
@@ -469,9 +495,10 @@ export async function verifyReleaseProvenance(lock, {
   verifyImage = verifyImageProvenance,
   verifySbom = verifyImageSbom,
   registryCredentials,
-  onProgress
+  onProgress,
+  allowLegacyComponentSet = false
 } = {}) {
-  const validated = validateLock(lock);
+  const validated = validateLock(lock, { allowLegacyComponentSet });
   if (canonicalTrust(validated.trust) !== RELEASE_TRUST) {
     throw new Error('Legacy attestation trust cannot satisfy the signed SBOM release gate');
   }
@@ -493,24 +520,30 @@ export async function verifyReleaseLock(lock, {
   verifyImage = verifyImageProvenance,
   verifySbom = verifyImageSbom,
   registryCredentials,
-  onProgress
+  onProgress,
+  allowLegacyComponentSet = false
 } = {}) {
-  const validated = validateLock(lock);
+  const validated = validateLock(lock, { allowLegacyComponentSet });
   const pointer = assertSignedReleaseBom(validated);
   report(onProgress, { type: 'bom-start', image: pointer.subject, channel: validated.channel });
   const verifiedBom = await verifyBom(pointer.subject, {
     channel: validated.channel,
-    ...(registryCredentials?.token ? { authToken: registryCredentials.token } : {})
+    ...(registryCredentials?.token ? { authToken: registryCredentials.token } : {}),
+    allowLegacyComponentSet
   });
   report(onProgress, { type: 'bom-complete', image: pointer.subject, channel: validated.channel });
   if (verifiedBom.digest !== pointer.digest) {
     throw new Error('Release lock BOM digest differs from the signed Release BOM');
   }
-  const bom = validateReleaseBom(verifiedBom.bom, { channel: validated.channel, subject: pointer.subject });
+  const bom = validateReleaseBom(verifiedBom.bom, {
+    channel: validated.channel,
+    subject: pointer.subject,
+    allowLegacyComponentSet
+  });
   if (bom.sourceRevision !== validated.sourceRevision) {
     throw new Error('Release lock source revision differs from the signed Release BOM');
   }
-  for (const name of Object.keys(COMPONENTS)) {
+  for (const name of Object.keys(validated.components)) {
     const expected = bom.components[name];
     const actual = validated.components[name];
     if (actual.repository !== expected.repository || actual.image !== expected.image || actual.sourceRevision !== expected.sourceRevision) {
@@ -521,7 +554,8 @@ export async function verifyReleaseLock(lock, {
     verifyImage,
     verifySbom,
     registryCredentials,
-    onProgress
+    onProgress,
+    allowLegacyComponentSet
   });
 }
 
@@ -544,7 +578,7 @@ export function migrateLegacyReleaseLock(lock) {
   return validateLock(migrated);
 }
 
-export function validateLock(lock) {
+export function validateLock(lock, { allowLegacyComponentSet = false } = {}) {
   if (lock?.apiVersion !== RELEASE_API_VERSION || lock?.kind !== 'OpenSphereReleaseLock') {
     throw new Error('Invalid OpenSphere release lock');
   }
@@ -560,12 +594,12 @@ export function validateLock(lock) {
   if (lock.channel !== 'edge' && trust !== RELEASE_TRUST) {
     throw new Error('candidate and stable release locks require signed SBOM trust v2');
   }
-  const names = Object.keys(lock.components ?? {});
-  const expectedNames = Object.keys(COMPONENTS);
-  if (names.length !== expectedNames.length || expectedNames.some((name) => !names.includes(name))) {
+  const expectedNames = canonicalComponentNames(lock.components, { allowLegacyComponentSet });
+  if (!expectedNames) {
     throw new Error('Release lock component set is not canonical');
   }
-  for (const [name, repository] of Object.entries(COMPONENTS)) {
+  for (const name of expectedNames) {
+    const repository = COMPONENTS[name];
     const component = lock.components[name];
     const image = component?.image;
     if (component?.repository !== repository) {
