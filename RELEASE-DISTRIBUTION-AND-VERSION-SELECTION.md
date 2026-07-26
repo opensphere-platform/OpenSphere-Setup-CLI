@@ -23,6 +23,7 @@ supabaseAuth
 supabaseRest
 supabaseStorage
 giteaPostgres
+recovery
 ```
 
 Kanidm, 구형 Auth BFF, 별도 Console PostgreSQL, RustFS와 CBS image set은 release 구성요소가
@@ -30,19 +31,19 @@ Kanidm, 구형 Auth BFF, 별도 Console PostgreSQL, RustFS와 CBS image set은 r
 
 ## 발행
 
-`OpenSphere-console/.github/workflows/publish-edge-images.yml`이 다음 순서로 발행한다.
+`edge`와 GA의 빌드 권위는 다르며 하나의 Workflow로 섞지 않는다.
 
-1. Console 전체 계약 테스트와 production build
-2. 13개 이미지를 `linux/amd64`, `linux/arm64`로 build/push
-3. 각 digest에 GitHub Actions provenance와 SPDX SBOM attestation
-4. 모든 digest와 `io.opensphere.source-revision` 재검증
-5. 13개 컴포넌트 BOM 생성
-6. Console anchor digest에 BOM attestation
-7. non-anchor `edge` tag 이동
-8. Console anchor `edge` tag를 마지막에 이동
-9. 모든 mutable/immutable tag가 BOM digest와 일치하는지 재검증
+- `edge`: Windows Docker Desktop의 `OpenSphere-console/scripts/Publish-LocalEdge.ps1`만
+  `linux/amd64`로 build/push한다. KST `yyyyMMddHHmm` immutable tag를 검증한 뒤
+  non-anchor와 Console anchor 순서로 `edge`를 이동한다. lock에는
+  `localhost-edge/v1` trust와 `build-authority=localhost`만 기록한다.
+- `candidate`, `stable`, `ga`: GitHub Actions의
+  `OpenSphere-console/.github/workflows/publish-ga-images.yml`만 clean multi-architecture
+  rebuild, provenance, SPDX SBOM, signed Release BOM을 수행한다. v2 attestation trust는
+  이 GA Workflow만 신뢰한다.
 
-Console anchor가 마지막에 이동하므로 Setup은 부분 발행 중 혼합 revision을 승인하지 않는다.
+Console anchor는 어떤 채널에서도 마지막에 이동한다. Setup은 부분 발행 중의 혼합 revision,
+edge-local 결과의 승격, 또는 retired edge Workflow의 attestation을 승인하지 않는다.
 
 Setup CLI 자체는 OpenSphere OS image release와 별도로 비공개 GitHub Release에서 발행한다.
 `OpenSphere-Setup-CLI/.github/workflows/publish-private-platforms.yml`은 저장소 visibility가
@@ -55,15 +56,15 @@ Setup CLI 자체는 OpenSphere OS image release와 별도로 비공개 GitHub Re
 
 Setup은 다음을 모두 만족해야 release lock을 반환한다.
 
-- channel: `edge`, `candidate`, `stable` 중 하나
+- channel: `edge`, `candidate`, `stable`, `ga` 중 하나
 - Console anchor가 공식 GHCR repository
 - Release BOM predicate:
   `https://opensphere.io/attestations/release-bom/v1`
-- signer workflow와 OIDC issuer가 embedded trust root와 일치
+- promotion/GA는 signer workflow와 OIDC issuer가 GA trust root와 일치
 - source repository와 40자리 source revision 일치
 - 정확히 13개 component, 추가/누락 없음
 - component image가 공식 repository의 `@sha256:<64 hex>`
-- 모든 component에 provenance와 SPDX SBOM attestation
+- promotion/GA의 모든 component에 provenance와 SPDX SBOM attestation
 - 지원 platform이 `linux/amd64`, `linux/arm64`
 - 계산한 canonical release digest가 BOM/lock과 일치
 
@@ -83,7 +84,7 @@ opensphere-setup bootstrap --release edge --lock .\edge-lock.json
 - explicit lock: 설치 입력 자체이며 cache hint가 아님
 - upgrade: target과 현재 rollback artifact를 모두 사전 검증한 뒤 적용
 
-현재 `edge`만 개발 설치 경로다. `candidate`와 `stable`은 Supabase PostgreSQL/Storage 및
+현재 `edge`만 개발 설치 경로다. `candidate`, `stable`, `ga`는 Supabase PostgreSQL/Storage 및
 Gitea/PostgreSQL의 격리 복구 drill·증거 승격 계약이 구현되기 전까지 HOLD다.
 
 ## GHCR 접근

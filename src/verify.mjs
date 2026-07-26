@@ -90,13 +90,25 @@ function decodeSecret(secret, key) {
   return Buffer.from(encoded, 'base64').toString('utf8');
 }
 
-async function eventually(operation, timeoutMs = 120_000, intervalMs = 2_000) {
+export function isRetryableInstallationReadinessError(error) {
+  const message = String(error?.message ?? error);
+  return message.startsWith('Required Service has no ready EndpointSlice endpoint:')
+    || message.startsWith('OpenSphere Pods are not Running:')
+    || message.startsWith('OpenSphere Pods are not Ready:');
+}
+
+async function eventuallyReady(operation, timeoutMs = 120_000, intervalMs = 2_000) {
   const deadline = Date.now() + timeoutMs;
   let lastError;
   do {
     try {
       return await operation();
     } catch (error) {
+      // A release-lock/image mismatch, missing workload or malformed pull
+      // configuration is deterministic. Retrying it obscures the governing
+      // evidence for two minutes and delays rollback. Only rollout-readiness
+      // signals are allowed to settle asynchronously.
+      if (!isRetryableInstallationReadinessError(error)) throw error;
       lastError = error;
       if (Date.now() >= deadline) break;
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
@@ -481,8 +493,8 @@ export async function verifyInstallation(lock, {
   const secretCount = verifySecrets();
   const registryPull = verifyRegistryPullPath(lock);
   const pvcCount = verifyPersistentStorage(config.storageClass);
-  const serviceEndpoints = await eventually(async () => verifyServiceEndpoints());
-  const runtime = await eventually(async () => verifyWorkloads(lock, { requireZeroRestarts }));
+  const serviceEndpoints = await eventuallyReady(async () => verifyServiceEndpoints());
+  const runtime = await eventuallyReady(async () => verifyWorkloads(lock, { requireZeroRestarts }));
   const postgresql = verifySupabaseDatabase();
   const supabase = await verifySupabaseServices();
   const gitea = await verifyGitea();

@@ -350,7 +350,7 @@ test('image provenance verification binds GH attestation to the release workflow
       'attestation', 'verify', `oci://${image}`,
       '--bundle-from-oci',
       '--repo', 'opensphere-platform/OpenSphere-console',
-      '--signer-workflow', 'opensphere-platform/OpenSphere-console/.github/workflows/publish-edge-images.yml',
+      '--signer-workflow', 'opensphere-platform/OpenSphere-console/.github/workflows/publish-ga-images.yml',
       '--cert-oidc-issuer', 'https://token.actions.githubusercontent.com',
       '--source-ref', 'refs/heads/main',
       '--deny-self-hosted-runners',

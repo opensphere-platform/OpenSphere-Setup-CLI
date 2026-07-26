@@ -23,7 +23,11 @@ export const LEGACY_RELEASE_TRUST = Object.freeze({
 export const RELEASE_TRUST = Object.freeze({
   type: 'github-actions-attestation/v2',
   repository: LEGACY_RELEASE_TRUST.repository,
-  signerWorkflow: LEGACY_RELEASE_TRUST.signerWorkflow,
+  // Promotion and GA images are rebuilt only by the dedicated GA workflow.
+  // The retired edge workflow remains recorded solely in LEGACY_RELEASE_TRUST
+  // so an already-installed pre-policy lock can be identified and rejected
+  // from every new promotion path.
+  signerWorkflow: 'opensphere-platform/OpenSphere-console/.github/workflows/publish-ga-images.yml',
   oidcIssuer: LEGACY_RELEASE_TRUST.oidcIssuer,
   sourceRef: LEGACY_RELEASE_TRUST.sourceRef,
   provenancePredicate: 'https://slsa.dev/provenance/v1',
