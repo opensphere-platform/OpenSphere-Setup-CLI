@@ -9,6 +9,7 @@ import {
   LEGACY_BASE_RUNTIME_COMPONENTS,
   LEGACY_RELEASE_TRUST,
   LOCAL_EDGE_TRUST,
+  RETIRED_EDGE_ATTESTATION_TRUST,
   migrateLegacyReleaseLock,
   RELEASE_API_VERSION,
   RELEASE_BOM_PREDICATE,
@@ -315,6 +316,21 @@ test('an installed v1 edge lock remains rollback-compatible but cannot promote',
   legacyTrusted.channel = 'candidate';
   legacyTrusted.releaseDigest = calculateReleaseDigest('candidate', legacyTrusted.components, LEGACY_RELEASE_TRUST);
   assert.throws(() => validateLock(legacyTrusted), /require signed SBOM trust v2/);
+});
+
+test('the retired GitHub Actions edge trust is rollback-only', async () => {
+  const retired = validLock('edge');
+  retired.trust = RETIRED_EDGE_ATTESTATION_TRUST;
+  retired.releaseDigest = calculateReleaseDigest('edge', retired.components, RETIRED_EDGE_ATTESTATION_TRUST);
+  retired.provenanceVerifiedAt = '2026-07-24T00:32:49.216Z';
+  retired.sbomVerifiedAt = '2026-07-24T00:32:49.216Z';
+  assert.doesNotThrow(() => validateLock(retired));
+  await assert.rejects(verifyReleaseLock(retired), /accepted only as an installed rollback baseline/);
+  const verified = await verifyReleaseLock(retired, { allowRetiredEdgeRollback: true });
+  assert.equal(verified.retiredEdgeRollbackBaseline, true);
+  retired.channel = 'candidate';
+  retired.releaseDigest = calculateReleaseDigest('candidate', retired.components, RETIRED_EDGE_ATTESTATION_TRUST);
+  assert.throws(() => validateLock(retired), /Retired GitHub Actions edge trust is accepted only for the edge channel/);
 });
 
 test('a legacy lock receives the trust root only after its original digest is proven', () => {

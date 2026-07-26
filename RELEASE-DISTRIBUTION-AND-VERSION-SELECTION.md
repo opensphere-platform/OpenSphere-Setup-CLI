@@ -44,6 +44,8 @@ Kanidm, 구형 Auth BFF, 별도 Console PostgreSQL, RustFS와 CBS image set은 r
 
 Console anchor는 어떤 채널에서도 마지막에 이동한다. Setup은 부분 발행 중의 혼합 revision,
 edge-local 결과의 승격, 또는 retired edge Workflow의 attestation을 승인하지 않는다.
+이미 설치된 retired GitHub Actions edge Lock은 provenance/SBOM 기록이 보존된 정확한 rollback
+baseline으로만 읽을 수 있으며, 새 target release·재발행·승격에는 사용할 수 없다.
 
 Setup CLI 자체는 OpenSphere OS image release와 별도로 비공개 GitHub Release에서 발행한다.
 `OpenSphere-Setup-CLI/.github/workflows/publish-private-platforms.yml`은 저장소 visibility가

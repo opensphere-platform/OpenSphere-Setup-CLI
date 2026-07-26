@@ -34,6 +34,20 @@ export const RELEASE_TRUST = Object.freeze({
   sbomPredicate: 'https://spdx.dev/Document/v2.3'
 });
 
+// This exact trust root was used by the retired GitHub Actions edge publisher.
+// It is retained only to read an already-installed edge lock as an explicit
+// rollback baseline during the one-way transition to localhost edge releases.
+// It can never resolve, verify, or install a new release target.
+export const RETIRED_EDGE_ATTESTATION_TRUST = Object.freeze({
+  type: 'github-actions-attestation/v2',
+  repository: LEGACY_RELEASE_TRUST.repository,
+  signerWorkflow: LEGACY_RELEASE_TRUST.signerWorkflow,
+  oidcIssuer: LEGACY_RELEASE_TRUST.oidcIssuer,
+  sourceRef: LEGACY_RELEASE_TRUST.sourceRef,
+  provenancePredicate: 'https://slsa.dev/provenance/v1',
+  sbomPredicate: 'https://spdx.dev/Document/v2.3'
+});
+
 // Edge is the development channel. A developer with GHCR write permission may
 // publish one host-native platform from the governed local publisher. This
 // trust class is deliberately ineligible for candidate/stable promotion and
@@ -351,7 +365,7 @@ function canonicalImage(image) {
 }
 
 function canonicalTrust(candidate) {
-  for (const trust of [RELEASE_TRUST, LEGACY_RELEASE_TRUST, LOCAL_EDGE_TRUST]) {
+  for (const trust of [RELEASE_TRUST, RETIRED_EDGE_ATTESTATION_TRUST, LEGACY_RELEASE_TRUST, LOCAL_EDGE_TRUST]) {
     const keys = Object.keys(trust);
     if (candidate && Object.keys(candidate).length === keys.length && keys.every((key) => candidate[key] === trust[key])) {
       return trust;
@@ -362,6 +376,10 @@ function canonicalTrust(candidate) {
 
 export function isLocalEdgeLock(lock) {
   return lock?.channel === 'edge' && canonicalTrust(lock?.trust) === LOCAL_EDGE_TRUST;
+}
+
+export function isRetiredEdgeAttestationLock(lock) {
+  return lock?.channel === 'edge' && canonicalTrust(lock?.trust) === RETIRED_EDGE_ATTESTATION_TRUST;
 }
 
 function attestationArgs(image, predicateType) {
@@ -670,9 +688,19 @@ export async function verifyReleaseLock(lock, {
   registryCredentials,
   requiredPlatforms,
   onProgress,
-  allowLegacyComponentSet = false
+  allowLegacyComponentSet = false,
+  allowRetiredEdgeRollback = false
 } = {}) {
   const validated = validateLock(lock, { allowLegacyComponentSet });
+  if (isRetiredEdgeAttestationLock(validated)) {
+    if (!allowRetiredEdgeRollback) {
+      throw new Error('Retired GitHub Actions edge trust is accepted only as an installed rollback baseline');
+    }
+    if (!Number.isFinite(Date.parse(validated.provenanceVerifiedAt ?? '')) || !Number.isFinite(Date.parse(validated.sbomVerifiedAt ?? ''))) {
+      throw new Error('Retired edge rollback baseline lacks recorded provenance/SBOM verification evidence');
+    }
+    return { ...validated, retiredEdgeRollbackBaseline: true };
+  }
   if (isLocalEdgeLock(validated)) {
     return verifyLocalEdgeLock(validated, {
       inspectImageFn,
@@ -752,6 +780,9 @@ export function validateLock(lock, { allowLegacyComponentSet = false } = {}) {
   }
   if (trust === LOCAL_EDGE_TRUST && lock.channel !== 'edge') {
     throw new Error('Localhost build trust is accepted only for the edge channel');
+  }
+  if (trust === RETIRED_EDGE_ATTESTATION_TRUST && lock.channel !== 'edge') {
+    throw new Error('Retired GitHub Actions edge trust is accepted only for the edge channel');
   }
   if (lock.channel !== 'edge' && trust !== RELEASE_TRUST) {
     throw new Error('candidate and stable release locks require signed SBOM trust v2');

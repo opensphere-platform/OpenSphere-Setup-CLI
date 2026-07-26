@@ -1187,7 +1187,8 @@ export async function upgrade(
     operations.verifyReleaseLock(previousLock, {
       registryCredentials,
       requiredPlatforms,
-      allowLegacyComponentSet: true
+      allowLegacyComponentSet: true,
+      allowRetiredEdgeRollback: true
     }),
     operations.verifyReleaseLock(targetLock, { registryCredentials, requiredPlatforms })
   ]);
