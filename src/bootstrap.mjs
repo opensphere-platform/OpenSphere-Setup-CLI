@@ -537,9 +537,54 @@ async function materializeBaseRelease(lock, storageClass, consoleUrl, authEnviro
   })));
 }
 
-function applyRelease(release, label, progress) {
+const TRUST_CONFIGMAP_PATH = 'backend/dupa-control/dupa-trusted-keys.yaml';
+
+export function mergeTrustedKeySets(baseline = {}, existing = {}, { preserveEdgeLocal = false } = {}) {
+  // Release-owned keys are authoritative. Only the constitution-defined,
+  // Docker Desktop-only edge identity may survive an edge upgrade; preserving
+  // arbitrary pre-existing IDs would defeat release key revocation.
+  const hostLocal = preserveEdgeLocal && existing['opensphere-edge-local-v1']
+    ? { 'opensphere-edge-local-v1': existing['opensphere-edge-local-v1'] }
+    : {};
+  return {
+    ...hostLocal,
+    ...baseline,
+  };
+}
+
+function readTrustedKeySet() {
+  try {
+    const configMap = JSON.parse(kubectl([
+      '-n', 'opensphere-console', 'get', 'configmap', 'dupa-trusted-keys', '-o', 'json'
+    ], { capture: true }));
+    return JSON.parse(String(configMap?.data?.['trusted-keys.json'] || '{}')).trustedKeys || {};
+  } catch {
+    return {};
+  }
+}
+
+function preserveHostLocalTrustedKeys(existing) {
+  const baseline = readTrustedKeySet();
+  const merged = mergeTrustedKeySets(baseline, existing, { preserveEdgeLocal: true });
+  if (JSON.stringify(merged) === JSON.stringify(baseline)) return;
+  kubectl([
+    '-n', 'opensphere-console', 'patch', 'configmap', 'dupa-trusted-keys',
+    '--type', 'merge',
+    '-p', JSON.stringify({
+      data: {
+        'trusted-keys.json': `${JSON.stringify({ trustedKeys: merged }, null, 2)}\n`
+      }
+    })
+  ], { capture: true });
+}
+
+function applyRelease(release, label, progress, { preserveHostLocalEdgeTrust = false } = {}) {
   for (const manifest of release) {
+    const hostLocalTrustedKeys = preserveHostLocalEdgeTrust && manifest.path === TRUST_CONFIGMAP_PATH
+      ? readTrustedKeySet()
+      : null;
     applyYaml(manifest.yaml);
+    if (hostLocalTrustedKeys) preserveHostLocalTrustedKeys(hostLocalTrustedKeys);
     if (progress) progress.item(label, manifest.path);
     else console.log(`[${label}] ${manifest.path}`);
   }
@@ -917,7 +962,9 @@ export async function preflightReleaseArtifacts(lock, {
 
 function installPreparedRelease(lock, prepared, storageClass, consoleUrl, label, progress) {
   runFoundationInstallers(lock, prepared.foundation, storageClass, consoleUrl, progress);
-  applyRelease(prepared.base, label, progress);
+  applyRelease(prepared.base, label, progress, {
+    preserveHostLocalEdgeTrust: lock.channel === 'edge'
+  });
 }
 
 export async function bootstrap(lock, {
