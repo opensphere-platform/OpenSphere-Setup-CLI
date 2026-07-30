@@ -4,6 +4,8 @@ import { fetchWithRetry } from './http.mjs';
 
 export const RELEASE_API_VERSION = 'release.opensphere.io/v1alpha1';
 export const RELEASE_BOM_PREDICATE = 'https://opensphere.io/attestations/release-bom/v1';
+export const RELEASE_SCOPE_INTEGRATED = 'integrated';
+export const RELEASE_SCOPE_COMPONENT = 'component';
 export const REGISTRY = 'ghcr.io';
 export const OWNER = 'opensphere-platform';
 export const SOURCE = 'https://github.com/opensphere-platform/OpenSphere-console';
@@ -347,8 +349,22 @@ export function calculateReleaseBomDigest(bom) {
   return `sha256:${createHash('sha256').update(JSON.stringify(stableValue(bom))).digest('hex')}`;
 }
 
-export function calculateReleaseDigest(channel, components, trust = RELEASE_TRUST, releaseBom) {
-  const payload = JSON.stringify({ channel, components, trust, ...(releaseBom ? { releaseBom } : {}) });
+export function calculateReleaseDigest(
+  channel,
+  components,
+  trust = RELEASE_TRUST,
+  releaseBom,
+  contract
+) {
+  const payload = JSON.stringify({
+    channel,
+    components,
+    trust,
+    ...(releaseBom ? { releaseBom } : {}),
+    ...(contract?.releaseScope ? { releaseScope: contract.releaseScope } : {}),
+    ...(contract?.baseReleaseDigest ? { baseReleaseDigest: contract.baseReleaseDigest } : {}),
+    ...(contract?.changedComponents ? { changedComponents: contract.changedComponents } : {})
+  });
   return `sha256:${createHash('sha256').update(payload).digest('hex')}`;
 }
 
@@ -645,13 +661,21 @@ async function verifyLocalEdgeLock(lock, {
     }
     const observed = assertLocalEdgeImage(inspected, {
       repository: component.repository,
-      sourceRevision: validated.sourceRevision
+      sourceRevision: component.sourceRevision
     });
     report(onProgress, { type: 'local-component-complete', component: name, image: component.image });
-    return observed;
+    return { name, ...observed };
   }));
-  if (new Set(metadata.map(({ releaseTag }) => releaseTag)).size !== 1) {
-    throw new Error('Local edge component release tags differ');
+  const releaseScope = validated.releaseScope ?? RELEASE_SCOPE_INTEGRATED;
+  const comparable = releaseScope === RELEASE_SCOPE_COMPONENT
+    ? metadata.filter(({ name }) => validated.changedComponents.includes(name))
+    : metadata;
+  if (new Set(comparable.map(({ releaseTag }) => releaseTag)).size !== 1) {
+    throw new Error(
+      releaseScope === RELEASE_SCOPE_COMPONENT
+        ? 'Changed local edge component release tags differ'
+        : 'Local edge component release tags differ'
+    );
   }
   return { ...validated, localVerifiedAt: new Date().toISOString() };
 }
@@ -787,6 +811,36 @@ export function validateLock(lock, { allowLegacyComponentSet = false } = {}) {
   if (lock.channel !== 'edge' && trust !== RELEASE_TRUST) {
     throw new Error('candidate and stable release locks require signed SBOM trust v2');
   }
+  const releaseScope = lock.releaseScope ?? RELEASE_SCOPE_INTEGRATED;
+  if (![RELEASE_SCOPE_INTEGRATED, RELEASE_SCOPE_COMPONENT].includes(releaseScope)) {
+    throw new Error(`Release lock scope is invalid: ${releaseScope}`);
+  }
+  if (releaseScope === RELEASE_SCOPE_INTEGRATED
+      && (lock.baseReleaseDigest !== undefined || lock.changedComponents !== undefined)) {
+    throw new Error('Integrated release lock cannot declare a component transition');
+  }
+  if (releaseScope === RELEASE_SCOPE_COMPONENT) {
+    if (lock.channel !== 'edge' || trust !== LOCAL_EDGE_TRUST) {
+      throw new Error('Component release locks require localhost edge trust');
+    }
+    if (!/^sha256:[a-f0-9]{64}$/.test(lock.baseReleaseDigest ?? '')) {
+      throw new Error('Component release lock base digest is invalid');
+    }
+    const changed = lock.changedComponents;
+    const canonicalChanged = Array.isArray(changed)
+      ? [...new Set(changed)].sort()
+      : [];
+    if (!Array.isArray(changed)
+        || changed.length === 0
+        || changed.length !== canonicalChanged.length
+        || changed.some((name, index) => name !== canonicalChanged[index])
+        || changed.some((name) => !Object.hasOwn(COMPONENTS, name))) {
+      throw new Error('Component release lock changedComponents must be a non-empty canonical sorted set');
+    }
+    if (lock.releaseBom !== undefined) {
+      throw new Error('Component release locks cannot claim a signed Release BOM');
+    }
+  }
   const expectedNames = canonicalComponentNames(lock.components, { allowLegacyComponentSet });
   if (!expectedNames) {
     throw new Error('Release lock component set is not canonical');
@@ -801,8 +855,16 @@ export function validateLock(lock, { allowLegacyComponentSet = false } = {}) {
     if (!new RegExp(`^${REGISTRY}/${OWNER}/${repository}@sha256:[a-f0-9]{64}$`).test(image ?? '')) {
       throw new Error(`Component ${name} is not digest-pinned`);
     }
-    if (component.sourceRevision !== lock.sourceRevision) {
+    if (!/^[a-f0-9]{40}$/.test(component.sourceRevision ?? '')) {
+      throw new Error(`Component ${name} source revision is invalid`);
+    }
+    if (releaseScope === RELEASE_SCOPE_INTEGRATED && component.sourceRevision !== lock.sourceRevision) {
       throw new Error(`Component ${name} source revision differs from the release`);
+    }
+    if (releaseScope === RELEASE_SCOPE_COMPONENT
+        && lock.changedComponents.includes(name)
+        && component.sourceRevision !== lock.sourceRevision) {
+      throw new Error(`Changed component ${name} source revision differs from the component release`);
     }
     if (component.registryCredentialsRequired !== undefined && typeof component.registryCredentialsRequired !== 'boolean') {
       throw new Error(`Component ${name} registry credential requirement is invalid`);
@@ -812,11 +874,69 @@ export function validateLock(lock, { allowLegacyComponentSet = false } = {}) {
     throw new Error('Local edge release locks cannot claim a signed Release BOM');
   }
   if (lock.releaseBom !== undefined) assertSignedReleaseBom(lock);
-  const expectedDigest = calculateReleaseDigest(lock.channel, lock.components, trust, lock.releaseBom);
+  const digestContract = lock.releaseScope
+    ? {
+        releaseScope,
+        ...(releaseScope === RELEASE_SCOPE_COMPONENT
+          ? {
+              baseReleaseDigest: lock.baseReleaseDigest,
+              changedComponents: lock.changedComponents
+            }
+          : {})
+      }
+    : undefined;
+  const expectedDigest = calculateReleaseDigest(
+    lock.channel,
+    lock.components,
+    trust,
+    lock.releaseBom,
+    digestContract
+  );
   if (lock.releaseDigest !== expectedDigest) {
     throw new Error('Release lock digest does not match its component set');
   }
   return lock;
+}
+
+function sameComponent(left, right) {
+  return JSON.stringify(stableValue(left)) === JSON.stringify(stableValue(right));
+}
+
+// A component release remains a complete installation lock. The transition
+// contract proves that only the explicitly named components changed and that
+// every other digest and provenance field was inherited byte-for-byte from the
+// installed base lock. It is deliberately upgrade-only.
+export function validateReleaseTransition(baseLock, targetLock) {
+  const base = validateLock(baseLock, { allowLegacyComponentSet: true });
+  const target = validateLock(targetLock);
+  if ((target.releaseScope ?? RELEASE_SCOPE_INTEGRATED) !== RELEASE_SCOPE_COMPONENT) {
+    return target;
+  }
+  if (target.baseReleaseDigest !== base.releaseDigest) {
+    throw new Error('Component release lock does not name the installed base release digest');
+  }
+  if (target.channel !== base.channel) {
+    throw new Error('Component release lock channel differs from its base release');
+  }
+  if (canonicalTrust(target.trust) !== canonicalTrust(base.trust)) {
+    throw new Error('Component release lock trust root differs from its base release');
+  }
+  const baseNames = Object.keys(base.components ?? {}).sort();
+  const targetNames = Object.keys(target.components ?? {}).sort();
+  if (JSON.stringify(baseNames) !== JSON.stringify(targetNames)) {
+    throw new Error('Component release lock cannot change the installed component set');
+  }
+  const changed = new Set(target.changedComponents);
+  for (const name of targetNames) {
+    const differs = !sameComponent(base.components[name], target.components[name]);
+    if (changed.has(name) && !differs) {
+      throw new Error(`Changed component ${name} is identical to the base release`);
+    }
+    if (!changed.has(name) && differs) {
+      throw new Error(`Unlisted component ${name} differs from the base release`);
+    }
+  }
+  return target;
 }
 
 function releaseComponent(repository, inspected) {
