@@ -11,7 +11,9 @@ import { fetchWithRetry } from './http.mjs';
 import {
   hostRegistryCredentials,
   isLocalEdgeLock,
+  RELEASE_SCOPE_COMPONENT,
   validateLock,
+  validateReleaseTransition,
   verifyReleaseLock
 } from './release.mjs';
 import { verifyInstallation } from './verify.mjs';
@@ -987,6 +989,9 @@ export async function bootstrap(lock, {
 } = {}) {
   progress?.step('release lock 구조와 채널 공급망 재검증');
   validateLock(lock);
+  if (lock.releaseScope === RELEASE_SCOPE_COMPONENT) {
+    throw new Error('Component release locks are upgrade-only and cannot bootstrap a cluster');
+  }
   await verifyReleaseLock(lock, {
     registryCredentials,
     requiredPlatforms,
@@ -1209,6 +1214,7 @@ export async function upgrade(
 ) {
   validateLock(previousLock, { allowLegacyComponentSet: true });
   validateLock(targetLock);
+  validateReleaseTransition(previousLock, targetLock);
   promotionBlocked(targetLock.channel);
   const operations = {
     readInstallationLock,

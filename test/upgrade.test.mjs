@@ -1,13 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { terminalPodError, upgrade } from '../src/bootstrap.mjs';
+import { bootstrap, terminalPodError, upgrade } from '../src/bootstrap.mjs';
 import {
   calculateReleaseBomDigest,
   calculateReleaseDigest,
   COMPONENTS,
   RELEASE_API_VERSION,
   RELEASE_BOM_PREDICATE,
+  RELEASE_SCOPE_COMPONENT,
   RELEASE_TRUST,
+  LOCAL_EDGE_TRUST,
   releaseBomPointer,
   SOURCE
 } from '../src/release.mjs';
@@ -66,6 +68,32 @@ function preRecoveryLock(revision, digestCharacter) {
   };
   previous.releaseDigest = calculateReleaseDigest('edge', previous.components, RELEASE_TRUST, previous.releaseBom);
   return previous;
+}
+
+function componentTarget(previous, revision, changedComponents = ['backend']) {
+  const target = structuredClone(previous);
+  target.releaseScope = RELEASE_SCOPE_COMPONENT;
+  target.baseReleaseDigest = previous.releaseDigest;
+  target.changedComponents = [...changedComponents].sort();
+  target.sourceRevision = revision;
+  delete target.releaseBom;
+  for (const name of target.changedComponents) {
+    target.components[name].image =
+      `ghcr.io/opensphere-platform/${target.components[name].repository}@sha256:${'c'.repeat(64)}`;
+    target.components[name].sourceRevision = revision;
+  }
+  target.releaseDigest = calculateReleaseDigest(
+    target.channel,
+    target.components,
+    target.trust,
+    undefined,
+    {
+      releaseScope: target.releaseScope,
+      baseReleaseDigest: target.baseReleaseDigest,
+      changedComponents: target.changedComponents
+    }
+  );
+  return target;
 }
 
 function runtime(previous, events, { failTarget = false } = {}) {
@@ -137,6 +165,24 @@ test('upgrade prefetches target and rollback artifacts before target install', a
   assert.ok(events.indexOf(`verify:${target.sourceRevision}`) > install);
   assert.ok(events.includes(`prune:release-${previous.sourceRevision}->release-${target.sourceRevision}`));
   assert.ok(events.includes('namespaces'));
+});
+
+test('component release is upgrade-only and keeps a complete rollback lock', async () => {
+  const previous = lock('1'.repeat(40), 'a');
+  previous.trust = LOCAL_EDGE_TRUST;
+  delete previous.releaseBom;
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
+  const target = componentTarget(previous, '2'.repeat(40), ['backend']);
+  const events = [];
+  const result = await upgrade(previous, target, { runtime: runtime(previous, events) });
+  assert.equal(result.changed, true);
+  assert.equal(result.lock.components.console.image, previous.components.console.image);
+  assert.ok(events.includes(`record:${target.sourceRevision}`));
+
+  await assert.rejects(
+    bootstrap(target, { progress: undefined }),
+    /Component release locks are upgrade-only/
+  );
 });
 
 test('upgrade accepts an exact pre-recovery installed lock only for the verified rollback side', async () => {
