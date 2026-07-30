@@ -14,6 +14,7 @@ import {
   RELEASE_API_VERSION,
   RELEASE_BOM_PREDICATE,
   RELEASE_PLATFORMS,
+  RELEASE_SCOPE_COMPONENT,
   RELEASE_TRUST,
   resolveSourceRevision,
   releaseBomPointer,
@@ -21,6 +22,7 @@ import {
   validateReleaseBom,
   validateChannel,
   validateLock,
+  validateReleaseTransition,
   verifyImageProvenance,
   verifyImageSbom,
   verifyReleaseProvenance,
@@ -53,6 +55,35 @@ function validLock(channel = 'edge') {
     trust: RELEASE_TRUST,
     components
   };
+}
+
+function validComponentTransition(changedComponents = ['backend']) {
+  const base = validLock('edge');
+  base.trust = LOCAL_EDGE_TRUST;
+  base.releaseDigest = calculateReleaseDigest('edge', base.components, LOCAL_EDGE_TRUST);
+  const targetRevision = '2'.repeat(40);
+  const target = structuredClone(base);
+  target.releaseScope = RELEASE_SCOPE_COMPONENT;
+  target.baseReleaseDigest = base.releaseDigest;
+  target.changedComponents = [...changedComponents].sort();
+  target.sourceRevision = targetRevision;
+  for (const name of target.changedComponents) {
+    target.components[name].image =
+      `ghcr.io/opensphere-platform/${target.components[name].repository}@sha256:${'b'.repeat(64)}`;
+    target.components[name].sourceRevision = targetRevision;
+  }
+  target.releaseDigest = calculateReleaseDigest(
+    target.channel,
+    target.components,
+    target.trust,
+    undefined,
+    {
+      releaseScope: target.releaseScope,
+      baseReleaseDigest: target.baseReleaseDigest,
+      changedComponents: target.changedComponents
+    }
+  );
+  return { base, target };
 }
 
 function validBom(channel = 'edge', revision = REVISION, digest = DIGEST) {
@@ -282,6 +313,138 @@ test('release lock rejects mixed source revisions', () => {
   const lock = validLock();
   lock.components.supabaseAuth.sourceRevision = '2'.repeat(40);
   assert.throws(() => validateLock(lock), /source revision differs/);
+});
+
+test('component release transition reuses every unlisted component exactly', () => {
+  const { base, target } = validComponentTransition(['backend']);
+  assert.equal(validateLock(target), target);
+  assert.equal(validateReleaseTransition(base, target), target);
+  assert.equal(target.components.console.image, base.components.console.image);
+  assert.notEqual(target.components.backend.image, base.components.backend.image);
+});
+
+test('component release transition binds its base digest and explicit change set', () => {
+  const { base, target } = validComponentTransition(['backend']);
+
+  const wrongBase = structuredClone(target);
+  wrongBase.baseReleaseDigest = `sha256:${'c'.repeat(64)}`;
+  wrongBase.releaseDigest = calculateReleaseDigest(
+    wrongBase.channel,
+    wrongBase.components,
+    wrongBase.trust,
+    undefined,
+    {
+      releaseScope: wrongBase.releaseScope,
+      baseReleaseDigest: wrongBase.baseReleaseDigest,
+      changedComponents: wrongBase.changedComponents
+    }
+  );
+  assert.throws(
+    () => validateReleaseTransition(base, wrongBase),
+    /does not name the installed base release digest/
+  );
+
+  const hiddenChange = structuredClone(target);
+  hiddenChange.components.console.image =
+    `ghcr.io/opensphere-platform/${COMPONENTS.console}@sha256:${'d'.repeat(64)}`;
+  hiddenChange.releaseDigest = calculateReleaseDigest(
+    hiddenChange.channel,
+    hiddenChange.components,
+    hiddenChange.trust,
+    undefined,
+    {
+      releaseScope: hiddenChange.releaseScope,
+      baseReleaseDigest: hiddenChange.baseReleaseDigest,
+      changedComponents: hiddenChange.changedComponents
+    }
+  );
+  assert.throws(
+    () => validateReleaseTransition(base, hiddenChange),
+    /Unlisted component console differs/
+  );
+
+  const noChange = structuredClone(target);
+  noChange.components.backend = structuredClone(base.components.backend);
+  noChange.releaseDigest = calculateReleaseDigest(
+    noChange.channel,
+    noChange.components,
+    noChange.trust,
+    undefined,
+    {
+      releaseScope: noChange.releaseScope,
+      baseReleaseDigest: noChange.baseReleaseDigest,
+      changedComponents: noChange.changedComponents
+    }
+  );
+  assert.throws(
+    () => validateReleaseTransition(base, noChange),
+    /Changed component backend (?:source revision differs|is identical)/
+  );
+});
+
+test('component release scope is edge-local, canonical, and digest-bound', () => {
+  const { target } = validComponentTransition(['backend', 'console']);
+  assert.doesNotThrow(() => validateLock(target));
+
+  const promoted = structuredClone(target);
+  promoted.channel = 'candidate';
+  promoted.releaseDigest = calculateReleaseDigest(
+    promoted.channel,
+    promoted.components,
+    promoted.trust,
+    undefined,
+    {
+      releaseScope: promoted.releaseScope,
+      baseReleaseDigest: promoted.baseReleaseDigest,
+      changedComponents: promoted.changedComponents
+    }
+  );
+  assert.throws(() => validateLock(promoted), /localhost edge trust|accepted only for the edge channel/);
+
+  const unsorted = structuredClone(target);
+  unsorted.changedComponents.reverse();
+  unsorted.releaseDigest = calculateReleaseDigest(
+    unsorted.channel,
+    unsorted.components,
+    unsorted.trust,
+    undefined,
+    {
+      releaseScope: unsorted.releaseScope,
+      baseReleaseDigest: unsorted.baseReleaseDigest,
+      changedComponents: unsorted.changedComponents
+    }
+  );
+  assert.throws(() => validateLock(unsorted), /canonical sorted set/);
+
+  const tamperedContract = structuredClone(target);
+  tamperedContract.baseReleaseDigest = `sha256:${'e'.repeat(64)}`;
+  assert.throws(() => validateLock(tamperedContract), /digest does not match/);
+});
+
+test('component edge verification accepts inherited old tags and verifies changed tags together', async () => {
+  const { target } = validComponentTransition(['backend', 'console']);
+  const verified = await verifyReleaseLock(target, {
+    requiredPlatforms: ['linux/amd64'],
+    async inspectImageFn(repository, image) {
+      const name = Object.entries(COMPONENTS).find(([, value]) => value === repository)[0];
+      const component = target.components[name];
+      return {
+        image,
+        sourceRevision: component.sourceRevision,
+        labels: {
+          'io.opensphere.channel': 'edge',
+          'io.opensphere.release-tag':
+            target.changedComponents.includes(name) ? '202607301900' : '202607291200',
+          'io.opensphere.source-revision': component.sourceRevision,
+          'opensphere.io/build-authority': 'localhost',
+          'opensphere.io/release-class': 'pre-ga',
+          'opensphere.io/ga-eligible': 'false'
+        },
+        registryCredentialsRequired: false
+      };
+    }
+  });
+  assert.match(verified.localVerifiedAt, /^\d{4}-\d{2}-\d{2}T/);
 });
 
 test('release lock accepts only a boolean registry credential requirement', () => {
