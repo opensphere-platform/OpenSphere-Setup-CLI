@@ -49,8 +49,30 @@ const RAW_ROOT = 'https://raw.githubusercontent.com/opensphere-platform/OpenSphe
 const RELEASE_INVENTORY_CONFIGMAP = 'opensphere-release-inventory';
 const LEGACY_RECOVERY_MIGRATION = 'backend/supabase/migrations/0026_schema_migration_ledger.sql';
 const EXTERNAL_CHANNEL_REASON_POLICY_MIGRATION = 'backend/supabase/migrations/0027_external_channel_reason_policy.sql';
+const CHANGE_RECONCILE_RETRY_MIGRATION = 'backend/supabase/migrations/0028_change_reconcile_retry.sql';
+const BROWSER_SESSION_BASELINE_MIGRATION = 'backend/supabase/migrations/0029_browser_session_and_baseline_monitoring.sql';
+const CEPH_DATA_PATH_RUNTIME_MIGRATION = 'backend/supabase/migrations/0030_ceph_data_path_verification_runtime.sql';
+const FOUNDATION_BOOTSTRAP_MIGRATION = 'backend/supabase/migrations/0031_foundation_bootstrap_consumer.sql';
+const AUDIT_LEDGER_INTEGRITY_MIGRATION = 'backend/supabase/migrations/0032_audit_ledger_integrity.sql';
+const APPROVAL_OUTCOME_LEDGER_MIGRATION = 'backend/supabase/migrations/0033_approval_outcome_ledger.sql';
+const AGENT_ACTION_LEDGER_MIGRATION = 'backend/supabase/migrations/0034_agent_action_ledger.sql';
+const MODULE_OPERATION_LEDGER_MIGRATION = 'backend/supabase/migrations/0035_module_operation_ledger.sql';
+const PLATFORM_SUPPORT_OBSERVABILITY_MIGRATION = 'backend/supabase/migrations/0036_platform_support_observability_permissions.sql';
+const BROWSER_SESSION_EXPIRY_MIGRATION = 'backend/supabase/migrations/0037_browser_session_expiry_evidence.sql';
+const OAA_WATCH_CURSOR_STATUS_MIGRATION = 'backend/supabase/migrations/0038_oaa_watch_cursor_status_vocabulary.sql';
 const LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS = new Set([
-  EXTERNAL_CHANNEL_REASON_POLICY_MIGRATION
+  EXTERNAL_CHANNEL_REASON_POLICY_MIGRATION,
+  CHANGE_RECONCILE_RETRY_MIGRATION,
+  BROWSER_SESSION_BASELINE_MIGRATION,
+  CEPH_DATA_PATH_RUNTIME_MIGRATION,
+  FOUNDATION_BOOTSTRAP_MIGRATION,
+  AUDIT_LEDGER_INTEGRITY_MIGRATION,
+  APPROVAL_OUTCOME_LEDGER_MIGRATION,
+  AGENT_ACTION_LEDGER_MIGRATION,
+  MODULE_OPERATION_LEDGER_MIGRATION,
+  PLATFORM_SUPPORT_OBSERVABILITY_MIGRATION,
+  BROWSER_SESSION_EXPIRY_MIGRATION,
+  OAA_WATCH_CURSOR_STATUS_MIGRATION
 ]);
 const LEGACY_RECOVERY_MANIFESTS = new Set([
   'backend/recovery/recovery-jobs.yaml',
@@ -76,7 +98,13 @@ export const MANAGED_NAMESPACES = Object.freeze([
 export const MANAGED_CRDS = Object.freeze([
   'platformsupportprofiles.platform.opensphere.io',
   'uipluginpackages.plugins.opensphere.io',
-  'uipluginregistrations.plugins.opensphere.io'
+  'uipluginregistrations.plugins.opensphere.io',
+  'foundationmodels.foundation.opensphere.io',
+  'foundationmoduledescriptors.foundation.opensphere.io',
+  'foundationclaims.foundation.opensphere.io',
+  'foundationbindings.foundation.opensphere.io',
+  'identitydirectoryclaims.foundation.opensphere.io',
+  'identitydirectorybindings.foundation.opensphere.io'
 ]);
 
 export const MANAGED_CLUSTER_RBAC = Object.freeze([
@@ -85,6 +113,9 @@ export const MANAGED_CLUSTER_RBAC = Object.freeze([
   'clusterrolebinding/dupa-clidownload-reader',
   'clusterrolebinding/opensphere-console-backend',
   'clusterrolebinding/opensphere-console-oaa-gateway-environment-reader',
+  'clusterrolebinding/foundation-bootstrap-reconciler',
+  'clusterrolebinding/foundation-control-plane-identity-directory',
+  'clusterrolebinding/foundation-control-plane-core',
   'clusterrole/opensphere-module-cluster-observer-v1',
   'clusterrole/opensphere-module-cluster-his-manager-v1',
   'clusterrole/opensphere-module-cluster-infrastructure-manager-v1',
@@ -92,12 +123,17 @@ export const MANAGED_CLUSTER_RBAC = Object.freeze([
   'clusterrole/dupa-console-evidence-reader',
   'clusterrole/dupa-clidownload-reader',
   'clusterrole/opensphere-console-backend',
-  'clusterrole/opensphere-console-oaa-gateway-environment-reader'
+  'clusterrole/opensphere-console-oaa-gateway-environment-reader',
+  'clusterrole/foundation-bootstrap-reconciler',
+  'clusterrole/foundation-control-plane-identity-directory',
+  'clusterrole/foundation-control-plane-core'
 ]);
 
 // These resources are cluster-scoped, so namespace deletion cannot remove
 // them. Bindings are deliberately deleted before their policies.
 export const MANAGED_CLUSTER_POLICIES = Object.freeze([
+  'validatingadmissionpolicybinding/foundation-bootstrap-closed-catalog',
+  'validatingadmissionpolicy/foundation-bootstrap-closed-catalog',
   'validatingadmissionpolicybinding/opensphere-console-manual-ui-contract',
   'validatingadmissionpolicy/opensphere-console-manual-ui-contract',
   'validatingadmissionpolicybinding/opensphere-console-image-integrity-workload',
@@ -196,7 +232,18 @@ export const SUPABASE_MIGRATIONS = Object.freeze([
   '0024_ai_consumer_contract.sql',
   '0025_external_channels_backup.sql',
   '0026_schema_migration_ledger.sql',
-  '0027_external_channel_reason_policy.sql'
+  '0027_external_channel_reason_policy.sql',
+  '0028_change_reconcile_retry.sql',
+  '0029_browser_session_and_baseline_monitoring.sql',
+  '0030_ceph_data_path_verification_runtime.sql',
+  '0031_foundation_bootstrap_consumer.sql',
+  '0032_audit_ledger_integrity.sql',
+  '0033_approval_outcome_ledger.sql',
+  '0034_agent_action_ledger.sql',
+  '0035_module_operation_ledger.sql',
+  '0036_platform_support_observability_permissions.sql',
+  '0037_browser_session_expiry_evidence.sql',
+  '0038_oaa_watch_cursor_status_vocabulary.sql'
 ]);
 
 export const SUPABASE_MANIFEST = Object.freeze({
@@ -261,6 +308,7 @@ export const CORE_ROLLOUTS = Object.freeze([
   ['opensphere-console-change', 'deployment/opensphere-gitea', '900s'],
   ['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s'],
   ['opensphere-console', 'deployment/opensphere-console-backend', '600s'],
+  ['opensphere-console', 'deployment/foundation-bootstrap-reconciler', '600s'],
   ['opensphere-console', 'deployment/opensphere-notification-dispatcher', '600s'],
   ['opensphere-console', 'deployment/opensphere-external-channel-executor', '600s'],
   ['opensphere-console', 'deployment/opensphere-console-oaa-gateway', '600s'],
