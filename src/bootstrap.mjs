@@ -53,19 +53,23 @@ const CHANGE_RECONCILE_RETRY_MIGRATION = 'backend/supabase/migrations/0028_chang
 const BROWSER_SESSION_BASELINE_MIGRATION = 'backend/supabase/migrations/0029_browser_session_and_baseline_monitoring.sql';
 const CEPH_DATA_PATH_RUNTIME_MIGRATION = 'backend/supabase/migrations/0030_ceph_data_path_verification_runtime.sql';
 const FOUNDATION_BOOTSTRAP_MIGRATION = 'backend/supabase/migrations/0031_foundation_bootstrap_consumer.sql';
-const AUDIT_LEDGER_INTEGRITY_MIGRATION = 'backend/supabase/migrations/0032_audit_ledger_integrity.sql';
-const APPROVAL_OUTCOME_LEDGER_MIGRATION = 'backend/supabase/migrations/0033_approval_outcome_ledger.sql';
-const AGENT_ACTION_LEDGER_MIGRATION = 'backend/supabase/migrations/0034_agent_action_ledger.sql';
+const AUDIT_EVENT_LEDGER_CHAIN_MIGRATION = 'backend/supabase/migrations/0032_audit_event_ledger_chain.sql';
+const PLATFORM_RELEASE_CONSUMER_MIGRATION = 'backend/supabase/migrations/0033_platform_release_consumer.sql';
 const MODULE_OPERATION_LEDGER_MIGRATION = 'backend/supabase/migrations/0035_module_operation_ledger.sql';
 const PLATFORM_SUPPORT_OBSERVABILITY_MIGRATION = 'backend/supabase/migrations/0036_platform_support_observability_permissions.sql';
 const BROWSER_SESSION_EXPIRY_MIGRATION = 'backend/supabase/migrations/0037_browser_session_expiry_evidence.sql';
 const OAA_WATCH_CURSOR_STATUS_MIGRATION = 'backend/supabase/migrations/0038_oaa_watch_cursor_status_vocabulary.sql';
+const AUDIT_LEDGER_INTEGRITY_MIGRATION = 'backend/supabase/migrations/0039_audit_ledger_integrity.sql';
+const APPROVAL_OUTCOME_LEDGER_MIGRATION = 'backend/supabase/migrations/0040_approval_outcome_ledger.sql';
+const AGENT_ACTION_LEDGER_MIGRATION = 'backend/supabase/migrations/0041_agent_action_ledger.sql';
 const LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS = new Set([
   EXTERNAL_CHANNEL_REASON_POLICY_MIGRATION,
   CHANGE_RECONCILE_RETRY_MIGRATION,
   BROWSER_SESSION_BASELINE_MIGRATION,
   CEPH_DATA_PATH_RUNTIME_MIGRATION,
   FOUNDATION_BOOTSTRAP_MIGRATION,
+  AUDIT_EVENT_LEDGER_CHAIN_MIGRATION,
+  PLATFORM_RELEASE_CONSUMER_MIGRATION,
   AUDIT_LEDGER_INTEGRITY_MIGRATION,
   APPROVAL_OUTCOME_LEDGER_MIGRATION,
   AGENT_ACTION_LEDGER_MIGRATION,

@@ -62,6 +62,10 @@ test('all current Supabase migrations, including reboot recovery contracts, are 
   assert.equal(SUPABASE_MIGRATIONS.includes('0040_approval_outcome_ledger.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0041_agent_action_ledger.sql'), true);
   assert.equal(new Set(SUPABASE_MIGRATIONS).size, SUPABASE_MIGRATIONS.length);
+  const bootstrapSource = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(bootstrapSource, /0032_audit_ledger_integrity\.sql/);
+  assert.doesNotMatch(bootstrapSource, /0033_approval_outcome_ledger\.sql/);
+  assert.doesNotMatch(bootstrapSource, /0034_agent_action_ledger\.sql/);
 });
 
 test('base Main Shell includes Backend, DUPA, notification, OAA, governed adapter and production guardrails', () => {
