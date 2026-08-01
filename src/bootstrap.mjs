@@ -237,13 +237,15 @@ export const SUPABASE_MIGRATIONS = Object.freeze([
   '0029_browser_session_and_baseline_monitoring.sql',
   '0030_ceph_data_path_verification_runtime.sql',
   '0031_foundation_bootstrap_consumer.sql',
-  '0032_audit_ledger_integrity.sql',
-  '0033_approval_outcome_ledger.sql',
-  '0034_agent_action_ledger.sql',
+  '0032_audit_event_ledger_chain.sql',
+  '0033_platform_release_consumer.sql',
   '0035_module_operation_ledger.sql',
   '0036_platform_support_observability_permissions.sql',
   '0037_browser_session_expiry_evidence.sql',
-  '0038_oaa_watch_cursor_status_vocabulary.sql'
+  '0038_oaa_watch_cursor_status_vocabulary.sql',
+  '0039_audit_ledger_integrity.sql',
+  '0040_approval_outcome_ledger.sql',
+  '0041_agent_action_ledger.sql'
 ]);
 
 export const SUPABASE_MANIFEST = Object.freeze({
