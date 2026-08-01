@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bootstrap, terminalPodError, upgrade } from '../src/bootstrap.mjs';
+import { bootstrap, terminalPodError, upgrade, workloadReady } from '../src/bootstrap.mjs';
 import {
   calculateReleaseBomDigest,
   calculateReleaseDigest,
@@ -218,6 +218,54 @@ test('Supabase/Gitea upgrade path contains no retired backup-boundary operation'
   await upgrade(previous, target, { runtime: injected });
   assert.equal(events.includes('legacy-backup-boundary'), false);
   assert.equal(events.includes('legacy-rustfs-drill'), false);
+});
+
+test('current generation exact readiness ignores a stale historical ProgressDeadlineExceeded condition', () => {
+  const deployment = {
+    apiVersion: 'apps/v1',
+    kind: 'Deployment',
+    metadata: { generation: 17 },
+    spec: { replicas: 2 },
+    status: {
+      observedGeneration: 17,
+      updatedReplicas: 2,
+      readyReplicas: 2,
+      availableReplicas: 2,
+      unavailableReplicas: 0,
+      conditions: [{ type: 'Progressing', status: 'False', reason: 'ProgressDeadlineExceeded' }]
+    }
+  };
+  assert.equal(workloadReady(deployment), true);
+  assert.equal(workloadReady({
+    ...deployment,
+    status: { ...deployment.status, observedGeneration: 16 }
+  }), false);
+  assert.equal(workloadReady({
+    ...deployment,
+    status: { ...deployment.status, readyReplicas: 1, unavailableReplicas: 1 }
+  }), false);
+});
+
+test('StatefulSet readiness requires the current update revision at exact replicas', () => {
+  const statefulSet = {
+    apiVersion: 'apps/v1',
+    kind: 'StatefulSet',
+    metadata: { generation: 8 },
+    spec: { replicas: 1 },
+    status: {
+      observedGeneration: 8,
+      currentReplicas: 1,
+      updatedReplicas: 1,
+      readyReplicas: 1,
+      currentRevision: 'postgres-abc',
+      updateRevision: 'postgres-abc'
+    }
+  };
+  assert.equal(workloadReady(statefulSet), true);
+  assert.equal(workloadReady({
+    ...statefulSet,
+    status: { ...statefulSet.status, updateRevision: 'postgres-def' }
+  }), false);
 });
 
 test('terminal pod configuration errors are detected before rollout timeout', () => {

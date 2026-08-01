@@ -739,26 +739,50 @@ export function terminalPodError(pods) {
   return null;
 }
 
+export function workloadReady(workload) {
+  const desired = Number(workload.spec?.replicas ?? 1);
+  const observedGeneration = Number(workload.status?.observedGeneration ?? 0);
+  const generation = Number(workload.metadata?.generation ?? 0);
+  if (observedGeneration < generation) return false;
+
+  const ready = Number(workload.status?.readyReplicas ?? 0) === desired;
+  const updated = Number(workload.status?.updatedReplicas ?? 0) === desired;
+  if (!ready || !updated) return false;
+
+  const kind = String(workload.kind ?? '').toLowerCase();
+  if (kind === 'deployment') {
+    return Number(workload.status?.availableReplicas ?? 0) === desired
+      && Number(workload.status?.unavailableReplicas ?? 0) === 0;
+  }
+  if (kind === 'statefulset') {
+    return Number(workload.status?.currentReplicas ?? 0) === desired
+      && Boolean(workload.status?.currentRevision)
+      && workload.status.currentRevision === workload.status.updateRevision;
+  }
+  return true;
+}
+
 function waitForCoreRollouts(progress) {
   for (const [namespace, resource, timeout] of CORE_ROLLOUTS) {
     progress?.wait(`${namespace}/${resource} rollout`, `timeout=${timeout}`);
     const deadline = Date.now() + Number.parseInt(timeout, 10) * 1000;
-    while (Date.now() < deadline) {
-      try {
-        kubectl(['-n', namespace, 'rollout', 'status', resource, '--timeout=15s'], { capture: true });
+    while (true) {
+      const workload = JSON.parse(kubectl(['-n', namespace, 'get', resource, '-o', 'json'], { capture: true }));
+      if (workloadReady(workload)) {
         progress?.item('준비', `${namespace}/${resource}`);
         break;
-      } catch (rolloutError) {
-        const workload = JSON.parse(kubectl(['-n', namespace, 'get', resource, '-o', 'json'], { capture: true }));
-        const selector = Object.entries(workload.spec?.selector?.matchLabels ?? {})
-          .map(([key, value]) => `${key}=${value}`).join(',');
-        const pods = JSON.parse(kubectl([
-          '-n', namespace, 'get', 'pods', ...(selector ? ['-l', selector] : []), '-o', 'json'
-        ], { capture: true }));
-        const terminal = terminalPodError(pods);
-        if (terminal) throw new Error(`${resource} has a terminal pod error: ${terminal}`);
-        if (Date.now() >= deadline) throw rolloutError;
       }
+      const selector = Object.entries(workload.spec?.selector?.matchLabels ?? {})
+        .map(([key, value]) => `${key}=${value}`).join(',');
+      const pods = JSON.parse(kubectl([
+        '-n', namespace, 'get', 'pods', ...(selector ? ['-l', selector] : []), '-o', 'json'
+      ], { capture: true }));
+      const terminal = terminalPodError(pods);
+      if (terminal) throw new Error(`${resource} has a terminal pod error: ${terminal}`);
+      if (Date.now() >= deadline) {
+        throw new Error(`${resource} did not reach its current generation and exact replica readiness within ${timeout}`);
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_000);
     }
   }
 }
