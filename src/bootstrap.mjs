@@ -62,6 +62,7 @@ const OAA_WATCH_CURSOR_STATUS_MIGRATION = 'backend/supabase/migrations/0038_oaa_
 const AUDIT_LEDGER_INTEGRITY_MIGRATION = 'backend/supabase/migrations/0039_audit_ledger_integrity.sql';
 const APPROVAL_OUTCOME_LEDGER_MIGRATION = 'backend/supabase/migrations/0040_approval_outcome_ledger.sql';
 const AGENT_ACTION_LEDGER_MIGRATION = 'backend/supabase/migrations/0041_agent_action_ledger.sql';
+const FOUNDATION_BOOTSTRAP_CATALOG_MIRROR_MIGRATION = 'backend/supabase/migrations/0042_foundation_bootstrap_catalog_mirror.sql';
 const LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS = new Set([
   EXTERNAL_CHANNEL_REASON_POLICY_MIGRATION,
   CHANGE_RECONCILE_RETRY_MIGRATION,
@@ -73,6 +74,7 @@ const LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS = new Set([
   AUDIT_LEDGER_INTEGRITY_MIGRATION,
   APPROVAL_OUTCOME_LEDGER_MIGRATION,
   AGENT_ACTION_LEDGER_MIGRATION,
+  FOUNDATION_BOOTSTRAP_CATALOG_MIRROR_MIGRATION,
   MODULE_OPERATION_LEDGER_MIGRATION,
   PLATFORM_SUPPORT_OBSERVABILITY_MIGRATION,
   BROWSER_SESSION_EXPIRY_MIGRATION,
@@ -249,7 +251,8 @@ export const SUPABASE_MIGRATIONS = Object.freeze([
   '0038_oaa_watch_cursor_status_vocabulary.sql',
   '0039_audit_ledger_integrity.sql',
   '0040_approval_outcome_ledger.sql',
-  '0041_agent_action_ledger.sql'
+  '0041_agent_action_ledger.sql',
+  '0042_foundation_bootstrap_catalog_mirror.sql'
 ]);
 
 export const SUPABASE_MANIFEST = Object.freeze({
