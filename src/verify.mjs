@@ -201,6 +201,10 @@ function verifyServiceEndpoints() {
   return verifyRequiredServiceEndpoints(services, endpointSlices);
 }
 
+export function isRuntimeServicePod(pod) {
+  return !(pod.metadata?.ownerReferences ?? []).some((owner) => owner.kind === 'Job');
+}
+
 function verifyWorkloads(lock, { requireZeroRestarts }) {
   const expected = new Set();
   const resources = [];
@@ -227,7 +231,8 @@ function verifyWorkloads(lock, { requireZeroRestarts }) {
   if (missing.length) throw new Error(`Release components are not represented by base workloads: ${missing.join(', ')}`);
 
   const pods = getJson(['get', 'pods', '-A']).items
-    .filter((pod) => NAMESPACES.includes(pod.metadata?.namespace));
+    .filter((pod) => NAMESPACES.includes(pod.metadata?.namespace))
+    .filter(isRuntimeServicePod);
   const nonRunning = pods.filter((pod) => pod.status?.phase !== 'Running');
   if (nonRunning.length) {
     throw new Error(`OpenSphere Pods are not Running: ${nonRunning.map((pod) => `${pod.metadata.namespace}/${pod.metadata.name}:${pod.status?.phase}`).join(', ')}`);
