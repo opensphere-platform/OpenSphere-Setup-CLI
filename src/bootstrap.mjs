@@ -325,6 +325,22 @@ export const CORE_ROLLOUTS = Object.freeze([
   ['opensphere-console', 'deployment/opensphere-console', '600s']
 ]);
 
+export const COMPONENT_ROLLOUTS = Object.freeze({
+  console: [['opensphere-console', 'deployment/opensphere-console', '600s']],
+  backend: [['opensphere-console', 'deployment/opensphere-console-backend', '600s']],
+  dupaController: [['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s']],
+  oaaGateway: [['opensphere-console', 'deployment/opensphere-console-oaa-gateway', '600s']],
+  oaaGovernedAdapter: [['opensphere-console', 'deployment/oaa-governed-adapter', '600s']],
+  notificationDispatcher: [['opensphere-console', 'deployment/opensphere-notification-dispatcher', '600s']],
+  gitea: [['opensphere-console-change', 'deployment/opensphere-gitea', '900s']],
+  giteaPostgres: [['opensphere-console-change', 'deployment/opensphere-gitea-postgres', '600s']],
+  supabasePostgres: [['opensphere-console-data', 'statefulset/opensphere-supabase-postgres', '600s']],
+  supabaseAuth: [['opensphere-console-data', 'deployment/opensphere-supabase-auth', '600s']],
+  supabaseRest: [['opensphere-console-data', 'deployment/opensphere-supabase-rest', '600s']],
+  supabaseStorage: [['opensphere-console-data', 'deployment/opensphere-supabase-storage', '600s']],
+  recovery: []
+});
+
 function hex(bytes) {
   return randomBytes(bytes).toString('hex');
 }
@@ -649,6 +665,65 @@ function applyRelease(release, label, progress, { preserveHostLocalEdgeTrust = f
   }
 }
 
+function manifestDocuments(yaml) {
+  return String(yaml)
+    .split(/^---\s*$/mu)
+    .map((document) => document.trim())
+    .filter(Boolean);
+}
+
+function escapeExpression(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function componentReleaseWorkloadManifests(
+  lock,
+  prepared,
+  changedComponents = lock.changedComponents
+) {
+  if (!Array.isArray(changedComponents) || changedComponents.length === 0) {
+    throw new Error('Component release requires a non-empty changed component set');
+  }
+  const sources = [...prepared.foundation.release, ...prepared.base];
+  const selected = new Map();
+  for (const component of changedComponents) {
+    const image = lock.components?.[component]?.image;
+    if (!image) throw new Error(`Component release lock lacks ${component}`);
+    const imageLine = new RegExp(
+      `^[ \\t]*(?:-[ \\t]*)?image:[ \\t]+["']?${escapeExpression(image)}["']?[ \\t]*(?:#.*)?$`,
+      'mu'
+    );
+    let found = false;
+    for (const source of sources) {
+      manifestDocuments(source.yaml).forEach((document, index) => {
+        if (!imageLine.test(document)) return;
+        found = true;
+        selected.set(`${source.path}#${index}`, {
+          path: `${source.path}#${component}`,
+          yaml: `${document}\n`
+        });
+      });
+    }
+    if (!found) {
+      throw new Error(`Component release artifact does not expose workload image ${component}`);
+    }
+  }
+  return [...selected.values()];
+}
+
+function installPreparedComponentRelease(
+  lock,
+  prepared,
+  _storageClass,
+  _consoleUrl,
+  label,
+  changedComponents = lock.changedComponents,
+  progress
+) {
+  const release = componentReleaseWorkloadManifests(lock, prepared, changedComponents);
+  applyRelease(release, label, progress);
+}
+
 function inventoryKey(resource) {
   return [resource.apiVersion, resource.kind, resource.namespace ?? '', resource.name].join('|');
 }
@@ -765,8 +840,8 @@ export function workloadReady(workload) {
   return true;
 }
 
-function waitForCoreRollouts(progress) {
-  for (const [namespace, resource, timeout] of CORE_ROLLOUTS) {
+function waitForRollouts(rollouts, progress) {
+  for (const [namespace, resource, timeout] of rollouts) {
     progress?.wait(`${namespace}/${resource} rollout`, `timeout=${timeout}`);
     const deadline = Date.now() + Number.parseInt(timeout, 10) * 1000;
     while (true) {
@@ -788,6 +863,20 @@ function waitForCoreRollouts(progress) {
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_000);
     }
   }
+}
+
+function waitForCoreRollouts(progress) {
+  waitForRollouts(CORE_ROLLOUTS, progress);
+}
+
+export function waitForComponentRollouts(changedComponents, progress) {
+  const unique = new Map();
+  for (const component of changedComponents) {
+    const rollouts = COMPONENT_ROLLOUTS[component];
+    if (!rollouts) throw new Error(`Component rollout contract is missing for ${component}`);
+    for (const rollout of rollouts) unique.set(`${rollout[0]}|${rollout[1]}`, rollout);
+  }
+  waitForRollouts([...unique.values()], progress);
 }
 
 export function waitForJobCompletion(
@@ -1305,7 +1394,9 @@ export async function upgrade(
     ensureRegistryPullSecrets,
     prepareRelease,
     installPreparedRelease,
+    installPreparedComponentRelease,
     waitForCoreRollouts,
+    waitForComponentRollouts,
     verifyInstallation,
     recordInstallationState,
     readReleaseInventory,
@@ -1353,6 +1444,8 @@ export async function upgrade(
   operations.ensureManagedNamespaces();
   operations.ensureRegistryPullSecrets(targetLock, registryCredentials);
   const initialAdmin = config.initialAdmin;
+  const componentTransition = targetLock.releaseScope === RELEASE_SCOPE_COMPONENT;
+  const changedComponents = componentTransition ? targetLock.changedComponents : [];
   const targetWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-target-'));
   const rollbackWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-rollback-'));
   try {
@@ -1372,11 +1465,24 @@ export async function upgrade(
     ]);
     const previousInventory = operations.readReleaseInventory()
       ?? operations.releaseResourceInventory(rollback.all);
-    const targetInventory = operations.releaseResourceInventory(target.all);
+    const targetInventory = componentTransition
+      ? previousInventory
+      : operations.releaseResourceInventory(target.all);
     try {
-      operations.installPreparedRelease(
-        targetLock, target, config.storageClass, effectiveConsoleUrl, '업그레이드'
-      );
+      if (componentTransition) {
+        operations.installPreparedComponentRelease(
+          targetLock,
+          target,
+          config.storageClass,
+          effectiveConsoleUrl,
+          '업그레이드',
+          changedComponents
+        );
+      } else {
+        operations.installPreparedRelease(
+          targetLock, target, config.storageClass, effectiveConsoleUrl, '업그레이드'
+        );
+      }
       operations.recordInstallationState(
         targetLock,
         config.storageClass,
@@ -1385,12 +1491,15 @@ export async function upgrade(
         config.authEnvironment,
         config.shellTlsSecret
       );
-      operations.waitForCoreRollouts();
+      if (componentTransition) operations.waitForComponentRollouts(changedComponents);
+      else operations.waitForCoreRollouts();
       const evidence = await operations.verifyInstallation(targetLock, {
         consoleUrl: effectiveConsoleUrl,
         requireZeroRestarts: false
       });
-      operations.pruneReleaseResources(previousInventory, targetInventory);
+      if (!componentTransition) {
+        operations.pruneReleaseResources(previousInventory, targetInventory);
+      }
       operations.recordReleaseInventory(targetLock, targetInventory);
       return {
         changed: true,
@@ -1401,9 +1510,20 @@ export async function upgrade(
     } catch (upgradeError) {
       console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
       try {
-        operations.installPreparedRelease(
-          previousLock, rollback, config.storageClass, effectiveConsoleUrl, '롤백'
-        );
+        if (componentTransition) {
+          operations.installPreparedComponentRelease(
+            previousLock,
+            rollback,
+            config.storageClass,
+            effectiveConsoleUrl,
+            '롤백',
+            changedComponents
+          );
+        } else {
+          operations.installPreparedRelease(
+            previousLock, rollback, config.storageClass, effectiveConsoleUrl, '롤백'
+          );
+        }
         operations.recordInstallationState(
           previousLock,
           config.storageClass,
@@ -1412,13 +1532,16 @@ export async function upgrade(
           config.authEnvironment,
           config.shellTlsSecret
         );
-        operations.waitForCoreRollouts();
+        if (componentTransition) operations.waitForComponentRollouts(changedComponents);
+        else operations.waitForCoreRollouts();
         await operations.verifyInstallation(previousLock, {
           consoleUrl: effectiveConsoleUrl,
           requireZeroRestarts: false,
           mode: 'rollback'
         });
-        operations.pruneReleaseResources(targetInventory, previousInventory);
+        if (!componentTransition) {
+          operations.pruneReleaseResources(targetInventory, previousInventory);
+        }
         operations.recordReleaseInventory(previousLock, previousInventory);
       } catch (rollbackError) {
         throw new Error(`Upgrade failed (${upgradeError.message}); rollback also failed (${rollbackError.message})`);

@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bootstrap, terminalPodError, upgrade, workloadReady } from '../src/bootstrap.mjs';
+import {
+  bootstrap,
+  componentReleaseWorkloadManifests,
+  terminalPodError,
+  upgrade,
+  workloadReady
+} from '../src/bootstrap.mjs';
 import {
   calculateReleaseBomDigest,
   calculateReleaseDigest,
@@ -128,6 +134,8 @@ function runtime(previous, events, { failTarget = false } = {}) {
     },
     installPreparedRelease: (release, prepared, storageClass, consoleUrl, label) =>
       events.push(`install:${label}:${prepared.all[0].yaml}`),
+    installPreparedComponentRelease: (release, prepared, storageClass, consoleUrl, label, changed) =>
+      events.push(`install-component:${label}:${release.sourceRevision}:${changed.join(',')}`),
     releaseResourceInventory: (release) => [{
       apiVersion: 'v1',
       kind: 'ConfigMap',
@@ -139,6 +147,7 @@ function runtime(previous, events, { failTarget = false } = {}) {
     pruneReleaseResources: (from, to) => events.push(`prune:${from[0].name}->${to[0].name}`),
     recordInstallationState: (release) => events.push(`record:${release.sourceRevision}`),
     waitForCoreRollouts: () => events.push('wait'),
+    waitForComponentRollouts: (changed) => events.push(`wait-component:${changed.join(',')}`),
     verifyInstallation: async (release) => {
       events.push(`verify:${release.sourceRevision}`);
       if (failTarget && release.sourceRevision !== previous.sourceRevision) {
@@ -178,11 +187,69 @@ test('component release is upgrade-only and keeps a complete rollback lock', asy
   assert.equal(result.changed, true);
   assert.equal(result.lock.components.console.image, previous.components.console.image);
   assert.ok(events.includes(`record:${target.sourceRevision}`));
+  assert.ok(events.includes(`install-component:업그레이드:${target.sourceRevision}:backend`));
+  assert.ok(events.includes('wait-component:backend'));
+  assert.equal(events.some((event) => event.startsWith('install:')), false);
+  assert.equal(events.includes('wait'), false);
+  assert.equal(events.some((event) => event.startsWith('prune:')), false);
 
   await assert.rejects(
     bootstrap(target, { progress: undefined }),
     /Component release locks are upgrade-only/
   );
+});
+
+test('component release applies only workload documents that contain a changed exact image', () => {
+  const previous = lock('1'.repeat(40), 'a');
+  previous.trust = LOCAL_EDGE_TRUST;
+  delete previous.releaseBom;
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
+  const target = componentTarget(previous, '2'.repeat(40), ['backend']);
+  const selected = componentReleaseWorkloadManifests(target, {
+    foundation: { release: [] },
+    base: [{
+      path: 'combined.yaml',
+      yaml: [
+        'apiVersion: apps/v1',
+        'kind: Deployment',
+        'metadata: { name: opensphere-console-backend }',
+        'spec:',
+        '  template:',
+        '    spec:',
+        '      containers:',
+        `        - image: ${target.components.backend.image}`,
+        '---',
+        'apiVersion: apps/v1',
+        'kind: Deployment',
+        'metadata: { name: opensphere-console }',
+        'spec:',
+        '  template:',
+        '    spec:',
+        '      containers:',
+        `        - image: ${target.components.console.image}`
+      ].join('\n')
+    }]
+  });
+  assert.equal(selected.length, 1);
+  assert.match(selected[0].yaml, new RegExp(target.components.backend.image.replaceAll('.', '\\.')));
+  assert.doesNotMatch(selected[0].yaml, new RegExp(target.components.console.image.replaceAll('.', '\\.')));
+});
+
+test('failed component verification rolls back only the same changed workloads', async () => {
+  const previous = lock('1'.repeat(40), 'a');
+  previous.trust = LOCAL_EDGE_TRUST;
+  delete previous.releaseBom;
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
+  const target = componentTarget(previous, '2'.repeat(40), ['backend', 'console']);
+  const events = [];
+  await assert.rejects(
+    upgrade(previous, target, { runtime: runtime(previous, events, { failTarget: true }) }),
+    /previous release was restored/
+  );
+  assert.ok(events.includes(`install-component:업그레이드:${target.sourceRevision}:backend,console`));
+  assert.ok(events.includes(`install-component:롤백:${previous.sourceRevision}:backend,console`));
+  assert.equal(events.some((event) => event.startsWith('install:')), false);
+  assert.equal(events.some((event) => event.startsWith('prune:')), false);
 });
 
 test('upgrade accepts an exact pre-recovery installed lock only for the verified rollback side', async () => {
