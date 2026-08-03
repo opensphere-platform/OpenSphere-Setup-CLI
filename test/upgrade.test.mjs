@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   bootstrap,
+  COMPONENT_ROLLOUTS,
+  componentReleaseManifestSpecs,
   componentReleaseWorkloadManifests,
+  renderManifest,
   terminalPodError,
   upgrade,
   workloadReady
@@ -102,7 +105,7 @@ function componentTarget(previous, revision, changedComponents = ['backend']) {
   return target;
 }
 
-function runtime(previous, events, { failTarget = false } = {}) {
+function runtime(previous, events, { failTarget = false, recordedInventory = null } = {}) {
   return {
     verifyReleaseLock: async (release, options) =>
       events.push(`supply:${release.sourceRevision}:${options?.allowLegacyComponentSet === true}`),
@@ -132,6 +135,21 @@ function runtime(previous, events, { failTarget = false } = {}) {
         all: [{ path: 'release.yaml', yaml: release.sourceRevision }]
       };
     },
+    prepareComponentRelease: async (
+      release,
+      _root,
+      _storageClass,
+      _consoleUrl,
+      _authEnvironment,
+      { changedComponents = [] } = {}
+    ) => {
+      events.push(`prepare-component:${release.sourceRevision}:${changedComponents.join(',')}`);
+      return {
+        foundation: { root: release.sourceRevision, release: [] },
+        base: [{ path: 'component.yaml', yaml: release.sourceRevision }],
+        all: [{ path: 'component.yaml', yaml: release.sourceRevision }]
+      };
+    },
     installPreparedRelease: (release, prepared, storageClass, consoleUrl, label) =>
       events.push(`install:${label}:${prepared.all[0].yaml}`),
     installPreparedComponentRelease: (release, prepared, storageClass, consoleUrl, label, changed) =>
@@ -142,7 +160,7 @@ function runtime(previous, events, { failTarget = false } = {}) {
       namespace: 'opensphere-console',
       name: `release-${release[0].yaml}`
     }],
-    readReleaseInventory: () => null,
+    readReleaseInventory: () => recordedInventory,
     recordReleaseInventory: (release) => events.push(`inventory:${release.sourceRevision}`),
     pruneReleaseResources: (from, to) => events.push(`prune:${from[0].name}->${to[0].name}`),
     recordInstallationState: (release) => events.push(`record:${release.sourceRevision}`),
@@ -183,19 +201,98 @@ test('component release is upgrade-only and keeps a complete rollback lock', asy
   previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
   const target = componentTarget(previous, '2'.repeat(40), ['backend']);
   const events = [];
-  const result = await upgrade(previous, target, { runtime: runtime(previous, events) });
+  const result = await upgrade(previous, target, {
+    runtime: runtime(previous, events, { recordedInventory: [{ name: 'complete-release' }] })
+  });
   assert.equal(result.changed, true);
   assert.equal(result.lock.components.console.image, previous.components.console.image);
   assert.ok(events.includes(`record:${target.sourceRevision}`));
   assert.ok(events.includes(`install-component:업그레이드:${target.sourceRevision}:backend`));
+  assert.ok(events.includes(`prepare-component:${target.sourceRevision}:backend`));
+  assert.ok(events.includes(`prepare-component:${previous.sourceRevision}:backend`));
+  assert.equal(events.some((event) => event.startsWith('prepare:')), false);
   assert.ok(events.includes('wait-component:backend'));
   assert.equal(events.some((event) => event.startsWith('install:')), false);
   assert.equal(events.includes('wait'), false);
   assert.equal(events.some((event) => event.startsWith('prune:')), false);
+  assert.ok(events.includes(`inventory:${target.sourceRevision}`));
 
   await assert.rejects(
     bootstrap(target, { progress: undefined }),
     /Component release locks are upgrade-only/
+  );
+});
+
+test('component release preparation selects only manifests that own changed images', () => {
+  const previous = lock('1'.repeat(40), 'a');
+  const target = componentTarget(previous, '2'.repeat(40), ['dupaController']);
+  const selected = componentReleaseManifestSpecs(target);
+  assert.deepEqual(selected.foundation, []);
+  assert.deepEqual(selected.base.map(({ path }) => path), [
+    'backend/dupa-control/opensphere-console-dupa-controller.yaml'
+  ]);
+  assert.equal(selected.base[0].artifactSourceRevision, target.sourceRevision);
+
+  const foundationTarget = componentTarget(previous, '3'.repeat(40), ['gitea', 'supabaseAuth']);
+  const foundationSelected = componentReleaseManifestSpecs(foundationTarget);
+  assert.deepEqual(foundationSelected.foundation.map(({ path }) => path), [
+    'backend/supabase/bootstrap/supabase.yaml',
+    'backend/gitea/bootstrap/gitea.yaml'
+  ]);
+  assert.deepEqual(foundationSelected.base, []);
+
+  const stacked = componentTarget(previous, '4'.repeat(40), ['console']);
+  const inherited = componentReleaseManifestSpecs(stacked, ['dupaController']);
+  assert.equal(inherited.base[0].artifactSourceRevision, previous.sourceRevision);
+
+  const recovery = componentReleaseManifestSpecs(stacked, ['recovery']).base[0];
+  const renderedRecovery = renderManifest(
+    stacked,
+    recovery,
+    [
+      'apiVersion: batch/v1',
+      'kind: Job',
+      'metadata: { name: recovery }',
+      'spec:',
+      '  template:',
+      '    spec:',
+      '      containers:',
+      '        - name: recovery',
+      '          image: __OPENSPHERE_RECOVERY_IMAGE__',
+      '          env:',
+      '            - name: RELEASE_REVISION',
+      '              value: __OPENSPHERE_RELEASE_REVISION__'
+    ].join('\n'),
+    'hostpath',
+    'https://localhost:1114',
+    'development',
+    { sourceRevision: recovery.artifactSourceRevision }
+  );
+  assert.match(renderedRecovery, new RegExp(`value: ${previous.sourceRevision}`));
+  assert.doesNotMatch(renderedRecovery, new RegExp(`value: ${stacked.sourceRevision}`));
+});
+
+test('component rollout waits for every workload sharing the changed image', () => {
+  assert.deepEqual(COMPONENT_ROLLOUTS.backend.map(([, workload]) => workload), [
+    'deployment/opensphere-console-backend',
+    'deployment/foundation-bootstrap-reconciler',
+    'deployment/platform-release-reconciler'
+  ]);
+  assert.deepEqual(COMPONENT_ROLLOUTS.notificationDispatcher.map(([, workload]) => workload), [
+    'deployment/opensphere-notification-dispatcher',
+    'deployment/opensphere-external-channel-executor'
+  ]);
+});
+
+test('component release refuses to overwrite a missing complete release inventory', async () => {
+  const previous = lock('1'.repeat(40), 'a');
+  previous.trust = LOCAL_EDGE_TRUST;
+  delete previous.releaseBom;
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
+  const target = componentTarget(previous, '2'.repeat(40), ['backend']);
+  await assert.rejects(
+    upgrade(previous, target, { runtime: runtime(previous, []) }),
+    /requires the existing complete release inventory/
   );
 });
 
@@ -243,7 +340,12 @@ test('failed component verification rolls back only the same changed workloads',
   const target = componentTarget(previous, '2'.repeat(40), ['backend', 'console']);
   const events = [];
   await assert.rejects(
-    upgrade(previous, target, { runtime: runtime(previous, events, { failTarget: true }) }),
+    upgrade(previous, target, {
+      runtime: runtime(previous, events, {
+        failTarget: true,
+        recordedInventory: [{ name: 'complete-release' }]
+      })
+    }),
     /previous release was restored/
   );
   assert.ok(events.includes(`install-component:업그레이드:${target.sourceRevision}:backend,console`));

@@ -304,6 +304,47 @@ function baseManifestSpecs(lock) {
     : BASE_MANIFESTS;
 }
 
+function manifestSpecComponents(spec) {
+  return new Set((spec.replacements ?? []).map(([, component]) => component));
+}
+
+export function componentReleaseManifestSpecs(
+  lock,
+  changedComponents = lock.changedComponents
+) {
+  if (!Array.isArray(changedComponents) || changedComponents.length === 0) {
+    throw new Error('Component release requires a non-empty changed component set');
+  }
+  const requested = new Set(changedComponents);
+  const selectRequestedSpecs = (specs) => specs.flatMap((spec) => {
+    const owners = [...manifestSpecComponents(spec)].filter((component) => requested.has(component));
+    if (owners.length === 0) return [];
+    const sourceRevisions = new Set(owners.map((component) => {
+      const sourceRevision = lock.components?.[component]?.sourceRevision;
+      if (!/^[a-f0-9]{40}$/u.test(sourceRevision ?? '')) {
+        throw new Error(`Component release lacks a governed source revision for ${component}`);
+      }
+      return sourceRevision;
+    }));
+    if (sourceRevisions.size !== 1) {
+      throw new Error(
+        `Component release manifest ${spec.path} spans incompatible source revisions for: ${owners.join(', ')}`
+      );
+    }
+    return [{ ...spec, artifactSourceRevision: [...sourceRevisions][0] }];
+  });
+  const foundation = selectRequestedSpecs([SUPABASE_MANIFEST, GITEA_MANIFEST]);
+  const base = selectRequestedSpecs(baseManifestSpecs(lock));
+  const exposed = new Set(
+    [...foundation, ...base].flatMap((spec) => [...manifestSpecComponents(spec)])
+  );
+  const missing = changedComponents.filter((component) => !exposed.has(component));
+  if (missing.length > 0) {
+    throw new Error(`Component release has no governed manifest for: ${missing.join(', ')}`);
+  }
+  return { foundation, base };
+}
+
 function installArtifactCount(lock) {
   return foundationArtifactPaths(lock).length + 2 + baseManifestSpecs(lock).length;
 }
@@ -318,6 +359,7 @@ export const CORE_ROLLOUTS = Object.freeze([
   ['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s'],
   ['opensphere-console', 'deployment/opensphere-console-backend', '600s'],
   ['opensphere-console', 'deployment/foundation-bootstrap-reconciler', '600s'],
+  ['opensphere-console', 'deployment/platform-release-reconciler', '600s'],
   ['opensphere-console', 'deployment/opensphere-notification-dispatcher', '600s'],
   ['opensphere-console', 'deployment/opensphere-external-channel-executor', '600s'],
   ['opensphere-console', 'deployment/opensphere-console-oaa-gateway', '600s'],
@@ -327,11 +369,18 @@ export const CORE_ROLLOUTS = Object.freeze([
 
 export const COMPONENT_ROLLOUTS = Object.freeze({
   console: [['opensphere-console', 'deployment/opensphere-console', '600s']],
-  backend: [['opensphere-console', 'deployment/opensphere-console-backend', '600s']],
+  backend: [
+    ['opensphere-console', 'deployment/opensphere-console-backend', '600s'],
+    ['opensphere-console', 'deployment/foundation-bootstrap-reconciler', '600s'],
+    ['opensphere-console', 'deployment/platform-release-reconciler', '600s']
+  ],
   dupaController: [['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s']],
   oaaGateway: [['opensphere-console', 'deployment/opensphere-console-oaa-gateway', '600s']],
   oaaGovernedAdapter: [['opensphere-console', 'deployment/oaa-governed-adapter', '600s']],
-  notificationDispatcher: [['opensphere-console', 'deployment/opensphere-notification-dispatcher', '600s']],
+  notificationDispatcher: [
+    ['opensphere-console', 'deployment/opensphere-notification-dispatcher', '600s'],
+    ['opensphere-console', 'deployment/opensphere-external-channel-executor', '600s']
+  ],
   gitea: [['opensphere-console-change', 'deployment/opensphere-gitea', '900s']],
   giteaPostgres: [['opensphere-console-change', 'deployment/opensphere-gitea-postgres', '600s']],
   supabasePostgres: [['opensphere-console-data', 'statefulset/opensphere-supabase-postgres', '600s']],
@@ -479,8 +528,15 @@ function validateAuthEnvironment(value) {
   return selectAuthEnvironment('edge', value);
 }
 
-async function fetchReleaseArtifact(lock, path, { optional404 = false } = {}) {
-  const response = await fetchWithRetry(`${RAW_ROOT}/${lock.sourceRevision}/${path}`);
+async function fetchReleaseArtifact(
+  lock,
+  path,
+  { optional404 = false, sourceRevision = lock.sourceRevision } = {}
+) {
+  if (!/^[a-f0-9]{40}$/u.test(sourceRevision ?? '')) {
+    throw new Error(`Release artifact source revision is invalid for ${path}`);
+  }
+  const response = await fetchWithRetry(`${RAW_ROOT}/${sourceRevision}/${path}`);
   if (optional404 && response.status === 404) return null;
   if (!response.ok) throw new Error(`Release artifact download failed (${path}): HTTP ${response.status}`);
   return response.text();
@@ -492,7 +548,8 @@ export function renderManifest(
   sourceYaml,
   storageClass,
   consoleUrl = defaultConsoleUrl('edge', 'development'),
-  authEnvironment = 'development'
+  authEnvironment = 'development',
+  { sourceRevision = lock.sourceRevision } = {}
 ) {
   let yaml = sourceYaml;
   for (const [pattern, component] of spec.replacements ?? []) {
@@ -511,7 +568,7 @@ export function renderManifest(
   yaml = yaml.replaceAll('__OPENSPHERE_SUPABASE_NAMESPACE__', 'opensphere-console-data');
   yaml = yaml.replaceAll('https://localhost:8090', normalizedConsoleUrl);
   yaml = configureShellServiceEndpoint(yaml, normalizedConsoleUrl);
-  yaml = yaml.replaceAll('__OPENSPHERE_RELEASE_REVISION__', lock.sourceRevision);
+  yaml = yaml.replaceAll('__OPENSPHERE_RELEASE_REVISION__', sourceRevision);
   yaml = yaml.replaceAll(
     'name: AUTH_ENVIRONMENT, value: "development"',
     `name: AUTH_ENVIRONMENT, value: "${validateAuthEnvironment(authEnvironment)}"`
@@ -532,10 +589,19 @@ export async function fetchManifest(
   spec,
   storageClass,
   consoleUrl = defaultConsoleUrl('edge', 'development'),
-  authEnvironment = 'development'
+  authEnvironment = 'development',
+  { sourceRevision = lock.sourceRevision } = {}
 ) {
-  const sourceYaml = await fetchReleaseArtifact(lock, spec.path);
-  return renderManifest(lock, spec, sourceYaml, storageClass, consoleUrl, authEnvironment);
+  const sourceYaml = await fetchReleaseArtifact(lock, spec.path, { sourceRevision });
+  return renderManifest(
+    lock,
+    spec,
+    sourceYaml,
+    storageClass,
+    consoleUrl,
+    authEnvironment,
+    { sourceRevision }
+  );
 }
 
 async function writeReleaseArtifact(root, path, contents) {
@@ -1105,6 +1171,43 @@ async function prepareRelease(
   return { foundation, base, all: [...foundation.release, ...base] };
 }
 
+export async function prepareComponentRelease(
+  lock,
+  root,
+  storageClass,
+  consoleUrl,
+  authEnvironment,
+  { changedComponents = lock.changedComponents } = {}
+) {
+  const specs = componentReleaseManifestSpecs(lock, changedComponents);
+  const [foundationRelease, base] = await Promise.all([
+    Promise.all(specs.foundation.map(async (spec) => ({
+      path: spec.path,
+      yaml: await fetchManifest(
+        lock,
+        spec,
+        storageClass,
+        consoleUrl,
+        authEnvironment,
+        { sourceRevision: spec.artifactSourceRevision }
+      )
+    }))),
+    Promise.all(specs.base.map(async (spec) => ({
+      path: spec.path,
+      yaml: await fetchManifest(
+        lock,
+        spec,
+        storageClass,
+        consoleUrl,
+        authEnvironment,
+        { sourceRevision: spec.artifactSourceRevision }
+      )
+    })))
+  ]);
+  const foundation = { root, release: foundationRelease };
+  return { foundation, base, all: [...foundationRelease, ...base] };
+}
+
 export async function preflightReleaseArtifacts(lock, {
   storageClass,
   consoleUrl,
@@ -1393,6 +1496,7 @@ export async function upgrade(
     preflight,
     ensureRegistryPullSecrets,
     prepareRelease,
+    prepareComponentRelease,
     installPreparedRelease,
     installPreparedComponentRelease,
     waitForCoreRollouts,
@@ -1450,20 +1554,43 @@ export async function upgrade(
   const rollbackWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-rollback-'));
   try {
     console.log('[준비] 대상 release와 이전 release rollback artifact 검증');
-    const [target, rollback] = await Promise.all([
-      operations.prepareRelease(
-        targetLock, targetWork, config.storageClass, effectiveConsoleUrl, config.authEnvironment
-      ),
-      operations.prepareRelease(
-        previousLock,
-        rollbackWork,
-        config.storageClass,
-        effectiveConsoleUrl,
-        config.authEnvironment,
-        { optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS }
-      )
-    ]);
-    const previousInventory = operations.readReleaseInventory()
+    const [target, rollback] = componentTransition
+      ? await Promise.all([
+        operations.prepareComponentRelease(
+          targetLock,
+          targetWork,
+          config.storageClass,
+          effectiveConsoleUrl,
+          config.authEnvironment,
+          { changedComponents }
+        ),
+        operations.prepareComponentRelease(
+          previousLock,
+          rollbackWork,
+          config.storageClass,
+          effectiveConsoleUrl,
+          config.authEnvironment,
+          { changedComponents }
+        )
+      ])
+      : await Promise.all([
+        operations.prepareRelease(
+          targetLock, targetWork, config.storageClass, effectiveConsoleUrl, config.authEnvironment
+        ),
+        operations.prepareRelease(
+          previousLock,
+          rollbackWork,
+          config.storageClass,
+          effectiveConsoleUrl,
+          config.authEnvironment,
+          { optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS }
+        )
+      ]);
+    const recordedInventory = operations.readReleaseInventory();
+    if (componentTransition && !recordedInventory) {
+      throw new Error('Component release requires the existing complete release inventory');
+    }
+    const previousInventory = recordedInventory
       ?? operations.releaseResourceInventory(rollback.all);
     const targetInventory = componentTransition
       ? previousInventory
