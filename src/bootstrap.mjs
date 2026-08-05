@@ -662,6 +662,28 @@ function applyRelease(release, label, progress, { preserveHostLocalEdgeTrust = f
   }
 }
 
+const COMPONENT_BASE_MANIFEST_PATHS = Object.freeze({
+  backend: Object.freeze(['backend/opensphere-console-backend/deploy.yaml']),
+  console: Object.freeze(['deploy/opensphere-console.yaml']),
+  dupaController: Object.freeze(['backend/dupa-control/opensphere-console-dupa-controller.yaml']),
+  notificationDispatcher: Object.freeze(['backend/notification-dispatcher/deploy.yaml']),
+  recovery: Object.freeze(['backend/recovery/recovery-jobs.yaml']),
+  oaaGateway: Object.freeze(['backend/opensphere-console-oaa-gateway/deploy.yaml']),
+  oaaGovernedAdapter: Object.freeze(['backend/oaa-governed-adapter/deploy.yaml'])
+});
+
+export function componentBaseRelease(release, changedComponents) {
+  const selectedPaths = new Set();
+  for (const component of changedComponents ?? []) {
+    const paths = COMPONENT_BASE_MANIFEST_PATHS[component];
+    if (!paths) {
+      throw new Error(`Component ${component} has no isolated manifest apply contract; use an integrated release`);
+    }
+    for (const path of paths) selectedPaths.add(path);
+  }
+  return release.filter(({ path }) => selectedPaths.has(path));
+}
+
 function inventoryKey(resource) {
   return [resource.apiVersion, resource.kind, resource.namespace ?? '', resource.name].join('|');
 }
@@ -1032,7 +1054,15 @@ export async function preflightReleaseArtifacts(lock, {
   }
 }
 
-function installPreparedRelease(lock, prepared, storageClass, consoleUrl, label, progress) {
+function installPreparedRelease(lock, prepared, storageClass, consoleUrl, label, progress, {
+  componentSelection = lock.releaseScope === RELEASE_SCOPE_COMPONENT ? lock.changedComponents : null
+} = {}) {
+  if (componentSelection) {
+    applyRelease(componentBaseRelease(prepared.base, componentSelection), label, progress, {
+      preserveHostLocalEdgeTrust: lock.channel === 'edge'
+    });
+    return;
+  }
   runFoundationInstallers(lock, prepared.foundation, storageClass, consoleUrl, progress);
   applyRelease(prepared.base, label, progress, {
     preserveHostLocalEdgeTrust: lock.channel === 'edge'
@@ -1368,7 +1398,8 @@ export async function upgrade(
     const targetInventory = operations.releaseResourceInventory(target.all);
     try {
       operations.installPreparedRelease(
-        targetLock, target, config.storageClass, effectiveConsoleUrl, '업그레이드'
+        targetLock, target, config.storageClass, effectiveConsoleUrl, '업그레이드', undefined,
+        { componentSelection: targetLock.releaseScope === RELEASE_SCOPE_COMPONENT ? targetLock.changedComponents : null }
       );
       operations.recordInstallationState(
         targetLock,
@@ -1395,7 +1426,8 @@ export async function upgrade(
       console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
       try {
         operations.installPreparedRelease(
-          previousLock, rollback, config.storageClass, effectiveConsoleUrl, '롤백'
+          previousLock, rollback, config.storageClass, effectiveConsoleUrl, '롤백', undefined,
+          { componentSelection: targetLock.releaseScope === RELEASE_SCOPE_COMPONENT ? targetLock.changedComponents : null }
         );
         operations.recordInstallationState(
           previousLock,

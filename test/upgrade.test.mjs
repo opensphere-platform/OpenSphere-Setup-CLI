@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bootstrap, terminalPodError, upgrade } from '../src/bootstrap.mjs';
+import { bootstrap, componentBaseRelease, terminalPodError, upgrade } from '../src/bootstrap.mjs';
 import {
   calculateReleaseBomDigest,
   calculateReleaseDigest,
@@ -95,6 +95,23 @@ function componentTarget(previous, revision, changedComponents = ['backend']) {
   );
   return target;
 }
+
+test('component apply selects only the changed workload manifests', () => {
+  const release = [
+    { path: 'backend/opensphere-console-backend/deploy.yaml', yaml: 'backend' },
+    { path: 'deploy/opensphere-console.yaml', yaml: 'console' },
+    { path: 'backend/dupa-control/opensphere-console-dupa-controller.yaml', yaml: 'dupa' },
+    { path: 'deploy/production-hardening.yaml', yaml: 'shared' }
+  ];
+  assert.deepEqual(
+    componentBaseRelease(release, ['backend', 'console']).map(({ path }) => path),
+    ['backend/opensphere-console-backend/deploy.yaml', 'deploy/opensphere-console.yaml']
+  );
+  assert.throws(
+    () => componentBaseRelease(release, ['supabasePostgres']),
+    /no isolated manifest apply contract/
+  );
+});
 
 function runtime(previous, events, { failTarget = false } = {}) {
   return {
