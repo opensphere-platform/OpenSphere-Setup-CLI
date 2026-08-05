@@ -352,6 +352,37 @@ function ensureGenericSecret(namespace, name, literals = {}, files = {}) {
   return true;
 }
 
+function ensureFoundationDataEngineSecretAccess() {
+  applyYaml(`${JSON.stringify({
+    apiVersion: 'rbac.authorization.k8s.io/v1',
+    kind: 'Role',
+    metadata: { name: 'foundation-console-valkey-secret-manager', namespace: 'opensphere-foundation' },
+    rules: [{
+      apiGroups: [''], resources: ['secrets'],
+      resourceNames: ['foundation-data-valkey-auth', 'rustfs-credentials'],
+      verbs: ['get', 'patch']
+    }]
+  })}\n`);
+  applyYaml(`${JSON.stringify({
+    apiVersion: 'rbac.authorization.k8s.io/v1',
+    kind: 'RoleBinding',
+    metadata: { name: 'foundation-console-valkey-secret-manager', namespace: 'opensphere-foundation' },
+    roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'Role', name: 'foundation-console-valkey-secret-manager' },
+    subjects: [{ kind: 'ServiceAccount', name: 'opensphere-foundation', namespace: 'opensphere-console' }]
+  })}\n`);
+}
+
+export function ensureFoundationDataEngineCredentials() {
+  ensureGenericSecret('opensphere-foundation', 'foundation-data-valkey-auth', {
+    password: randomBytes(32).toString('base64')
+  });
+  ensureGenericSecret('opensphere-foundation', 'rustfs-credentials', {
+    access_key: `opensphere-${randomBytes(9).toString('hex')}`,
+    secret_key: randomBytes(32).toString('base64url')
+  });
+  ensureFoundationDataEngineSecretAccess();
+}
+
 function ensureRecoveryTargetSecret(namespace, source) {
   const candidate = recoveryTargetData(source);
   let existing = null;
@@ -1199,10 +1230,8 @@ export async function bootstrap(lock, {
     // Foundation Valkey는 Console/Control Plane에 namespace-wide Secret create
     // 권한을 주지 않는다. 플랫폼 installer가 exact Secret을 최초 1회 만들고,
     // ensureGenericSecret의 merge 규칙으로 resume·reboot·upgrade 시 값을 보존한다.
-    ensureGenericSecret('opensphere-foundation', 'foundation-data-valkey-auth', {
-      password: randomBytes(32).toString('base64')
-    });
-    progress?.done('CLI·notification·external-channel runtime 및 Valkey exact Secret 준비');
+    ensureFoundationDataEngineCredentials();
+    progress?.done('CLI·notification·external-channel runtime 및 Valkey·RustFS exact Secret·RBAC 준비');
 
     progress?.step('Supabase·Gitea foundation 및 OpenSphere workload 적용');
     installPreparedRelease(

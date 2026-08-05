@@ -50,6 +50,23 @@ test('fresh bootstrap provisions the exact Valkey credential without rotating it
   assert.match(bootstrap, /mergeSecretData\(existing\?\.data, candidate\)/);
 });
 
+test('fresh bootstrap provisions the exact RustFS credential without rotating it on resume', () => {
+  const bootstrap = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
+  assert.match(
+    bootstrap,
+    /ensureGenericSecret\('opensphere-foundation', 'rustfs-credentials', \{[\s\S]*?access_key:[\s\S]*?secret_key: randomBytes\(32\)\.toString\('base64url'\)/
+  );
+  assert.match(bootstrap, /mergeSecretData\(existing\?\.data, candidate\)/);
+});
+
+test('fresh bootstrap grants the Foundation Console only exact data-engine Secret access', () => {
+  const bootstrap = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
+  assert.match(bootstrap, /resourceNames: \['foundation-data-valkey-auth', 'rustfs-credentials'\]/);
+  assert.match(bootstrap, /verbs: \['get', 'patch'\]/);
+  assert.match(bootstrap, /subjects: \[\{ kind: 'ServiceAccount', name: 'opensphere-foundation', namespace: 'opensphere-console' \}\]/);
+  assert.doesNotMatch(bootstrap, /resources: \['secrets'\][\s\S]{0,180}verbs: \[[^\]]*(?:create|delete|list|watch)/);
+});
+
 test('all current Supabase migrations, including the module operation ledger, are release material', () => {
   assert.equal(SUPABASE_MIGRATIONS[0], '0001_console_backbone.sql');
   assert.equal(SUPABASE_MIGRATIONS.at(-1), '0035_module_operation_ledger.sql');
