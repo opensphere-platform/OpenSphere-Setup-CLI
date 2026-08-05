@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bootstrap, componentBaseRelease, terminalPodError, upgrade } from '../src/bootstrap.mjs';
+import {
+  bootstrap,
+  componentBaseRelease,
+  componentRollouts,
+  terminalPodError,
+  upgrade
+} from '../src/bootstrap.mjs';
 import {
   calculateReleaseBomDigest,
   calculateReleaseDigest,
@@ -98,7 +104,10 @@ function componentTarget(previous, revision, changedComponents = ['backend']) {
 
 test('component apply selects only the changed workload manifests', () => {
   const release = [
-    { path: 'backend/opensphere-console-backend/deploy.yaml', yaml: 'backend' },
+    {
+      path: 'backend/opensphere-console-backend/deploy.yaml',
+      yaml: 'backend\n---\n# Foundation bootstrap is not executed by the browser-facing Backend\nfoundation'
+    },
     { path: 'deploy/opensphere-console.yaml', yaml: 'console' },
     { path: 'backend/dupa-control/opensphere-console-dupa-controller.yaml', yaml: 'dupa' },
     { path: 'deploy/production-hardening.yaml', yaml: 'shared' }
@@ -107,9 +116,21 @@ test('component apply selects only the changed workload manifests', () => {
     componentBaseRelease(release, ['backend', 'console']).map(({ path }) => path),
     ['backend/opensphere-console-backend/deploy.yaml', 'deploy/opensphere-console.yaml']
   );
+  assert.equal(componentBaseRelease(release, ['backend'])[0].yaml, 'backend\n');
   assert.throws(
     () => componentBaseRelease(release, ['supabasePostgres']),
     /no isolated manifest apply contract/
+  );
+});
+
+test('component rollout verification is limited to selected workloads', () => {
+  assert.deepEqual(componentRollouts(['backend', 'console']), [
+    ['opensphere-console', 'deployment/opensphere-console-backend', '600s'],
+    ['opensphere-console', 'deployment/opensphere-console', '600s']
+  ]);
+  assert.throws(
+    () => componentRollouts(['recovery']),
+    /no isolated rollout verification contract/
   );
 });
 
@@ -155,9 +176,9 @@ function runtime(previous, events, { failTarget = false } = {}) {
     recordReleaseInventory: (release) => events.push(`inventory:${release.sourceRevision}`),
     pruneReleaseResources: (from, to) => events.push(`prune:${from[0].name}->${to[0].name}`),
     recordInstallationState: (release) => events.push(`record:${release.sourceRevision}`),
-    waitForCoreRollouts: () => events.push('wait'),
-    verifyInstallation: async (release) => {
-      events.push(`verify:${release.sourceRevision}`);
+    waitForCoreRollouts: (_progress, selection) => events.push(`wait:${(selection ?? []).join(',')}`),
+    verifyInstallation: async (release, options) => {
+      events.push(`verify:${release.sourceRevision}:${(options?.componentSelection ?? []).join(',')}`);
       if (failTarget && release.sourceRevision !== previous.sourceRevision) {
         throw new Error('target is unhealthy');
       }
@@ -179,7 +200,7 @@ test('upgrade prefetches target and rollback artifacts before target install', a
   assert.ok(targetPrepare < install && rollbackPrepare < install);
   assert.ok(events.includes(`prepare-legacy-rollback:${previous.sourceRevision}`));
   assert.equal(events.includes(`prepare-legacy-rollback:${target.sourceRevision}`), false);
-  assert.ok(events.indexOf(`verify:${target.sourceRevision}`) > install);
+  assert.ok(events.indexOf(`verify:${target.sourceRevision}:`) > install);
   assert.ok(events.includes(`prune:release-${previous.sourceRevision}->release-${target.sourceRevision}`));
   assert.ok(events.includes('namespaces'));
 });
@@ -195,6 +216,8 @@ test('component release is upgrade-only and keeps a complete rollback lock', asy
   assert.equal(result.changed, true);
   assert.equal(result.lock.components.console.image, previous.components.console.image);
   assert.ok(events.includes(`record:${target.sourceRevision}`));
+  assert.ok(events.includes('wait:backend'));
+  assert.ok(events.includes(`verify:${target.sourceRevision}:backend`));
 
   await assert.rejects(
     bootstrap(target, { progress: undefined }),
@@ -220,7 +243,7 @@ test('failed target verification restores and verifies the previous Supabase/Git
     /previous release was restored: target is unhealthy/
   );
   const rollbackInstall = events.indexOf(`install:롤백:${previous.sourceRevision}`);
-  const rollbackVerify = events.lastIndexOf(`verify:${previous.sourceRevision}`);
+  const rollbackVerify = events.lastIndexOf(`verify:${previous.sourceRevision}:`);
   assert.ok(rollbackInstall >= 0 && rollbackVerify > rollbackInstall);
   assert.ok(events.includes(`record:${previous.sourceRevision}`));
 });

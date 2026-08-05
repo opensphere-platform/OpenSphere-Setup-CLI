@@ -201,9 +201,19 @@ function verifyServiceEndpoints() {
   return verifyRequiredServiceEndpoints(services, endpointSlices);
 }
 
-function verifyWorkloads(lock, { requireZeroRestarts }) {
+function workloadReady(resource) {
+  const replicas = Number(resource.spec?.replicas ?? 1);
+  return Number(resource.status?.observedGeneration ?? 0) === Number(resource.metadata?.generation ?? 0)
+    && Number(resource.status?.updatedReplicas ?? 0) === replicas
+    && Number(resource.status?.readyReplicas ?? 0) === replicas
+    && Number(resource.status?.availableReplicas ?? 0) === replicas;
+}
+
+function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null }) {
+  const selectedComponents = componentSelection ? new Set(componentSelection) : null;
   const expected = new Set();
   const resources = [];
+  const selectedWorkloads = [];
   for (const spec of WORKLOADS) {
     const resource = getJson(['-n', spec.namespace, 'get', spec.kind, spec.name]);
     const podSpec = spec.kind === 'cronjob'
@@ -221,13 +231,46 @@ function verifyWorkloads(lock, { requireZeroRestarts }) {
     }
     expected.add(expectedImage);
     resources.push(`${spec.namespace}/${spec.kind}/${spec.name}`);
+    if (selectedComponents?.has(spec.component)) {
+      if (spec.kind !== 'cronjob' && !workloadReady(resource)) {
+        throw new Error(`Changed workload is not Ready: ${spec.namespace}/${spec.kind}/${spec.name}`);
+      }
+      selectedWorkloads.push({ spec, resource, expectedImage });
+    }
   }
   const lockedImages = new Set(Object.values(lock.components).map(({ image }) => image));
   const missing = [...lockedImages].filter((image) => !expected.has(image));
   if (missing.length) throw new Error(`Release components are not represented by base workloads: ${missing.join(', ')}`);
 
-  const pods = getJson(['get', 'pods', '-A']).items
-    .filter((pod) => NAMESPACES.includes(pod.metadata?.namespace));
+  const allPods = getJson(['get', 'pods', '-A']).items;
+  const pods = selectedComponents
+    ? allPods.filter((pod) => selectedWorkloads.some(({ spec, resource, expectedImage }) => {
+      if (spec.kind === 'cronjob' || pod.metadata?.namespace !== spec.namespace) return false;
+      const labels = resource.spec?.selector?.matchLabels ?? {};
+      const matchesSelector = Object.entries(labels)
+        .every(([key, value]) => pod.metadata?.labels?.[key] === value);
+      const usesExpectedImage = (pod.spec?.containers ?? [])
+        .some(({ name, image }) => name === spec.container && image === expectedImage);
+      return matchesSelector && usesExpectedImage;
+    }))
+    : allPods.filter((pod) => NAMESPACES.includes(pod.metadata?.namespace));
+  if (selectedComponents) {
+    for (const { spec, resource, expectedImage } of selectedWorkloads) {
+      if (spec.kind === 'cronjob') continue;
+      const labels = resource.spec?.selector?.matchLabels ?? {};
+      const matching = pods.filter((pod) => (
+        pod.metadata?.namespace === spec.namespace
+        && Object.entries(labels).every(([key, value]) => pod.metadata?.labels?.[key] === value)
+        && (pod.spec?.containers ?? []).some(
+          ({ name, image }) => name === spec.container && image === expectedImage
+        )
+      ));
+      const replicas = Number(resource.spec?.replicas ?? 1);
+      if (matching.length < replicas) {
+        throw new Error(`Changed workload has no complete target Pod set: ${spec.namespace}/${spec.kind}/${spec.name}`);
+      }
+    }
+  }
   const nonRunning = pods.filter((pod) => pod.status?.phase !== 'Running');
   if (nonRunning.length) {
     throw new Error(`OpenSphere Pods are not Running: ${nonRunning.map((pod) => `${pod.metadata.namespace}/${pod.metadata.name}:${pod.status?.phase}`).join(', ')}`);
@@ -481,7 +524,8 @@ export async function verifyInstallation(lock, {
   requireZeroRestarts = false,
   consoleUrl,
   requireRecoveryDrill = false,
-  mode = 'strict'
+  mode = 'strict',
+  componentSelection = null
 } = {}) {
   if (!['strict', 'rollback'].includes(mode)) throw new Error(`Unsupported installation verification mode: ${mode}`);
   const allowLegacyComponentSet = mode === 'rollback';
@@ -494,7 +538,10 @@ export async function verifyInstallation(lock, {
   const registryPull = verifyRegistryPullPath(lock);
   const pvcCount = verifyPersistentStorage(config.storageClass);
   const serviceEndpoints = await eventuallyReady(async () => verifyServiceEndpoints());
-  const runtime = await eventuallyReady(async () => verifyWorkloads(lock, { requireZeroRestarts }));
+  const runtime = await eventuallyReady(async () => verifyWorkloads(lock, {
+    requireZeroRestarts,
+    componentSelection
+  }));
   const postgresql = verifySupabaseDatabase();
   const supabase = await verifySupabaseServices();
   const gitea = await verifyGitea();

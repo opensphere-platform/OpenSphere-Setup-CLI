@@ -672,6 +672,21 @@ const COMPONENT_BASE_MANIFEST_PATHS = Object.freeze({
   oaaGovernedAdapter: Object.freeze(['backend/oaa-governed-adapter/deploy.yaml'])
 });
 
+function projectComponentManifest(manifest, components) {
+  if (
+    manifest.path === 'backend/opensphere-console-backend/deploy.yaml'
+    && components.includes('backend')
+  ) {
+    const boundary = '\n---\n# Foundation bootstrap is not executed by the browser-facing Backend';
+    const index = manifest.yaml.indexOf(boundary);
+    if (index < 0) {
+      throw new Error('Backend manifest no longer exposes the isolated browser-facing Backend boundary');
+    }
+    return { ...manifest, yaml: `${manifest.yaml.slice(0, index).trimEnd()}\n` };
+  }
+  return manifest;
+}
+
 export function componentBaseRelease(release, changedComponents) {
   const selectedPaths = new Set();
   for (const component of changedComponents ?? []) {
@@ -681,7 +696,9 @@ export function componentBaseRelease(release, changedComponents) {
     }
     for (const path of paths) selectedPaths.add(path);
   }
-  return release.filter(({ path }) => selectedPaths.has(path));
+  return release
+    .filter(({ path }) => selectedPaths.has(path))
+    .map((manifest) => projectComponentManifest(manifest, changedComponents));
 }
 
 function inventoryKey(resource) {
@@ -777,8 +794,48 @@ export function terminalPodError(pods) {
   return null;
 }
 
-function waitForCoreRollouts(progress) {
-  for (const [namespace, resource, timeout] of CORE_ROLLOUTS) {
+const COMPONENT_ROLLOUTS = Object.freeze({
+  backend: Object.freeze([
+    ['opensphere-console', 'deployment/opensphere-console-backend', '600s']
+  ]),
+  console: Object.freeze([
+    ['opensphere-console', 'deployment/opensphere-console', '600s']
+  ]),
+  dupaController: Object.freeze([
+    ['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s']
+  ]),
+  notificationDispatcher: Object.freeze([
+    ['opensphere-console', 'deployment/opensphere-notification-dispatcher', '600s'],
+    ['opensphere-console', 'deployment/opensphere-external-channel-executor', '600s']
+  ]),
+  oaaGateway: Object.freeze([
+    ['opensphere-console', 'deployment/opensphere-console-oaa-gateway', '600s']
+  ]),
+  oaaGovernedAdapter: Object.freeze([
+    ['opensphere-console', 'deployment/oaa-governed-adapter', '600s']
+  ])
+});
+
+export function componentRollouts(changedComponents) {
+  const selected = [];
+  const seen = new Set();
+  for (const component of changedComponents ?? []) {
+    const rollouts = COMPONENT_ROLLOUTS[component];
+    if (!rollouts) {
+      throw new Error(`Component ${component} has no isolated rollout verification contract; use an integrated release`);
+    }
+    for (const rollout of rollouts) {
+      const key = `${rollout[0]}/${rollout[1]}`;
+      if (!seen.has(key)) selected.push(rollout);
+      seen.add(key);
+    }
+  }
+  return selected;
+}
+
+function waitForCoreRollouts(progress, changedComponents = null) {
+  const rollouts = changedComponents ? componentRollouts(changedComponents) : CORE_ROLLOUTS;
+  for (const [namespace, resource, timeout] of rollouts) {
     progress?.wait(`${namespace}/${resource} rollout`, `timeout=${timeout}`);
     const deadline = Date.now() + Number.parseInt(timeout, 10) * 1000;
     while (Date.now() < deadline) {
@@ -1396,6 +1453,9 @@ export async function upgrade(
     const previousInventory = operations.readReleaseInventory()
       ?? operations.releaseResourceInventory(rollback.all);
     const targetInventory = operations.releaseResourceInventory(target.all);
+    const componentSelection = targetLock.releaseScope === RELEASE_SCOPE_COMPONENT
+      ? targetLock.changedComponents
+      : null;
     try {
       operations.installPreparedRelease(
         targetLock, target, config.storageClass, effectiveConsoleUrl, '업그레이드', undefined,
@@ -1409,10 +1469,11 @@ export async function upgrade(
         config.authEnvironment,
         config.shellTlsSecret
       );
-      operations.waitForCoreRollouts();
+      operations.waitForCoreRollouts(undefined, componentSelection);
       const evidence = await operations.verifyInstallation(targetLock, {
         consoleUrl: effectiveConsoleUrl,
-        requireZeroRestarts: false
+        requireZeroRestarts: false,
+        componentSelection
       });
       operations.pruneReleaseResources(previousInventory, targetInventory);
       operations.recordReleaseInventory(targetLock, targetInventory);
@@ -1437,11 +1498,12 @@ export async function upgrade(
           config.authEnvironment,
           config.shellTlsSecret
         );
-        operations.waitForCoreRollouts();
+        operations.waitForCoreRollouts(undefined, componentSelection);
         await operations.verifyInstallation(previousLock, {
           consoleUrl: effectiveConsoleUrl,
           requireZeroRestarts: false,
-          mode: 'rollback'
+          mode: 'rollback',
+          componentSelection
         });
         operations.pruneReleaseResources(targetInventory, previousInventory);
         operations.recordReleaseInventory(previousLock, previousInventory);
