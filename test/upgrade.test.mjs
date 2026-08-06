@@ -333,6 +333,38 @@ test('component release applies only workload documents that contain a changed e
   assert.doesNotMatch(selected[0].yaml, new RegExp(target.components.console.image.replaceAll('.', '\\.')));
 });
 
+test('a single-owner component manifest applies its RBAC and workload atomically', () => {
+  const previous = lock('1'.repeat(40), 'a');
+  previous.trust = LOCAL_EDGE_TRUST;
+  delete previous.releaseBom;
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
+  const target = componentTarget(previous, '2'.repeat(40), ['backend']);
+  const selected = componentReleaseWorkloadManifests(target, {
+    foundation: { release: [] },
+    base: [{
+      path: 'backend/opensphere-console-backend/deploy.yaml',
+      yaml: [
+        'apiVersion: rbac.authorization.k8s.io/v1',
+        'kind: Role',
+        'metadata: { name: opensphere-console-backend-installation-lock }',
+        '---',
+        'apiVersion: apps/v1',
+        'kind: Deployment',
+        'metadata: { name: opensphere-console-backend }',
+        'spec:',
+        '  template:',
+        '    spec:',
+        '      containers:',
+        `        - image: ${target.components.backend.image}`
+      ].join('\n')
+    }]
+  });
+  assert.equal(selected.length, 1);
+  assert.match(selected[0].yaml, /kind: Role/);
+  assert.match(selected[0].yaml, /opensphere-console-backend-installation-lock/);
+  assert.match(selected[0].yaml, new RegExp(target.components.backend.image.replaceAll('.', '\\.')));
+});
+
 test('failed component verification rolls back only the same changed workloads', async () => {
   const previous = lock('1'.repeat(40), 'a');
   previous.trust = LOCAL_EDGE_TRUST;

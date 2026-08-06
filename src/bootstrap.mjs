@@ -761,6 +761,17 @@ export function componentReleaseWorkloadManifests(
     );
     let found = false;
     for (const source of sources) {
+      const baseSpec = baseManifestSpecs(lock).find(({ path }) => path === source.path);
+      const completeOwners = baseSpec ? manifestSpecComponents(baseSpec) : new Set();
+      if (completeOwners.size === 1 && completeOwners.has(component)) {
+        if (!imageLine.test(source.yaml)) continue;
+        found = true;
+        selected.set(`${source.path}#complete`, {
+          path: `${source.path}#${component}`,
+          yaml: source.yaml.endsWith('\n') ? source.yaml : `${source.yaml}\n`
+        });
+        continue;
+      }
       manifestDocuments(source.yaml).forEach((document, index) => {
         if (!imageLine.test(document)) return;
         found = true;
