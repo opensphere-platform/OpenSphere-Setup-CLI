@@ -27,8 +27,10 @@ test('managed cluster RBAC retains OAA environment-reader lifecycle ownership bu
   assert.equal(MANAGED_CLUSTER_RBAC.some((resource) => resource.includes('controlled-operator')), false);
 });
 
-test('managed uninstall owns the two Console admission policy bindings and policies', () => {
+test('managed uninstall owns every Console admission policy binding and policy', () => {
   assert.deepEqual(MANAGED_CLUSTER_POLICIES, [
+    'validatingadmissionpolicybinding/foundation-bootstrap-closed-catalog',
+    'validatingadmissionpolicy/foundation-bootstrap-closed-catalog',
     'validatingadmissionpolicybinding/opensphere-console-manual-ui-contract',
     'validatingadmissionpolicy/opensphere-console-manual-ui-contract',
     'validatingadmissionpolicybinding/opensphere-console-image-integrity-workload',
