@@ -43,7 +43,7 @@ test('fresh bootstrap is Supabase Data & Identity plus separate Gitea change aut
 
 test('all current Supabase migrations, including reboot recovery contracts, are release material', () => {
   assert.equal(SUPABASE_MIGRATIONS[0], '0001_console_backbone.sql');
-  assert.equal(SUPABASE_MIGRATIONS.at(-1), '0042_foundation_bootstrap_catalog_mirror.sql');
+  assert.equal(SUPABASE_MIGRATIONS.at(-1), '0043_external_backup_s3_compatible_profiles.sql');
   assert.equal(SUPABASE_MIGRATIONS.includes('0011_notification_delivery.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0022_oaa_recovery_owner_permissions.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0024_ai_consumer_contract.sql'), true);
@@ -62,6 +62,7 @@ test('all current Supabase migrations, including reboot recovery contracts, are 
   assert.equal(SUPABASE_MIGRATIONS.includes('0040_approval_outcome_ledger.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0041_agent_action_ledger.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0042_foundation_bootstrap_catalog_mirror.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0043_external_backup_s3_compatible_profiles.sql'), true);
   assert.equal(new Set(SUPABASE_MIGRATIONS).size, SUPABASE_MIGRATIONS.length);
   const bootstrapSource = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(bootstrapSource, /0032_audit_ledger_integrity\.sql/);
