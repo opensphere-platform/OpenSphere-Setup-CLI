@@ -1622,7 +1622,8 @@ export async function upgrade(
       else operations.waitForCoreRollouts();
       const evidence = await operations.verifyInstallation(targetLock, {
         consoleUrl: effectiveConsoleUrl,
-        requireZeroRestarts: false
+        requireZeroRestarts: false,
+        componentSelection: componentTransition ? changedComponents : null
       });
       if (!componentTransition) {
         operations.pruneReleaseResources(previousInventory, targetInventory);
@@ -1664,7 +1665,8 @@ export async function upgrade(
         await operations.verifyInstallation(previousLock, {
           consoleUrl: effectiveConsoleUrl,
           requireZeroRestarts: false,
-          mode: 'rollback'
+          mode: 'rollback',
+          componentSelection: componentTransition ? changedComponents : null
         });
         if (!componentTransition) {
           operations.pruneReleaseResources(targetInventory, previousInventory);

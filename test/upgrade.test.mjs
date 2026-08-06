@@ -166,8 +166,8 @@ function runtime(previous, events, { failTarget = false, recordedInventory = nul
     recordInstallationState: (release) => events.push(`record:${release.sourceRevision}`),
     waitForCoreRollouts: () => events.push('wait'),
     waitForComponentRollouts: (changed) => events.push(`wait-component:${changed.join(',')}`),
-    verifyInstallation: async (release) => {
-      events.push(`verify:${release.sourceRevision}`);
+    verifyInstallation: async (release, options) => {
+      events.push(`verify:${release.sourceRevision}:${(options?.componentSelection ?? []).join(',')}`);
       if (failTarget && release.sourceRevision !== previous.sourceRevision) {
         throw new Error('target is unhealthy');
       }
@@ -189,7 +189,7 @@ test('upgrade prefetches target and rollback artifacts before target install', a
   assert.ok(targetPrepare < install && rollbackPrepare < install);
   assert.ok(events.includes(`prepare-legacy-rollback:${previous.sourceRevision}`));
   assert.equal(events.includes(`prepare-legacy-rollback:${target.sourceRevision}`), false);
-  assert.ok(events.indexOf(`verify:${target.sourceRevision}`) > install);
+  assert.ok(events.indexOf(`verify:${target.sourceRevision}:`) > install);
   assert.ok(events.includes(`prune:release-${previous.sourceRevision}->release-${target.sourceRevision}`));
   assert.ok(events.includes('namespaces'));
 });
@@ -212,6 +212,7 @@ test('component release is upgrade-only and keeps a complete rollback lock', asy
   assert.ok(events.includes(`prepare-component:${previous.sourceRevision}:backend`));
   assert.equal(events.some((event) => event.startsWith('prepare:')), false);
   assert.ok(events.includes('wait-component:backend'));
+  assert.ok(events.includes(`verify:${target.sourceRevision}:backend`));
   assert.equal(events.some((event) => event.startsWith('install:')), false);
   assert.equal(events.includes('wait'), false);
   assert.equal(events.some((event) => event.startsWith('prune:')), false);
@@ -372,7 +373,7 @@ test('failed target verification restores and verifies the previous Supabase/Git
     /previous release was restored: target is unhealthy/
   );
   const rollbackInstall = events.indexOf(`install:롤백:${previous.sourceRevision}`);
-  const rollbackVerify = events.lastIndexOf(`verify:${previous.sourceRevision}`);
+  const rollbackVerify = events.lastIndexOf(`verify:${previous.sourceRevision}:`);
   assert.ok(rollbackInstall >= 0 && rollbackVerify > rollbackInstall);
   assert.ok(events.includes(`record:${previous.sourceRevision}`));
 });
