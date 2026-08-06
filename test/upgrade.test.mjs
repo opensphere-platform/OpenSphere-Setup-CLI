@@ -130,8 +130,10 @@ test('upgrade prefetches target and rollback artifacts before target install', a
   const targetPrepare = events.indexOf(`prepare:${target.sourceRevision}`);
   const rollbackPrepare = events.indexOf(`prepare:${previous.sourceRevision}`);
   const install = events.indexOf(`install:업그레이드:${target.sourceRevision}`);
+  const targetRecord = events.indexOf(`record:${target.sourceRevision}`);
   assert.ok(targetPrepare >= 0 && rollbackPrepare >= 0 && install >= 0);
   assert.ok(targetPrepare < install && rollbackPrepare < install);
+  assert.ok(targetRecord >= 0 && targetRecord < install);
   assert.ok(events.includes(`prepare-legacy-rollback:${previous.sourceRevision}`));
   assert.equal(events.includes(`prepare-legacy-rollback:${target.sourceRevision}`), false);
   assert.ok(events.indexOf(`verify:${target.sourceRevision}`) > install);
@@ -157,9 +159,10 @@ test('failed target verification restores and verifies the previous Supabase/Git
     /previous release was restored: target is unhealthy/
   );
   const rollbackInstall = events.indexOf(`install:롤백:${previous.sourceRevision}`);
+  const rollbackRecord = events.lastIndexOf(`record:${previous.sourceRevision}`);
   const rollbackVerify = events.lastIndexOf(`verify:${previous.sourceRevision}`);
   assert.ok(rollbackInstall >= 0 && rollbackVerify > rollbackInstall);
-  assert.ok(events.includes(`record:${previous.sourceRevision}`));
+  assert.ok(rollbackRecord >= 0 && rollbackRecord < rollbackInstall);
 });
 
 test('Supabase/Gitea upgrade path contains no retired backup-boundary operation', async () => {
