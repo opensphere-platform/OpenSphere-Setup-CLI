@@ -680,7 +680,14 @@ function projectComponentManifest(manifest, components) {
     const boundary = '\n---\n# Foundation bootstrap is not executed by the browser-facing Backend';
     const index = manifest.yaml.indexOf(boundary);
     if (index < 0) {
-      throw new Error('Backend manifest no longer exposes the isolated browser-facing Backend boundary');
+      // Newer releases keep the browser-facing Backend in a standalone
+      // manifest. Preserve the legacy truncation only while the historical
+      // bootstrap document is still present; otherwise the whole file is the
+      // isolated component contract.
+      if (manifest.yaml.includes('foundation-bootstrap-reconciler')) {
+        throw new Error('Backend manifest contains Foundation bootstrap resources without the isolation boundary');
+      }
+      return manifest;
     }
     return { ...manifest, yaml: `${manifest.yaml.slice(0, index).trimEnd()}\n` };
   }

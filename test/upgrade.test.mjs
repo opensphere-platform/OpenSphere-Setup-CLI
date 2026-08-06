@@ -117,6 +117,20 @@ test('component apply selects only the changed workload manifests', () => {
     ['backend/opensphere-console-backend/deploy.yaml', 'deploy/opensphere-console.yaml']
   );
   assert.equal(componentBaseRelease(release, ['backend'])[0].yaml, 'backend\n');
+  assert.equal(
+    componentBaseRelease([{
+      path: 'backend/opensphere-console-backend/deploy.yaml',
+      yaml: 'standalone backend\n'
+    }], ['backend'])[0].yaml,
+    'standalone backend\n'
+  );
+  assert.throws(
+    () => componentBaseRelease([{
+      path: 'backend/opensphere-console-backend/deploy.yaml',
+      yaml: 'backend\n---\nmetadata: { name: foundation-bootstrap-reconciler }\n'
+    }], ['backend']),
+    /contains Foundation bootstrap resources without the isolation boundary/
+  );
   assert.throws(
     () => componentBaseRelease(release, ['supabasePostgres']),
     /no isolated manifest apply contract/
