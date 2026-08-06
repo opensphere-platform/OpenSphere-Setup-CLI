@@ -742,6 +742,24 @@ export function releaseResourceInventory(release, kubectlFn = kubectl) {
     inventoryKey(left).localeCompare(inventoryKey(right)));
 }
 
+export function mergeComponentReleaseInventory(
+  previousInventory,
+  previousComponentInventory,
+  targetComponentInventory
+) {
+  const replaced = new Set((previousComponentInventory ?? []).map(inventoryKey));
+  const merged = new Map(
+    (previousInventory ?? [])
+      .filter((resource) => !replaced.has(inventoryKey(resource)))
+      .map((resource) => [inventoryKey(resource), resource])
+  );
+  for (const resource of targetComponentInventory ?? []) {
+    merged.set(inventoryKey(resource), resource);
+  }
+  return [...merged.values()].sort((left, right) =>
+    inventoryKey(left).localeCompare(inventoryKey(right)));
+}
+
 function readReleaseInventory() {
   try {
     const configMap = JSON.parse(kubectl([
@@ -1457,12 +1475,24 @@ export async function upgrade(
         { optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS }
       )
     ]);
-    const previousInventory = operations.readReleaseInventory()
-      ?? operations.releaseResourceInventory(rollback.all);
-    const targetInventory = operations.releaseResourceInventory(target.all);
     const componentSelection = targetLock.releaseScope === RELEASE_SCOPE_COMPONENT
       ? targetLock.changedComponents
       : null;
+    const previousInventory = operations.readReleaseInventory()
+      ?? operations.releaseResourceInventory(rollback.all);
+    const previousComponentInventory = componentSelection
+      ? operations.releaseResourceInventory(componentBaseRelease(rollback.base, componentSelection))
+      : previousInventory;
+    const targetComponentInventory = componentSelection
+      ? operations.releaseResourceInventory(componentBaseRelease(target.base, componentSelection))
+      : operations.releaseResourceInventory(target.all);
+    const targetInventory = componentSelection
+      ? mergeComponentReleaseInventory(
+        previousInventory,
+        previousComponentInventory,
+        targetComponentInventory
+      )
+      : targetComponentInventory;
     try {
       operations.installPreparedRelease(
         targetLock, target, config.storageClass, effectiveConsoleUrl, '업그레이드', undefined,
@@ -1482,7 +1512,7 @@ export async function upgrade(
         requireZeroRestarts: false,
         componentSelection
       });
-      operations.pruneReleaseResources(previousInventory, targetInventory);
+      operations.pruneReleaseResources(previousComponentInventory, targetComponentInventory);
       operations.recordReleaseInventory(targetLock, targetInventory);
       return {
         changed: true,
@@ -1512,7 +1542,7 @@ export async function upgrade(
           mode: 'rollback',
           componentSelection
         });
-        operations.pruneReleaseResources(targetInventory, previousInventory);
+        operations.pruneReleaseResources(targetComponentInventory, previousComponentInventory);
         operations.recordReleaseInventory(previousLock, previousInventory);
       } catch (rollbackError) {
         throw new Error(`Upgrade failed (${upgradeError.message}); rollback also failed (${rollbackError.message})`);

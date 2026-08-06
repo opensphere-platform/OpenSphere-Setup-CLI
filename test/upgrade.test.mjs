@@ -4,6 +4,7 @@ import {
   bootstrap,
   componentBaseRelease,
   componentRollouts,
+  mergeComponentReleaseInventory,
   terminalPodError,
   upgrade
 } from '../src/bootstrap.mjs';
@@ -148,6 +149,23 @@ test('component rollout verification is limited to selected workloads', () => {
   );
 });
 
+test('component inventory replacement preserves every unrelated managed resource', () => {
+  const resource = (name) => ({
+    apiVersion: 'apps/v1',
+    kind: 'Deployment',
+    namespace: 'opensphere-console',
+    name
+  });
+  assert.deepEqual(
+    mergeComponentReleaseInventory(
+      [resource('backend-old'), resource('foundation-unrelated')],
+      [resource('backend-old')],
+      [resource('backend-new')]
+    ).map(({ name }) => name),
+    ['backend-new', 'foundation-unrelated']
+  );
+});
+
 function runtime(previous, events, { failTarget = false } = {}) {
   return {
     verifyReleaseLock: async (release, options) =>
@@ -180,15 +198,16 @@ function runtime(previous, events, { failTarget = false } = {}) {
     },
     installPreparedRelease: (release, prepared, storageClass, consoleUrl, label) =>
       events.push(`install:${label}:${prepared.all[0].yaml}`),
-    releaseResourceInventory: (release) => [{
+    releaseResourceInventory: (release) => release.length ? [{
       apiVersion: 'v1',
       kind: 'ConfigMap',
       namespace: 'opensphere-console',
       name: `release-${release[0].yaml}`
-    }],
+    }] : [],
     readReleaseInventory: () => null,
     recordReleaseInventory: (release) => events.push(`inventory:${release.sourceRevision}`),
-    pruneReleaseResources: (from, to) => events.push(`prune:${from[0].name}->${to[0].name}`),
+    pruneReleaseResources: (from, to) =>
+      events.push(`prune:${from[0]?.name ?? 'none'}->${to[0]?.name ?? 'none'}`),
     recordInstallationState: (release) => events.push(`record:${release.sourceRevision}`),
     waitForCoreRollouts: (_progress, selection) => events.push(`wait:${(selection ?? []).join(',')}`),
     verifyInstallation: async (release, options) => {
