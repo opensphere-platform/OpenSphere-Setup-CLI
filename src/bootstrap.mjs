@@ -1361,8 +1361,9 @@ export async function upgrade(
       ?? operations.releaseResourceInventory(rollback.all);
     const targetInventory = operations.releaseResourceInventory(target.all);
     try {
-      // The image-integrity admission policy authorizes exact workload digests
-      // from the installed release lock, so publish that authority first.
+      operations.installPreparedRelease(
+        targetLock, target, config.storageClass, effectiveConsoleUrl, '업그레이드'
+      );
       operations.recordInstallationState(
         targetLock,
         config.storageClass,
@@ -1370,9 +1371,6 @@ export async function upgrade(
         effectiveConsoleUrl,
         config.authEnvironment,
         config.shellTlsSecret
-      );
-      operations.installPreparedRelease(
-        targetLock, target, config.storageClass, effectiveConsoleUrl, '업그레이드'
       );
       operations.waitForCoreRollouts();
       const evidence = await operations.verifyInstallation(targetLock, {
@@ -1390,8 +1388,9 @@ export async function upgrade(
     } catch (upgradeError) {
       console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
       try {
-        // Restore the previous admission authority before re-applying its
-        // workload images; otherwise rollback is rejected by the same policy.
+        operations.installPreparedRelease(
+          previousLock, rollback, config.storageClass, effectiveConsoleUrl, '롤백'
+        );
         operations.recordInstallationState(
           previousLock,
           config.storageClass,
@@ -1399,9 +1398,6 @@ export async function upgrade(
           effectiveConsoleUrl,
           config.authEnvironment,
           config.shellTlsSecret
-        );
-        operations.installPreparedRelease(
-          previousLock, rollback, config.storageClass, effectiveConsoleUrl, '롤백'
         );
         operations.waitForCoreRollouts();
         await operations.verifyInstallation(previousLock, {
