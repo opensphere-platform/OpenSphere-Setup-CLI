@@ -55,6 +55,15 @@ const AUDIT_LEDGER_INTEGRITY_MIGRATION = 'backend/supabase/migrations/0032_audit
 const APPROVAL_OUTCOME_LEDGER_MIGRATION = 'backend/supabase/migrations/0033_approval_outcome_ledger.sql';
 const AGENT_ACTION_LEDGER_MIGRATION = 'backend/supabase/migrations/0034_agent_action_ledger.sql';
 const MODULE_OPERATION_LEDGER_MIGRATION = 'backend/supabase/migrations/0035_module_operation_ledger.sql';
+const PLATFORM_SUPPORT_OBSERVABILITY_PERMISSIONS_MIGRATION = 'backend/supabase/migrations/0036_platform_support_observability_permissions.sql';
+const BROWSER_SESSION_EXPIRY_EVIDENCE_MIGRATION = 'backend/supabase/migrations/0037_browser_session_expiry_evidence.sql';
+const OAA_WATCH_CURSOR_STATUS_MIGRATION = 'backend/supabase/migrations/0038_oaa_watch_cursor_status_vocabulary.sql';
+const AUDIT_LEDGER_INTEGRITY_V2_MIGRATION = 'backend/supabase/migrations/0039_audit_ledger_integrity.sql';
+const APPROVAL_OUTCOME_LEDGER_V2_MIGRATION = 'backend/supabase/migrations/0040_approval_outcome_ledger.sql';
+const AGENT_ACTION_LEDGER_V2_MIGRATION = 'backend/supabase/migrations/0041_agent_action_ledger.sql';
+const FOUNDATION_BOOTSTRAP_CATALOG_MIRROR_MIGRATION = 'backend/supabase/migrations/0042_foundation_bootstrap_catalog_mirror.sql';
+const EXTERNAL_BACKUP_S3_PROFILES_MIGRATION = 'backend/supabase/migrations/0043_external_backup_s3_compatible_profiles.sql';
+const EXTERNAL_BACKUP_TLS_TRUST_MIGRATION = 'backend/supabase/migrations/0044_external_backup_target_tls_trust.sql';
 const LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS = new Set([
   EXTERNAL_CHANNEL_REASON_POLICY_MIGRATION,
   CHANGE_RECONCILE_RETRY_MIGRATION,
@@ -64,7 +73,16 @@ const LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS = new Set([
   AUDIT_LEDGER_INTEGRITY_MIGRATION,
   APPROVAL_OUTCOME_LEDGER_MIGRATION,
   AGENT_ACTION_LEDGER_MIGRATION,
-  MODULE_OPERATION_LEDGER_MIGRATION
+  MODULE_OPERATION_LEDGER_MIGRATION,
+  PLATFORM_SUPPORT_OBSERVABILITY_PERMISSIONS_MIGRATION,
+  BROWSER_SESSION_EXPIRY_EVIDENCE_MIGRATION,
+  OAA_WATCH_CURSOR_STATUS_MIGRATION,
+  AUDIT_LEDGER_INTEGRITY_V2_MIGRATION,
+  APPROVAL_OUTCOME_LEDGER_V2_MIGRATION,
+  AGENT_ACTION_LEDGER_V2_MIGRATION,
+  FOUNDATION_BOOTSTRAP_CATALOG_MIRROR_MIGRATION,
+  EXTERNAL_BACKUP_S3_PROFILES_MIGRATION,
+  EXTERNAL_BACKUP_TLS_TRUST_MIGRATION
 ]);
 const LEGACY_RECOVERY_MANIFESTS = new Set([
   'backend/recovery/recovery-jobs.yaml',
@@ -232,7 +250,16 @@ export const SUPABASE_MIGRATIONS = Object.freeze([
   '0032_audit_ledger_integrity.sql',
   '0033_approval_outcome_ledger.sql',
   '0034_agent_action_ledger.sql',
-  '0035_module_operation_ledger.sql'
+  '0035_module_operation_ledger.sql',
+  '0036_platform_support_observability_permissions.sql',
+  '0037_browser_session_expiry_evidence.sql',
+  '0038_oaa_watch_cursor_status_vocabulary.sql',
+  '0039_audit_ledger_integrity.sql',
+  '0040_approval_outcome_ledger.sql',
+  '0041_agent_action_ledger.sql',
+  '0042_foundation_bootstrap_catalog_mirror.sql',
+  '0043_external_backup_s3_compatible_profiles.sql',
+  '0044_external_backup_target_tls_trust.sql'
 ]);
 
 export const SUPABASE_MANIFEST = Object.freeze({

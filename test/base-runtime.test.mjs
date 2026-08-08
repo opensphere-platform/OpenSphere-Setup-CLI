@@ -69,7 +69,7 @@ test('fresh bootstrap grants the Foundation Console only exact data-engine Secre
 
 test('all current Supabase migrations, including the module operation ledger, are release material', () => {
   assert.equal(SUPABASE_MIGRATIONS[0], '0001_console_backbone.sql');
-  assert.equal(SUPABASE_MIGRATIONS.at(-1), '0035_module_operation_ledger.sql');
+  assert.equal(SUPABASE_MIGRATIONS.at(-1), '0044_external_backup_target_tls_trust.sql');
   assert.equal(SUPABASE_MIGRATIONS.includes('0011_notification_delivery.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0022_oaa_recovery_owner_permissions.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0024_ai_consumer_contract.sql'), true);
@@ -82,6 +82,8 @@ test('all current Supabase migrations, including the module operation ledger, ar
   assert.equal(SUPABASE_MIGRATIONS.includes('0033_approval_outcome_ledger.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0034_agent_action_ledger.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0035_module_operation_ledger.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0043_external_backup_s3_compatible_profiles.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0044_external_backup_target_tls_trust.sql'), true);
   assert.equal(new Set(SUPABASE_MIGRATIONS).size, SUPABASE_MIGRATIONS.length);
 });
 
