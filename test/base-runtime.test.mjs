@@ -67,7 +67,7 @@ test('fresh bootstrap grants the Foundation Console only exact data-engine Secre
   assert.doesNotMatch(bootstrap, /resources: \['secrets'\][\s\S]{0,180}verbs: \[[^\]]*(?:create|delete|list|watch)/);
 });
 
-test('all current Supabase migrations, including the module operation ledger, are release material', () => {
+test('all current Supabase migrations, including component release and backup contracts, are release material', () => {
   assert.equal(SUPABASE_MIGRATIONS[0], '0001_console_backbone.sql');
   assert.equal(SUPABASE_MIGRATIONS.at(-1), '0044_external_backup_target_tls_trust.sql');
   assert.equal(SUPABASE_MIGRATIONS.includes('0011_notification_delivery.sql'), true);
@@ -78,13 +78,23 @@ test('all current Supabase migrations, including the module operation ledger, ar
   assert.equal(SUPABASE_MIGRATIONS.includes('0029_browser_session_and_baseline_monitoring.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0030_ceph_data_path_verification_runtime.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0031_foundation_bootstrap_consumer.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0032_audit_ledger_integrity.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0033_approval_outcome_ledger.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0034_agent_action_ledger.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0032_audit_event_ledger_chain.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0033_platform_release_consumer.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0035_module_operation_ledger.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0036_platform_support_observability_permissions.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0037_browser_session_expiry_evidence.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0038_oaa_watch_cursor_status_vocabulary.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0039_audit_ledger_integrity.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0040_approval_outcome_ledger.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0041_agent_action_ledger.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0042_foundation_bootstrap_catalog_mirror.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0043_external_backup_s3_compatible_profiles.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0044_external_backup_target_tls_trust.sql'), true);
   assert.equal(new Set(SUPABASE_MIGRATIONS).size, SUPABASE_MIGRATIONS.length);
+  const bootstrapSource = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(bootstrapSource, /0032_audit_ledger_integrity\.sql/);
+  assert.doesNotMatch(bootstrapSource, /0033_approval_outcome_ledger\.sql/);
+  assert.doesNotMatch(bootstrapSource, /0034_agent_action_ledger\.sql/);
 });
 
 test('base Main Shell includes Backend, DUPA, notification, OAA, governed adapter and production guardrails', () => {
