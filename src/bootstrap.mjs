@@ -264,7 +264,9 @@ export const SUPABASE_MIGRATIONS = Object.freeze([
   '0047_r2d2_incident_risk.sql',
   '0048_r2d2_durable_operation.sql',
   '0049_r2d2_engineering_remediation.sql',
-  '0050_r2d2_retention_slo.sql'
+  '0050_r2d2_retention_slo.sql',
+  '0051_r2d2_engineering_worker_isolation.sql',
+  '0052_r2d2_engineering_execution.sql'
 ]);
 
 export const SUPABASE_MANIFEST = Object.freeze({
