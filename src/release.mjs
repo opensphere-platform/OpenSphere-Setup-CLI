@@ -9,6 +9,7 @@ export const RELEASE_SCOPE_COMPONENT = 'component';
 export const REGISTRY = 'ghcr.io';
 export const OWNER = 'opensphere-platform';
 export const SOURCE = 'https://github.com/opensphere-platform/OpenSphere-console';
+export const SUPABASE_MIGRATION_MANIFEST_PATH = 'backend/supabase/migrations/manifest.json';
 // v1 locks predate the signed SBOM gate.  They are accepted only as an already
 // installed edge rollback baseline; no new channel resolution may produce one.
 export const LEGACY_RELEASE_TRUST = Object.freeze({
@@ -468,6 +469,7 @@ export function validateReleaseBom(bom, {
   channel,
   subject,
   allowLegacyComponentSet = false,
+  allowLegacyReleaseArtifacts = false,
   requiredPlatforms
 } = {}) {
   if (bom?.apiVersion !== RELEASE_API_VERSION || bom?.kind !== 'OpenSphereReleaseBOM') {
@@ -516,15 +518,27 @@ export function validateReleaseBom(bom, {
   if (subject && bom.components.console.image !== subject) {
     throw new Error('Signed release BOM subject is not its Console anchor image');
   }
+  const migration = bom.artifacts?.supabaseMigrationManifest;
+  const validMigrationEvidence = migration?.path === SUPABASE_MIGRATION_MANIFEST_PATH
+    && /^sha256:[a-f0-9]{64}$/.test(migration?.sha256 ?? '')
+    && /^sha256:[a-f0-9]{64}$/.test(migration?.setDigest ?? '')
+    && /^\d{4}$/.test(migration?.latestMigrationId ?? '')
+    && Number.isInteger(migration?.migrationCount) && migration.migrationCount > 0;
+  if (!validMigrationEvidence && !allowLegacyReleaseArtifacts) {
+    throw new Error('Signed release BOM lacks canonical Supabase migration manifest evidence');
+  }
   return bom;
 }
 
-export function releaseBomPointer(bom, subject = bom?.components?.console?.image) {
-  const validated = validateReleaseBom(bom, { subject });
+export function releaseBomPointer(bom, subject = bom?.components?.console?.image, options = {}) {
+  const validated = validateReleaseBom(bom, { subject, ...options });
   return {
     predicateType: RELEASE_BOM_PREDICATE,
     subject,
-    digest: calculateReleaseBomDigest(validated)
+    digest: calculateReleaseBomDigest(validated),
+    ...(validated.artifacts?.supabaseMigrationManifest
+      ? { migrationManifest: structuredClone(validated.artifacts.supabaseMigrationManifest) }
+      : {})
   };
 }
 
@@ -547,6 +561,7 @@ export function verifyReleaseBomAttestation(subject, {
   authToken,
   channel,
   allowLegacyComponentSet = false,
+  allowLegacyReleaseArtifacts = false,
   requiredPlatforms
 } = {}) {
   if (!canonicalImage(subject)) throw new Error('Release BOM subject is not a governed digest-pinned image');
@@ -564,6 +579,7 @@ export function verifyReleaseBomAttestation(subject, {
         .map((entry) => validateReleaseBom(entry?.verificationResult?.statement?.predicate, {
           subject,
           allowLegacyComponentSet,
+          allowLegacyReleaseArtifacts,
           requiredPlatforms
         }))
         .filter((bom) => !channel || bom.channel === channel);
@@ -713,6 +729,7 @@ export async function verifyReleaseLock(lock, {
   requiredPlatforms,
   onProgress,
   allowLegacyComponentSet = false,
+  allowLegacyReleaseArtifacts = false,
   allowRetiredEdgeRollback = false
 } = {}) {
   const validated = validateLock(lock, { allowLegacyComponentSet });
@@ -739,6 +756,7 @@ export async function verifyReleaseLock(lock, {
     channel: validated.channel,
     ...(registryCredentials?.token ? { authToken: registryCredentials.token } : {}),
     allowLegacyComponentSet,
+    allowLegacyReleaseArtifacts,
     requiredPlatforms
   });
   report(onProgress, { type: 'bom-complete', image: pointer.subject, channel: validated.channel });
@@ -749,8 +767,14 @@ export async function verifyReleaseLock(lock, {
     channel: validated.channel,
     subject: pointer.subject,
     allowLegacyComponentSet,
+    allowLegacyReleaseArtifacts,
     requiredPlatforms
   });
+  const expectedMigrationManifest = bom.artifacts?.supabaseMigrationManifest;
+  if (expectedMigrationManifest
+      && JSON.stringify(stableValue(pointer.migrationManifest)) !== JSON.stringify(stableValue(expectedMigrationManifest))) {
+    throw new Error('Release lock migration manifest evidence differs from the signed Release BOM');
+  }
   if (bom.sourceRevision !== validated.sourceRevision) {
     throw new Error('Release lock source revision differs from the signed Release BOM');
   }
@@ -1004,6 +1028,7 @@ async function resolveSignedRelease(reference, channel, {
   verifyImage = verifyImageProvenance,
   verifySbom = verifyImageSbom,
   onProgress,
+  allowLegacyReleaseArtifacts = false,
   requiredPlatforms = channel === 'edge' ? defaultEdgePlatforms() : RELEASE_PLATFORMS,
   resolvedAnchor
 } = {}) {
@@ -1036,15 +1061,17 @@ async function resolveSignedRelease(reference, channel, {
   const verifiedBom = await verifyBom(anchor.image, {
     channel,
     ...(registryCredentials?.token ? { authToken: registryCredentials.token } : {}),
-    requiredPlatforms: targetPlatforms
+    requiredPlatforms: targetPlatforms,
+    allowLegacyReleaseArtifacts
   });
   report(onProgress, { type: 'bom-complete', image: anchor.image, channel });
   const bom = validateReleaseBom(verifiedBom.bom, {
     channel,
     subject: anchor.image,
-    requiredPlatforms: targetPlatforms
+    requiredPlatforms: targetPlatforms,
+    allowLegacyReleaseArtifacts
   });
-  const releaseBom = releaseBomPointer(bom, anchor.image);
+  const releaseBom = releaseBomPointer(bom, anchor.image, { allowLegacyReleaseArtifacts });
   if (verifiedBom.digest !== releaseBom.digest) {
     throw new Error('Verified Release BOM digest differs from its canonical document');
   }
@@ -1149,7 +1176,8 @@ export async function resolveSourceRevision(sourceRevision, {
     registryCredentials,
     verifyImage,
     verifySbom,
-    onProgress
+    onProgress,
+    allowLegacyReleaseArtifacts: true
   });
   if (lock.sourceRevision !== sourceRevision) {
     throw new Error(`Source revision tag ${tag} does not resolve to one exact governed release`);

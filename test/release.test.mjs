@@ -35,6 +35,13 @@ import {
 
 const REVISION = '1'.repeat(40);
 const DIGEST = `sha256:${'a'.repeat(64)}`;
+const MIGRATION_MANIFEST = Object.freeze({
+  path: 'backend/supabase/migrations/manifest.json',
+  sha256: `sha256:${'b'.repeat(64)}`,
+  setDigest: `sha256:${'c'.repeat(64)}`,
+  latestMigrationId: '0053',
+  migrationCount: 52
+});
 
 function validLock(channel = 'edge') {
   const components = Object.fromEntries(Object.entries(COMPONENTS).map(([name, repository]) => [
@@ -94,6 +101,7 @@ function validBom(channel = 'edge', revision = REVISION, digest = DIGEST) {
     status: 'Active',
     source: SOURCE,
     sourceRevision: revision,
+    artifacts: { supabaseMigrationManifest: { ...MIGRATION_MANIFEST } },
     supportedPlatforms: ['linux/amd64', 'linux/arm64'],
     components: Object.fromEntries(Object.entries(COMPONENTS).map(([name, repository]) => [
       name,
@@ -105,6 +113,13 @@ function validBom(channel = 'edge', revision = REVISION, digest = DIGEST) {
     ]))
   };
 }
+
+test('signed release BOM requires exact Supabase migration manifest evidence', () => {
+  const bom = validBom();
+  delete bom.artifacts;
+  assert.throws(() => validateReleaseBom(bom), /migration manifest evidence/u);
+  assert.doesNotThrow(() => validateReleaseBom(bom, { allowLegacyReleaseArtifacts: true }));
+});
 
 function bomVerifier(bom = validBom()) {
   return async (subject) => ({ bom, digest: calculateReleaseBomDigest(bom), subject });
@@ -572,6 +587,7 @@ test('a release lock is accepted only when its components and BOM digest match t
   const bom = validBom();
   const lock = validLock();
   lock.releaseBom = releaseBomPointer(bom);
+  assert.deepEqual(lock.releaseBom.migrationManifest, MIGRATION_MANIFEST);
   lock.releaseDigest = calculateReleaseDigest(lock.channel, lock.components, lock.trust, lock.releaseBom);
   await assert.doesNotReject(verifyReleaseLock(lock, {
     verifyBom: bomVerifier(bom),
@@ -585,6 +601,15 @@ test('a release lock is accepted only when its components and BOM digest match t
   await assert.rejects(verifyReleaseLock(tampered, {
     verifyBom: bomVerifier(bom), verifyImage() {}, verifySbom() {}
   }), /BOM digest differs/);
+
+  const substitutedManifest = structuredClone(lock);
+  substitutedManifest.releaseBom.migrationManifest.setDigest = `sha256:${'f'.repeat(64)}`;
+  substitutedManifest.releaseDigest = calculateReleaseDigest(
+    substitutedManifest.channel, substitutedManifest.components, substitutedManifest.trust, substitutedManifest.releaseBom
+  );
+  await assert.rejects(verifyReleaseLock(substitutedManifest, {
+    verifyBom: bomVerifier(bom), verifyImage() {}, verifySbom() {}
+  }), /migration manifest evidence differs/u);
 });
 
 test('an explicit private-package token is passed to gh only through its subprocess environment', () => {
@@ -768,6 +793,7 @@ test('release lock rejects missing or additional components', () => {
 test('pre-recovery component locks are accepted only as explicit installed rollback baselines', async () => {
   const bom = validBom();
   delete bom.components.recovery;
+  delete bom.artifacts;
   const releaseBom = {
     predicateType: RELEASE_BOM_PREDICATE,
     subject: bom.components.console.image,
@@ -791,7 +817,8 @@ test('pre-recovery component locks are accepted only as explicit installed rollb
     verifyBom: bomVerifier(bom),
     verifyImage: async () => {},
     verifySbom: async () => {},
-    allowLegacyComponentSet: true
+    allowLegacyComponentSet: true,
+    allowLegacyReleaseArtifacts: true
   }));
 });
 

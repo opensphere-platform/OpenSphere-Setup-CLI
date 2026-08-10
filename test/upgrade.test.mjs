@@ -23,6 +23,14 @@ import {
   SOURCE
 } from '../src/release.mjs';
 
+const MIGRATION_MANIFEST = Object.freeze({
+  path: 'backend/supabase/migrations/manifest.json',
+  sha256: `sha256:${'d'.repeat(64)}`,
+  setDigest: `sha256:${'e'.repeat(64)}`,
+  latestMigrationId: '0053',
+  migrationCount: 52
+});
+
 function lock(revision, digestCharacter) {
   const imageDigest = `sha256:${digestCharacter.repeat(64)}`;
   const components = Object.fromEntries(Object.entries(COMPONENTS).map(([name, repository]) => [
@@ -40,6 +48,7 @@ function lock(revision, digestCharacter) {
     status: 'Active',
     source: SOURCE,
     sourceRevision: revision,
+    artifacts: { supabaseMigrationManifest: { ...MIGRATION_MANIFEST } },
     supportedPlatforms: ['linux/amd64', 'linux/arm64'],
     components
   };

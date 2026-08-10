@@ -78,6 +78,9 @@ test('Setup consumes the Console digest-bound migration manifest without a handw
   assert.equal(manifest.latestMigrationId, '0053');
   assert.equal(manifest.migrations.at(-1).name, '0053_r2d2_redteam_contract_hardening.sql');
   assert.equal(new Set(manifest.migrations.map(({ id }) => id)).size, manifest.migrations.length);
+  assert.equal(manifest.schemaVersion, 2);
+  assert.equal(manifest.migrations[0].predecessorMigrationId, null);
+  assert.equal(manifest.migrations.at(-1).predecessorMigrationId, manifest.migrations.at(-2).id);
   const tampered = structuredClone(manifest);
   tampered.migrations[0] = { ...tampered.migrations[0], sha256: 'f'.repeat(64) };
   assert.throws(() => parseSupabaseMigrationManifest(tampered), /set digest mismatch/);
@@ -88,6 +91,9 @@ test('Setup consumes the Console digest-bound migration manifest without a handw
   const duplicate = structuredClone(manifest);
   duplicate.migrations[1] = { ...duplicate.migrations[1], id: duplicate.migrations[0].id };
   assert.throws(() => parseSupabaseMigrationManifest(duplicate), /Invalid or duplicate/);
+  const brokenLineage = structuredClone(manifest);
+  brokenLineage.migrations[2] = { ...brokenLineage.migrations[2], predecessorMigrationId: '9999' };
+  assert.throws(() => parseSupabaseMigrationManifest(brokenLineage), /Invalid or duplicate/);
   const bootstrapSource = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(bootstrapSource, /SUPABASE_MIGRATIONS\s*=\s*Object\.freeze\(\[/);
   assert.doesNotMatch(bootstrapSource, /0032_audit_ledger_integrity\.sql/);

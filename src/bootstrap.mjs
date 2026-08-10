@@ -226,24 +226,29 @@ export function parseSupabaseMigrationManifest(value) {
   let manifest;
   try { manifest = typeof value === 'string' ? JSON.parse(value) : structuredClone(value); }
   catch { throw new Error('Supabase migration manifest is not valid JSON'); }
-  if (manifest?.schemaVersion !== 1 || !Array.isArray(manifest.migrations) || manifest.migrations.length === 0) {
+  if (![1, 2].includes(manifest?.schemaVersion) || !Array.isArray(manifest.migrations) || manifest.migrations.length === 0) {
     throw new Error('Unsupported Supabase migration manifest');
   }
   const ids = new Set();
   const names = new Set();
   let previous = '';
+  let predecessorMigrationId = null;
   for (const entry of manifest.migrations) {
     if (!/^\d{4}_[a-z0-9_]+\.sql$/u.test(entry?.name ?? '')
         || entry.id !== entry.name.slice(0, 4)
         || entry.path !== `backend/supabase/migrations/${entry.name}`
         || !/^[a-f0-9]{64}$/u.test(entry.sha256 ?? '')
-        || ids.has(entry.id) || names.has(entry.name) || (previous && entry.name <= previous)) {
+        || ids.has(entry.id) || names.has(entry.name) || (previous && entry.name <= previous)
+        || (manifest.schemaVersion === 2 && entry.predecessorMigrationId !== predecessorMigrationId)) {
       throw new Error(`Invalid or duplicate Supabase migration manifest entry: ${entry?.name ?? 'unknown'}`);
     }
-    ids.add(entry.id); names.add(entry.name); previous = entry.name;
+    ids.add(entry.id); names.add(entry.name); previous = entry.name; predecessorMigrationId = entry.id;
   }
   const latest = manifest.migrations.at(-1).id;
-  const material = manifest.migrations.map(({ name, sha256 }) => `${name}\n${sha256}`).join('\n');
+  const material = manifest.schemaVersion === 2
+    ? manifest.migrations.map(({ id, predecessorMigrationId: predecessor, name, sha256 }) =>
+      `${id}\n${predecessor ?? '-'}\n${name}\n${sha256}`).join('\n')
+    : manifest.migrations.map(({ name, sha256 }) => `${name}\n${sha256}`).join('\n');
   const setDigest = `sha256:${sha256Text(material)}`;
   if (manifest.migrationCount !== manifest.migrations.length
       || manifest.latestMigrationId !== latest || manifest.setDigest !== setDigest) {
@@ -647,6 +652,20 @@ async function writeReleaseArtifact(root, path, contents) {
 async function materializeSupabaseMigrationSet(lock, root, sourceRevision = lock.sourceRevision) {
   const rawManifest = await fetchReleaseArtifact(lock, SUPABASE_MIGRATION_MANIFEST, { sourceRevision });
   const manifest = parseSupabaseMigrationManifest(rawManifest);
+  const signedEvidence = lock.releaseBom?.migrationManifest;
+  if (signedEvidence) {
+    const observedEvidence = {
+      path: SUPABASE_MIGRATION_MANIFEST,
+      sha256: `sha256:${sha256Text(rawManifest)}`,
+      setDigest: manifest.setDigest,
+      latestMigrationId: manifest.latestMigrationId,
+      migrationCount: manifest.migrationCount,
+    };
+    if (Object.entries(observedEvidence).some(([key, value]) => signedEvidence[key] !== value)
+        || Object.keys(signedEvidence).length !== Object.keys(observedEvidence).length) {
+      throw new Error('Supabase migration manifest differs from signed Release BOM evidence');
+    }
+  }
   const artifacts = await Promise.all(manifest.migrations.map(async (entry) => {
     const contents = await fetchReleaseArtifact(lock, entry.path, { sourceRevision });
     verifySupabaseMigrationArtifact(entry, contents);
