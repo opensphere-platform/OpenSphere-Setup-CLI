@@ -141,9 +141,9 @@ function runtime(previous, events, { failTarget = false, recordedInventory = nul
       _storageClass,
       _consoleUrl,
       _authEnvironment,
-      { changedComponents = [] } = {}
+      { changedComponents = [], includeMigrations = true } = {}
     ) => {
-      events.push(`prepare-component:${release.sourceRevision}:${changedComponents.join(',')}`);
+      events.push(`prepare-component:${release.sourceRevision}:${changedComponents.join(',')}:migrations=${includeMigrations}`);
       return {
         foundation: { root: release.sourceRevision, release: [] },
         base: [{ path: 'component.yaml', yaml: release.sourceRevision }],
@@ -152,8 +152,8 @@ function runtime(previous, events, { failTarget = false, recordedInventory = nul
     },
     installPreparedRelease: (release, prepared, storageClass, consoleUrl, label) =>
       events.push(`install:${label}:${prepared.all[0].yaml}`),
-    installPreparedComponentRelease: (release, prepared, storageClass, consoleUrl, label, changed) =>
-      events.push(`install-component:${label}:${release.sourceRevision}:${changed.join(',')}`),
+    installPreparedComponentRelease: (release, prepared, storageClass, consoleUrl, label, changed, _progress, options = {}) =>
+      events.push(`install-component:${label}:${release.sourceRevision}:${changed.join(',')}:migrations=${options.applyMigrations !== false}`),
     releaseResourceInventory: (release) => [{
       apiVersion: 'v1',
       kind: 'ConfigMap',
@@ -207,9 +207,9 @@ test('component release is upgrade-only and keeps a complete rollback lock', asy
   assert.equal(result.changed, true);
   assert.equal(result.lock.components.console.image, previous.components.console.image);
   assert.ok(events.includes(`record:${target.sourceRevision}`));
-  assert.ok(events.includes(`install-component:업그레이드:${target.sourceRevision}:backend`));
-  assert.ok(events.includes(`prepare-component:${target.sourceRevision}:backend`));
-  assert.ok(events.includes(`prepare-component:${previous.sourceRevision}:backend`));
+  assert.ok(events.includes(`install-component:업그레이드:${target.sourceRevision}:backend:migrations=true`));
+  assert.ok(events.includes(`prepare-component:${target.sourceRevision}:backend:migrations=true`));
+  assert.ok(events.includes(`prepare-component:${previous.sourceRevision}:backend:migrations=false`));
   assert.equal(events.some((event) => event.startsWith('prepare:')), false);
   assert.ok(events.includes('wait-component:backend'));
   assert.ok(events.includes(`verify:${target.sourceRevision}:backend`));
@@ -381,8 +381,10 @@ test('failed component verification rolls back only the same changed workloads',
     }),
     /previous release was restored/
   );
-  assert.ok(events.includes(`install-component:업그레이드:${target.sourceRevision}:backend,console`));
-  assert.ok(events.includes(`install-component:롤백:${previous.sourceRevision}:backend,console`));
+  assert.ok(events.includes(`install-component:업그레이드:${target.sourceRevision}:backend,console:migrations=true`));
+  assert.ok(events.includes(`install-component:롤백:${previous.sourceRevision}:backend,console:migrations=false`));
+  assert.ok(events.includes(`prepare-component:${target.sourceRevision}:backend,console:migrations=true`));
+  assert.ok(events.includes(`prepare-component:${previous.sourceRevision}:backend,console:migrations=false`));
   assert.equal(events.some((event) => event.startsWith('install:')), false);
   assert.equal(events.some((event) => event.startsWith('prune:')), false);
 });

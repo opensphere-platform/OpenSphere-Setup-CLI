@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -215,59 +215,49 @@ export const BASE_MANIFESTS = Object.freeze([
   }
 ]);
 
-export const SUPABASE_MIGRATIONS = Object.freeze([
-  '0001_console_backbone.sql',
-  '0002_backend_boundary.sql',
-  '0003_change_correlation.sql',
-  '0004_backend_rls.sql',
-  '0005_oaa_governed_agent.sql',
-  '0006_cli_identity.sql',
-  '0007_extension_revocation.sql',
-  '0008_backend_service_role.sql',
-  '0009_platform_control_governance.sql',
-  '0010_change_approval.sql',
-  '0011_notification_delivery.sql',
-  '0012_oaa_llm_usage_ledger.sql',
-  '0013_oaa_agent_control_plane.sql',
-  '0014_cli_token_scope.sql',
-  '0015_oaa_knowledge_revisions.sql',
-  '0016_oaa_runtime_watch.sql',
-  '0017_oaa_watch_observer.sql',
-  '0018_oaa_owner_api_projection.sql',
-  '0019_oaa_evidence_correlation_retention.sql',
-  '0020_oaa_owner_control_permissions.sql',
-  '0021_oaa_infrastructure_owner_permissions.sql',
-  '0022_oaa_recovery_owner_permissions.sql',
-  '0023_ceph_prerequisite_consumer.sql',
-  '0024_ai_consumer_contract.sql',
-  '0025_external_channels_backup.sql',
-  '0026_schema_migration_ledger.sql',
-  '0027_external_channel_reason_policy.sql',
-  '0028_change_reconcile_retry.sql',
-  '0029_browser_session_and_baseline_monitoring.sql',
-  '0030_ceph_data_path_verification_runtime.sql',
-  '0031_foundation_bootstrap_consumer.sql',
-  '0032_audit_event_ledger_chain.sql',
-  '0033_platform_release_consumer.sql',
-  '0035_module_operation_ledger.sql',
-  '0036_platform_support_observability_permissions.sql',
-  '0037_browser_session_expiry_evidence.sql',
-  '0038_oaa_watch_cursor_status_vocabulary.sql',
-  '0039_audit_ledger_integrity.sql',
-  '0040_approval_outcome_ledger.sql',
-  '0041_agent_action_ledger.sql',
-  '0042_foundation_bootstrap_catalog_mirror.sql',
-  '0043_external_backup_s3_compatible_profiles.sql',
-  '0044_external_backup_target_tls_trust.sql',
-  '0045_legacy_audit_fork_convergence_repair.sql',
-  '0046_r2d2_operational_graph.sql',
-  '0047_r2d2_incident_risk.sql',
-  '0048_r2d2_durable_operation.sql',
-  '0049_r2d2_engineering_remediation.sql',
-  '0050_r2d2_retention_slo.sql',
-  '0051_r2d2_engineering_worker_isolation.sql',
-  '0052_r2d2_engineering_execution.sql'
-]);
+export const SUPABASE_MIGRATION_MANIFEST = 'backend/supabase/migrations/manifest.json';
+const MIGRATION_OWNER_COMPONENTS = Object.freeze(['console', 'backend', 'oaaGateway']);
+
+function sha256Text(value) {
+  return createHash('sha256').update(String(value).replace(/\r\n/gu, '\n'), 'utf8').digest('hex');
+}
+
+export function parseSupabaseMigrationManifest(value) {
+  let manifest;
+  try { manifest = typeof value === 'string' ? JSON.parse(value) : structuredClone(value); }
+  catch { throw new Error('Supabase migration manifest is not valid JSON'); }
+  if (manifest?.schemaVersion !== 1 || !Array.isArray(manifest.migrations) || manifest.migrations.length === 0) {
+    throw new Error('Unsupported Supabase migration manifest');
+  }
+  const ids = new Set();
+  const names = new Set();
+  let previous = '';
+  for (const entry of manifest.migrations) {
+    if (!/^\d{4}_[a-z0-9_]+\.sql$/u.test(entry?.name ?? '')
+        || entry.id !== entry.name.slice(0, 4)
+        || entry.path !== `backend/supabase/migrations/${entry.name}`
+        || !/^[a-f0-9]{64}$/u.test(entry.sha256 ?? '')
+        || ids.has(entry.id) || names.has(entry.name) || (previous && entry.name <= previous)) {
+      throw new Error(`Invalid or duplicate Supabase migration manifest entry: ${entry?.name ?? 'unknown'}`);
+    }
+    ids.add(entry.id); names.add(entry.name); previous = entry.name;
+  }
+  const latest = manifest.migrations.at(-1).id;
+  const material = manifest.migrations.map(({ name, sha256 }) => `${name}\n${sha256}`).join('\n');
+  const setDigest = `sha256:${sha256Text(material)}`;
+  if (manifest.migrationCount !== manifest.migrations.length
+      || manifest.latestMigrationId !== latest || manifest.setDigest !== setDigest) {
+    throw new Error('Supabase migration manifest count/latest/set digest mismatch');
+  }
+  return Object.freeze({ ...manifest, migrations: Object.freeze(manifest.migrations.map(Object.freeze)) });
+}
+
+export function verifySupabaseMigrationArtifact(entry, contents) {
+  if (!entry || sha256Text(contents) !== entry.sha256) {
+    throw new Error(`Supabase migration digest differs from manifest: ${entry?.name ?? 'unknown'}`);
+  }
+  return true;
+}
 
 export const SUPABASE_MANIFEST = Object.freeze({
   path: 'backend/supabase/bootstrap/supabase.yaml',
@@ -289,7 +279,6 @@ export const GITEA_MANIFEST = Object.freeze({
 
 export const FOUNDATION_ARTIFACT_PATHS = Object.freeze([
   'backend/supabase/install.ps1',
-  ...SUPABASE_MIGRATIONS.map((name) => `backend/supabase/migrations/${name}`),
   'backend/gitea/bootstrap/install.ps1',
   'backend/gitea/bootstrap/configure-signing.ps1',
   'backend/gitea/bootstrap/control-plane-bootstrap.ps1'
@@ -297,6 +286,7 @@ export const FOUNDATION_ARTIFACT_PATHS = Object.freeze([
 
 export const INSTALL_ARTIFACT_PATHS = Object.freeze([
   ...FOUNDATION_ARTIFACT_PATHS,
+  SUPABASE_MIGRATION_MANIFEST,
   SUPABASE_MANIFEST.path,
   GITEA_MANIFEST.path,
   ...BASE_MANIFESTS.map(({ path }) => path)
@@ -307,9 +297,7 @@ function isPreRecoveryRelease(lock) {
 }
 
 function foundationArtifactPaths(lock) {
-  return isPreRecoveryRelease(lock)
-    ? FOUNDATION_ARTIFACT_PATHS.filter((path) => path !== LEGACY_RECOVERY_MIGRATION)
-    : FOUNDATION_ARTIFACT_PATHS;
+  return FOUNDATION_ARTIFACT_PATHS;
 }
 
 function baseManifestSpecs(lock) {
@@ -360,7 +348,7 @@ export function componentReleaseManifestSpecs(
 }
 
 function installArtifactCount(lock) {
-  return foundationArtifactPaths(lock).length + 2 + baseManifestSpecs(lock).length;
+  return foundationArtifactPaths(lock).length + 3 + baseManifestSpecs(lock).length;
 }
 
 export const CORE_ROLLOUTS = Object.freeze([
@@ -656,13 +644,29 @@ async function writeReleaseArtifact(root, path, contents) {
   return target;
 }
 
+async function materializeSupabaseMigrationSet(lock, root, sourceRevision = lock.sourceRevision) {
+  const rawManifest = await fetchReleaseArtifact(lock, SUPABASE_MIGRATION_MANIFEST, { sourceRevision });
+  const manifest = parseSupabaseMigrationManifest(rawManifest);
+  const artifacts = await Promise.all(manifest.migrations.map(async (entry) => {
+    const contents = await fetchReleaseArtifact(lock, entry.path, { sourceRevision });
+    verifySupabaseMigrationArtifact(entry, contents);
+    return { path: entry.path, contents };
+  }));
+  await writeReleaseArtifact(root, SUPABASE_MIGRATION_MANIFEST, rawManifest);
+  for (const artifact of artifacts) await writeReleaseArtifact(root, artifact.path, artifact.contents);
+  return { manifest, sourceRevision, artifactCount: artifacts.length + 1 };
+}
+
 async function materializeFoundationInstallers(
   lock,
   root,
   storageClass,
   consoleUrl,
   authEnvironment,
-  { optionalArtifacts = new Set() } = {}
+  {
+    optionalArtifacts = new Set(),
+    migrationSourceRevision = lock.sourceRevision
+  } = {}
 ) {
   const [supabaseManifest, giteaManifest] = await Promise.all([
     fetchManifest(lock, SUPABASE_MANIFEST, storageClass, consoleUrl, authEnvironment),
@@ -675,10 +679,16 @@ async function materializeFoundationInstallers(
     return contents === null ? null : { path, contents };
   }))).filter(Boolean);
   for (const artifact of artifacts) await writeReleaseArtifact(root, artifact.path, artifact.contents);
+  // Database expansion is forward-only. During rollback preparation, callers
+  // source the immutable migration set from the target release while the
+  // workloads/installers still come from the previous release. This avoids
+  // requiring a newly introduced manifest in an older source revision.
+  const migration = await materializeSupabaseMigrationSet(lock, root, migrationSourceRevision);
   await writeReleaseArtifact(root, SUPABASE_MANIFEST.path, supabaseManifest);
   await writeReleaseArtifact(root, GITEA_MANIFEST.path, giteaManifest);
   return {
     root,
+    migration,
     release: [
       { path: SUPABASE_MANIFEST.path, yaml: supabaseManifest },
       { path: GITEA_MANIFEST.path, yaml: giteaManifest }
@@ -714,6 +724,20 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
   progress?.item('설치', 'Gitea Declarative Change Authority');
   run('pwsh', giteaArgs);
   progress?.item('완료', 'Gitea Declarative Change Authority manifest 적용');
+}
+
+function runComponentMigrations(foundation, progress) {
+  if (!foundation.migration) return;
+  const context = process.env.OPENSPHERE_KUBE_CONTEXT || '';
+  const args = [
+    '-NoProfile', '-NonInteractive', '-File',
+    join(foundation.root, 'backend', 'supabase', 'migrate-only.ps1'),
+    '-Namespace', 'opensphere-console-data',
+    '-SourceRevision', foundation.migration.sourceRevision
+  ];
+  if (context) args.push('-KubeContext', context);
+  progress?.item('마이그레이션', `Supabase ${foundation.migration.manifest.setDigest}`);
+  run('pwsh', args);
 }
 
 async function materializeBaseRelease(lock, storageClass, consoleUrl, authEnvironment) {
@@ -840,8 +864,10 @@ function installPreparedComponentRelease(
   _consoleUrl,
   label,
   changedComponents = lock.changedComponents,
-  progress
+  progress,
+  { applyMigrations = true } = {}
 ) {
+  if (applyMigrations) runComponentMigrations(prepared.foundation, progress);
   const release = componentReleaseWorkloadManifests(lock, prepared, changedComponents);
   applyRelease(release, label, progress);
 }
@@ -1233,9 +1259,23 @@ export async function prepareComponentRelease(
   storageClass,
   consoleUrl,
   authEnvironment,
-  { changedComponents = lock.changedComponents } = {}
+  {
+    changedComponents = lock.changedComponents,
+    includeMigrations = true
+  } = {}
 ) {
   const specs = componentReleaseManifestSpecs(lock, changedComponents);
+  const migrationOwners = includeMigrations
+    ? changedComponents.filter((component) => MIGRATION_OWNER_COMPONENTS.includes(component))
+    : [];
+  const migrationSourceRevisions = new Set(migrationOwners.map((component) => lock.components?.[component]?.sourceRevision));
+  if (migrationSourceRevisions.has(undefined) || migrationSourceRevisions.has(null) || migrationSourceRevisions.size > 1) {
+    throw new Error('Component-scoped migrations require one exact Console source revision');
+  }
+  const migrationSourceRevision = migrationSourceRevisions.size === 1 ? [...migrationSourceRevisions][0] : null;
+  if (migrationSourceRevision && !/^[a-f0-9]{40}$/u.test(migrationSourceRevision)) {
+    throw new Error('Component-scoped migrations lack an immutable source revision');
+  }
   const [foundationRelease, base] = await Promise.all([
     Promise.all(specs.foundation.map(async (spec) => ({
       path: spec.path,
@@ -1260,7 +1300,15 @@ export async function prepareComponentRelease(
       )
     })))
   ]);
-  const foundation = { root, release: foundationRelease };
+  let migration = null;
+  if (migrationSourceRevision) {
+    const script = await fetchReleaseArtifact(lock, 'backend/supabase/migrate-only.ps1', {
+      sourceRevision: migrationSourceRevision
+    });
+    await writeReleaseArtifact(root, 'backend/supabase/migrate-only.ps1', script);
+    migration = await materializeSupabaseMigrationSet(lock, root, migrationSourceRevision);
+  }
+  const foundation = { root, release: foundationRelease, migration };
   return { foundation, base, all: [...foundationRelease, ...base] };
 }
 
@@ -1283,7 +1331,7 @@ export async function preflightReleaseArtifacts(lock, {
       authEnvironment
     );
     return {
-      artifactCount: installArtifactCount(lock),
+      artifactCount: installArtifactCount(lock) + Number(prepared.foundation?.migration?.manifest?.migrationCount || 0),
       manifestGroupCount: prepared.all.length
     };
   } finally {
@@ -1399,7 +1447,7 @@ export async function bootstrap(lock, {
       effectiveConsoleUrl,
       effectiveAuthEnvironment
     );
-    progress?.done(`${installArtifactCount(lock)} artifacts, ${prepared.all.length} manifest groups`);
+    progress?.done(`${installArtifactCount(lock) + Number(prepared.foundation?.migration?.manifest?.migrationCount || 0)} artifacts, ${prepared.all.length} manifest groups`);
 
     const externalShellTls = effectiveShellTls
       ? readSecret(effectiveShellTls.namespace, effectiveShellTls.name)
@@ -1622,7 +1670,7 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           config.authEnvironment,
-          { changedComponents }
+          { changedComponents, includeMigrations: true }
         ),
         operations.prepareComponentRelease(
           previousLock,
@@ -1630,7 +1678,7 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           config.authEnvironment,
-          { changedComponents }
+          { changedComponents, includeMigrations: false }
         )
       ])
       : await Promise.all([
@@ -1643,7 +1691,10 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           config.authEnvironment,
-          { optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS }
+          {
+            optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS,
+            migrationSourceRevision: targetLock.sourceRevision
+          }
         )
       ]);
     const recordedInventory = operations.readReleaseInventory();
@@ -1705,7 +1756,9 @@ export async function upgrade(
             config.storageClass,
             effectiveConsoleUrl,
             '롤백',
-            changedComponents
+            changedComponents,
+            undefined,
+            { applyMigrations: false }
           );
         } else {
           operations.installPreparedRelease(
