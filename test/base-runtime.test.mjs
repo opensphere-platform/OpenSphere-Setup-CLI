@@ -69,7 +69,7 @@ test('fresh bootstrap grants the Foundation Console only exact data-engine Secre
 
 test('all current Supabase migrations, including component release and backup contracts, are release material', () => {
   assert.equal(SUPABASE_MIGRATIONS[0], '0001_console_backbone.sql');
-  assert.equal(SUPABASE_MIGRATIONS.at(-1), '0044_external_backup_target_tls_trust.sql');
+  assert.equal(SUPABASE_MIGRATIONS.at(-1), '0050_r2d2_retention_slo.sql');
   assert.equal(SUPABASE_MIGRATIONS.includes('0011_notification_delivery.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0022_oaa_recovery_owner_permissions.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0024_ai_consumer_contract.sql'), true);
@@ -90,6 +90,12 @@ test('all current Supabase migrations, including component release and backup co
   assert.equal(SUPABASE_MIGRATIONS.includes('0042_foundation_bootstrap_catalog_mirror.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0043_external_backup_s3_compatible_profiles.sql'), true);
   assert.equal(SUPABASE_MIGRATIONS.includes('0044_external_backup_target_tls_trust.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0045_legacy_audit_fork_convergence_repair.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0046_r2d2_operational_graph.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0047_r2d2_incident_risk.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0048_r2d2_durable_operation.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0049_r2d2_engineering_remediation.sql'), true);
+  assert.equal(SUPABASE_MIGRATIONS.includes('0050_r2d2_retention_slo.sql'), true);
   assert.equal(new Set(SUPABASE_MIGRATIONS).size, SUPABASE_MIGRATIONS.length);
   const bootstrapSource = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(bootstrapSource, /0032_audit_ledger_integrity\.sql/);

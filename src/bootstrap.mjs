@@ -258,7 +258,13 @@ export const SUPABASE_MIGRATIONS = Object.freeze([
   '0041_agent_action_ledger.sql',
   '0042_foundation_bootstrap_catalog_mirror.sql',
   '0043_external_backup_s3_compatible_profiles.sql',
-  '0044_external_backup_target_tls_trust.sql'
+  '0044_external_backup_target_tls_trust.sql',
+  '0045_legacy_audit_fork_convergence_repair.sql',
+  '0046_r2d2_operational_graph.sql',
+  '0047_r2d2_incident_risk.sql',
+  '0048_r2d2_durable_operation.sql',
+  '0049_r2d2_engineering_remediation.sql',
+  '0050_r2d2_retention_slo.sql'
 ]);
 
 export const SUPABASE_MANIFEST = Object.freeze({
