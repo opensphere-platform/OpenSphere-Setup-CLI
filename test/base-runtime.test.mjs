@@ -79,6 +79,9 @@ test('Setup consumes the Console digest-bound migration manifest without a handw
   assert.equal(manifest.migrations.at(-1).name, '0053_r2d2_redteam_contract_hardening.sql');
   assert.equal(new Set(manifest.migrations.map(({ id }) => id)).size, manifest.migrations.length);
   assert.equal(manifest.schemaVersion, 2);
+  const legacyV1 = structuredClone(manifest);
+  legacyV1.schemaVersion = 1;
+  assert.throws(() => parseSupabaseMigrationManifest(legacyV1), /Unsupported Supabase migration manifest/);
   assert.equal(manifest.migrations[0].predecessorMigrationId, null);
   assert.equal(manifest.migrations.at(-1).predecessorMigrationId, manifest.migrations.at(-2).id);
   const tampered = structuredClone(manifest);
@@ -103,6 +106,8 @@ test('Setup consumes the Console digest-bound migration manifest without a handw
     'integrated rollback must not require a component-only runner from an older source revision');
   assert.match(bootstrapSource, /migrationSourceRevision: targetLock\.sourceRevision/,
     'integrated rollback must use the target digest-bound forward-only migration set');
+  assert.match(bootstrapSource, /migrationEvidence: targetLock\.releaseBom\?\.migrationManifest/,
+    'integrated rollback must verify the target migration set against target Release BOM evidence');
   assert.match(bootstrapSource, /\{ changedComponents, includeMigrations: false \}/,
     'component rollback must not prepare or reverse schema migrations');
   const migrationCall = bootstrapSource.indexOf('runComponentMigrations(prepared.foundation');

@@ -226,7 +226,7 @@ export function parseSupabaseMigrationManifest(value) {
   let manifest;
   try { manifest = typeof value === 'string' ? JSON.parse(value) : structuredClone(value); }
   catch { throw new Error('Supabase migration manifest is not valid JSON'); }
-  if (![1, 2].includes(manifest?.schemaVersion) || !Array.isArray(manifest.migrations) || manifest.migrations.length === 0) {
+  if (manifest?.schemaVersion !== 2 || !Array.isArray(manifest.migrations) || manifest.migrations.length === 0) {
     throw new Error('Unsupported Supabase migration manifest');
   }
   const ids = new Set();
@@ -239,16 +239,14 @@ export function parseSupabaseMigrationManifest(value) {
         || entry.path !== `backend/supabase/migrations/${entry.name}`
         || !/^[a-f0-9]{64}$/u.test(entry.sha256 ?? '')
         || ids.has(entry.id) || names.has(entry.name) || (previous && entry.name <= previous)
-        || (manifest.schemaVersion === 2 && entry.predecessorMigrationId !== predecessorMigrationId)) {
+        || entry.predecessorMigrationId !== predecessorMigrationId) {
       throw new Error(`Invalid or duplicate Supabase migration manifest entry: ${entry?.name ?? 'unknown'}`);
     }
     ids.add(entry.id); names.add(entry.name); previous = entry.name; predecessorMigrationId = entry.id;
   }
   const latest = manifest.migrations.at(-1).id;
-  const material = manifest.schemaVersion === 2
-    ? manifest.migrations.map(({ id, predecessorMigrationId: predecessor, name, sha256 }) =>
-      `${id}\n${predecessor ?? '-'}\n${name}\n${sha256}`).join('\n')
-    : manifest.migrations.map(({ name, sha256 }) => `${name}\n${sha256}`).join('\n');
+  const material = manifest.migrations.map(({ id, predecessorMigrationId: predecessor, name, sha256 }) =>
+    `${id}\n${predecessor ?? '-'}\n${name}\n${sha256}`).join('\n');
   const setDigest = `sha256:${sha256Text(material)}`;
   if (manifest.migrationCount !== manifest.migrations.length
       || manifest.latestMigrationId !== latest || manifest.setDigest !== setDigest) {
@@ -649,10 +647,14 @@ async function writeReleaseArtifact(root, path, contents) {
   return target;
 }
 
-async function materializeSupabaseMigrationSet(lock, root, sourceRevision = lock.sourceRevision) {
+export async function materializeSupabaseMigrationSet(
+  lock,
+  root,
+  sourceRevision = lock.sourceRevision,
+  signedEvidence = lock.releaseBom?.migrationManifest
+) {
   const rawManifest = await fetchReleaseArtifact(lock, SUPABASE_MIGRATION_MANIFEST, { sourceRevision });
   const manifest = parseSupabaseMigrationManifest(rawManifest);
-  const signedEvidence = lock.releaseBom?.migrationManifest;
   if (signedEvidence) {
     const observedEvidence = {
       path: SUPABASE_MIGRATION_MANIFEST,
@@ -684,7 +686,8 @@ async function materializeFoundationInstallers(
   authEnvironment,
   {
     optionalArtifacts = new Set(),
-    migrationSourceRevision = lock.sourceRevision
+    migrationSourceRevision = lock.sourceRevision,
+    migrationEvidence = lock.releaseBom?.migrationManifest
   } = {}
 ) {
   const [supabaseManifest, giteaManifest] = await Promise.all([
@@ -702,7 +705,12 @@ async function materializeFoundationInstallers(
   // source the immutable migration set from the target release while the
   // workloads/installers still come from the previous release. This avoids
   // requiring a newly introduced manifest in an older source revision.
-  const migration = await materializeSupabaseMigrationSet(lock, root, migrationSourceRevision);
+  const migration = await materializeSupabaseMigrationSet(
+    lock,
+    root,
+    migrationSourceRevision,
+    migrationEvidence
+  );
   await writeReleaseArtifact(root, SUPABASE_MANIFEST.path, supabaseManifest);
   await writeReleaseArtifact(root, GITEA_MANIFEST.path, giteaManifest);
   return {
@@ -1712,7 +1720,8 @@ export async function upgrade(
           config.authEnvironment,
           {
             optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS,
-            migrationSourceRevision: targetLock.sourceRevision
+            migrationSourceRevision: targetLock.sourceRevision,
+            migrationEvidence: targetLock.releaseBom?.migrationManifest
           }
         )
       ]);
