@@ -75,8 +75,8 @@ test('Setup consumes the Console digest-bound migration manifest without a handw
   const raw = readFileSync(new URL(SUPABASE_MIGRATION_MANIFEST, CONSOLE_SOURCE), 'utf8');
   const manifest = parseSupabaseMigrationManifest(raw);
   assert.equal(manifest.migrations[0].name, '0001_console_backbone.sql');
-  assert.equal(manifest.latestMigrationId, '0053');
-  assert.equal(manifest.migrations.at(-1).name, '0053_r2d2_redteam_contract_hardening.sql');
+  assert.equal(manifest.latestMigrationId, '0057');
+  assert.equal(manifest.migrations.at(-1).name, '0057_foundation_postgres_durable_plan.sql');
   assert.equal(new Set(manifest.migrations.map(({ id }) => id)).size, manifest.migrations.length);
   assert.equal(manifest.schemaVersion, 2);
   const legacyV1 = structuredClone(manifest);
