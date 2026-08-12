@@ -6,10 +6,13 @@ import { pathToFileURL } from 'node:url';
 import {
   BASE_MANIFESTS,
   CORE_ROLLOUTS,
+  FOUNDATION_ARTIFACT_PATHS,
   GITEA_MANIFEST,
+  parseSupabaseMigrationManifest,
   renderManifest,
+  SUPABASE_MIGRATION_MANIFEST,
   SUPABASE_MANIFEST,
-  SUPABASE_MIGRATIONS
+  verifySupabaseMigrationArtifact,
 } from '../src/bootstrap.mjs';
 import { COMPONENTS } from '../src/release.mjs';
 import { DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB } from '../src/doctor.mjs';
@@ -41,32 +44,76 @@ test('fresh bootstrap is Supabase Data & Identity plus separate Gitea change aut
   ]);
 });
 
-test('all current Supabase migrations, including reboot recovery contracts, are release material', () => {
-  assert.equal(SUPABASE_MIGRATIONS[0], '0001_console_backbone.sql');
-  assert.equal(SUPABASE_MIGRATIONS.at(-1), '0042_foundation_bootstrap_catalog_mirror.sql');
-  assert.equal(SUPABASE_MIGRATIONS.includes('0011_notification_delivery.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0022_oaa_recovery_owner_permissions.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0024_ai_consumer_contract.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0026_schema_migration_ledger.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0028_change_reconcile_retry.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0029_browser_session_and_baseline_monitoring.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0030_ceph_data_path_verification_runtime.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0031_foundation_bootstrap_consumer.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0032_audit_event_ledger_chain.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0033_platform_release_consumer.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0035_module_operation_ledger.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0036_platform_support_observability_permissions.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0037_browser_session_expiry_evidence.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0038_oaa_watch_cursor_status_vocabulary.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0039_audit_ledger_integrity.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0040_approval_outcome_ledger.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0041_agent_action_ledger.sql'), true);
-  assert.equal(SUPABASE_MIGRATIONS.includes('0042_foundation_bootstrap_catalog_mirror.sql'), true);
-  assert.equal(new Set(SUPABASE_MIGRATIONS).size, SUPABASE_MIGRATIONS.length);
+test('fresh bootstrap provisions the exact Valkey credential without rotating it on resume', () => {
+  const bootstrap = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
+  assert.match(
+    bootstrap,
+    /ensureGenericSecret\('opensphere-foundation', 'foundation-data-valkey-auth', \{[\s\S]*?password: randomBytes\(32\)\.toString\('base64'\)/
+  );
+  assert.match(bootstrap, /mergeSecretData\(existing\?\.data, candidate\)/);
+});
+
+test('fresh bootstrap provisions the exact RustFS credential without rotating it on resume', () => {
+  const bootstrap = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
+  assert.match(
+    bootstrap,
+    /ensureGenericSecret\('opensphere-foundation', 'rustfs-credentials', \{[\s\S]*?access_key:[\s\S]*?secret_key: randomBytes\(32\)\.toString\('base64url'\)/
+  );
+  assert.match(bootstrap, /mergeSecretData\(existing\?\.data, candidate\)/);
+});
+
+test('fresh bootstrap grants the Foundation Console only exact data-engine Secret access', () => {
+  const bootstrap = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
+  assert.match(bootstrap, /resourceNames: \['foundation-data-valkey-auth', 'rustfs-credentials'\]/);
+  assert.match(bootstrap, /verbs: \['get', 'patch'\]/);
+  assert.match(bootstrap, /subjects: \[\{ kind: 'ServiceAccount', name: 'opensphere-foundation', namespace: 'opensphere-console' \}\]/);
+  assert.doesNotMatch(bootstrap, /resources: \['secrets'\][\s\S]{0,180}verbs: \[[^\]]*(?:create|delete|list|watch)/);
+});
+
+test('Setup consumes the Console digest-bound migration manifest without a handwritten inventory', () => {
+  assert.equal(SUPABASE_MIGRATION_MANIFEST, 'backend/supabase/migrations/manifest.json');
+  const raw = readFileSync(new URL(SUPABASE_MIGRATION_MANIFEST, CONSOLE_SOURCE), 'utf8');
+  const manifest = parseSupabaseMigrationManifest(raw);
+  assert.equal(manifest.migrations[0].name, '0001_console_backbone.sql');
+  assert.equal(manifest.latestMigrationId, '0053');
+  assert.equal(manifest.migrations.at(-1).name, '0053_r2d2_redteam_contract_hardening.sql');
+  assert.equal(new Set(manifest.migrations.map(({ id }) => id)).size, manifest.migrations.length);
+  assert.equal(manifest.schemaVersion, 2);
+  const legacyV1 = structuredClone(manifest);
+  legacyV1.schemaVersion = 1;
+  assert.throws(() => parseSupabaseMigrationManifest(legacyV1), /Unsupported Supabase migration manifest/);
+  assert.equal(manifest.migrations[0].predecessorMigrationId, null);
+  assert.equal(manifest.migrations.at(-1).predecessorMigrationId, manifest.migrations.at(-2).id);
+  const tampered = structuredClone(manifest);
+  tampered.migrations[0] = { ...tampered.migrations[0], sha256: 'f'.repeat(64) };
+  assert.throws(() => parseSupabaseMigrationManifest(tampered), /set digest mismatch/);
+  const first = manifest.migrations[0];
+  const firstSql = readFileSync(new URL(first.path, CONSOLE_SOURCE), 'utf8');
+  assert.equal(verifySupabaseMigrationArtifact(first, firstSql), true);
+  assert.throws(() => verifySupabaseMigrationArtifact(first, `${firstSql}\n-- tampered`), /digest differs/);
+  const duplicate = structuredClone(manifest);
+  duplicate.migrations[1] = { ...duplicate.migrations[1], id: duplicate.migrations[0].id };
+  assert.throws(() => parseSupabaseMigrationManifest(duplicate), /Invalid or duplicate/);
+  const brokenLineage = structuredClone(manifest);
+  brokenLineage.migrations[2] = { ...brokenLineage.migrations[2], predecessorMigrationId: '9999' };
+  assert.throws(() => parseSupabaseMigrationManifest(brokenLineage), /Invalid or duplicate/);
   const bootstrapSource = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(bootstrapSource, /SUPABASE_MIGRATIONS\s*=\s*Object\.freeze\(\[/);
   assert.doesNotMatch(bootstrapSource, /0032_audit_ledger_integrity\.sql/);
   assert.doesNotMatch(bootstrapSource, /0033_approval_outcome_ledger\.sql/);
   assert.doesNotMatch(bootstrapSource, /0034_agent_action_ledger\.sql/);
+  assert.equal(FOUNDATION_ARTIFACT_PATHS.includes('backend/supabase/migrate-only.ps1'), false,
+    'integrated rollback must not require a component-only runner from an older source revision');
+  assert.match(bootstrapSource, /migrationSourceRevision: targetLock\.sourceRevision/,
+    'integrated rollback must use the target digest-bound forward-only migration set');
+  assert.match(bootstrapSource, /migrationEvidence: targetLock\.releaseBom\?\.migrationManifest/,
+    'integrated rollback must verify the target migration set against target Release BOM evidence');
+  assert.match(bootstrapSource, /\{ changedComponents, includeMigrations: false \}/,
+    'component rollback must not prepare or reverse schema migrations');
+  const migrationCall = bootstrapSource.indexOf('runComponentMigrations(prepared.foundation');
+  const workloadApply = bootstrapSource.indexOf('applyRelease(release, label, progress)', migrationCall);
+  assert.ok(migrationCall > 0 && workloadApply > migrationCall,
+    'component migrations must complete before changed workload manifests are applied');
 });
 
 test('base Main Shell includes Backend, DUPA, notification, OAA, governed adapter and production guardrails', () => {

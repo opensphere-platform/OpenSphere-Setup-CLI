@@ -29,7 +29,11 @@ const REQUIRED_SECRETS = Object.freeze({
   'opensphere-console-change/opensphere-gitea-signing': ['gitea-signing-key', 'gitea-signing-key.pub'],
   'opensphere-console/shell-tls': ['tls.crt', 'tls.key'],
   'opensphere-console/opensphere-supabase-runtime': ['jwt-secret', 'service-role-key'],
-  'opensphere-console/opensphere-oaa-runtime': ['pg-password'],
+  'opensphere-console/opensphere-oaa-runtime': [
+    'pg-password', 'observer-pg-user', 'observer-pg-password',
+    'relay-pg-user', 'relay-pg-password',
+    'maintenance-pg-user', 'maintenance-pg-password'
+  ],
   'opensphere-console/opensphere-gitea-control-plane': [
     'token', 'review-token', 'webhook-secret', 'reconciler-token'
   ],

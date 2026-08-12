@@ -63,7 +63,7 @@ macOS 준비·설치·인증서 신뢰 절차는
 
 Setup은 태그를 그대로 설치하지 않는다.
 
-1. 선택한 채널의 서명된 Release BOM을 조회한다.
+1. 선택한 채널의 Release BOM 또는 local-edge release lock을 조회한다.
 2. GitHub Actions provenance, SPDX SBOM, 소스 revision, 13개 이미지 digest를 검증한다.
 3. 검증된 immutable release lock을 로컬과 클러스터에 기록한다.
 4. 정확히 그 소스 revision의 설치 스크립트, SQL migration, Kubernetes manifest를 받는다.
@@ -79,7 +79,7 @@ Setup은 태그를 그대로 설치하지 않는다.
 
 ## 기본 런타임
 
-서명 BOM의 필수 13개 컴포넌트:
+Release BOM/lock의 필수 13개 컴포넌트:
 
 | 컴포넌트 | 역할 |
 |---|---|
@@ -152,6 +152,10 @@ v1.30+, Ready 노드와 권한, StorageClass, 신규 설치 포트와 채널별 
 `edge`는 개발 클러스터의 Linux 노드 아키텍처만 포함한 host-native 이미지도 허용한다.
 로컬 발행본은 `localhost`, `pre-ga`, `ga-eligible=false`, 날짜 태그와 전체 source
 revision 라벨 및 `local-<commit12>` immutable tag가 13개 이미지에서 모두 일치해야 한다.
+local-edge lock은 서명된 Release BOM이라고 주장하지 않는다. 따라서 Supabase migration
+manifest는 exact source revision과 per-file SHA-256, manifest set digest, v2 predecessor
+lineage를 모두 검증해 결속하며 독립 BOM 서명은 GitHub release/GA 경로에서만 성립한다.
+local-edge 결과물은 이 차이를 유지한 채 candidate/stable/ga로 승격할 수 없다.
 `candidate`와 `stable`은 계속 `linux/amd64`·`linux/arm64` 양쪽과 GitHub Actions
 Release BOM·provenance·SPDX SBOM attestation을 모두 요구한다.
 
