@@ -11,7 +11,9 @@ import { fetchWithRetry } from './http.mjs';
 import {
   hostRegistryCredentials,
   isLocalEdgeLock,
+  RELEASE_SCOPE_COMPONENT,
   validateLock,
+  validateReleaseTransition,
   verifyReleaseLock
 } from './release.mjs';
 import { verifyInstallation } from './verify.mjs';
@@ -51,20 +53,32 @@ const CHANGE_RECONCILE_RETRY_MIGRATION = 'backend/supabase/migrations/0028_chang
 const BROWSER_SESSION_BASELINE_MIGRATION = 'backend/supabase/migrations/0029_browser_session_and_baseline_monitoring.sql';
 const CEPH_DATA_PATH_RUNTIME_MIGRATION = 'backend/supabase/migrations/0030_ceph_data_path_verification_runtime.sql';
 const FOUNDATION_BOOTSTRAP_MIGRATION = 'backend/supabase/migrations/0031_foundation_bootstrap_consumer.sql';
-const AUDIT_LEDGER_INTEGRITY_MIGRATION = 'backend/supabase/migrations/0032_audit_ledger_integrity.sql';
-const APPROVAL_OUTCOME_LEDGER_MIGRATION = 'backend/supabase/migrations/0033_approval_outcome_ledger.sql';
-const AGENT_ACTION_LEDGER_MIGRATION = 'backend/supabase/migrations/0034_agent_action_ledger.sql';
+const AUDIT_EVENT_LEDGER_CHAIN_MIGRATION = 'backend/supabase/migrations/0032_audit_event_ledger_chain.sql';
+const PLATFORM_RELEASE_CONSUMER_MIGRATION = 'backend/supabase/migrations/0033_platform_release_consumer.sql';
 const MODULE_OPERATION_LEDGER_MIGRATION = 'backend/supabase/migrations/0035_module_operation_ledger.sql';
+const PLATFORM_SUPPORT_OBSERVABILITY_MIGRATION = 'backend/supabase/migrations/0036_platform_support_observability_permissions.sql';
+const BROWSER_SESSION_EXPIRY_MIGRATION = 'backend/supabase/migrations/0037_browser_session_expiry_evidence.sql';
+const OAA_WATCH_CURSOR_STATUS_MIGRATION = 'backend/supabase/migrations/0038_oaa_watch_cursor_status_vocabulary.sql';
+const AUDIT_LEDGER_INTEGRITY_MIGRATION = 'backend/supabase/migrations/0039_audit_ledger_integrity.sql';
+const APPROVAL_OUTCOME_LEDGER_MIGRATION = 'backend/supabase/migrations/0040_approval_outcome_ledger.sql';
+const AGENT_ACTION_LEDGER_MIGRATION = 'backend/supabase/migrations/0041_agent_action_ledger.sql';
+const FOUNDATION_BOOTSTRAP_CATALOG_MIRROR_MIGRATION = 'backend/supabase/migrations/0042_foundation_bootstrap_catalog_mirror.sql';
 const LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS = new Set([
   EXTERNAL_CHANNEL_REASON_POLICY_MIGRATION,
   CHANGE_RECONCILE_RETRY_MIGRATION,
   BROWSER_SESSION_BASELINE_MIGRATION,
   CEPH_DATA_PATH_RUNTIME_MIGRATION,
   FOUNDATION_BOOTSTRAP_MIGRATION,
+  AUDIT_EVENT_LEDGER_CHAIN_MIGRATION,
+  PLATFORM_RELEASE_CONSUMER_MIGRATION,
   AUDIT_LEDGER_INTEGRITY_MIGRATION,
   APPROVAL_OUTCOME_LEDGER_MIGRATION,
   AGENT_ACTION_LEDGER_MIGRATION,
-  MODULE_OPERATION_LEDGER_MIGRATION
+  FOUNDATION_BOOTSTRAP_CATALOG_MIRROR_MIGRATION,
+  MODULE_OPERATION_LEDGER_MIGRATION,
+  PLATFORM_SUPPORT_OBSERVABILITY_MIGRATION,
+  BROWSER_SESSION_EXPIRY_MIGRATION,
+  OAA_WATCH_CURSOR_STATUS_MIGRATION
 ]);
 const LEGACY_RECOVERY_MANIFESTS = new Set([
   'backend/recovery/recovery-jobs.yaml',
@@ -229,10 +243,16 @@ export const SUPABASE_MIGRATIONS = Object.freeze([
   '0029_browser_session_and_baseline_monitoring.sql',
   '0030_ceph_data_path_verification_runtime.sql',
   '0031_foundation_bootstrap_consumer.sql',
-  '0032_audit_ledger_integrity.sql',
-  '0033_approval_outcome_ledger.sql',
-  '0034_agent_action_ledger.sql',
-  '0035_module_operation_ledger.sql'
+  '0032_audit_event_ledger_chain.sql',
+  '0033_platform_release_consumer.sql',
+  '0035_module_operation_ledger.sql',
+  '0036_platform_support_observability_permissions.sql',
+  '0037_browser_session_expiry_evidence.sql',
+  '0038_oaa_watch_cursor_status_vocabulary.sql',
+  '0039_audit_ledger_integrity.sql',
+  '0040_approval_outcome_ledger.sql',
+  '0041_agent_action_ledger.sql',
+  '0042_foundation_bootstrap_catalog_mirror.sql'
 ]);
 
 export const SUPABASE_MANIFEST = Object.freeze({
@@ -284,6 +304,47 @@ function baseManifestSpecs(lock) {
     : BASE_MANIFESTS;
 }
 
+function manifestSpecComponents(spec) {
+  return new Set((spec.replacements ?? []).map(([, component]) => component));
+}
+
+export function componentReleaseManifestSpecs(
+  lock,
+  changedComponents = lock.changedComponents
+) {
+  if (!Array.isArray(changedComponents) || changedComponents.length === 0) {
+    throw new Error('Component release requires a non-empty changed component set');
+  }
+  const requested = new Set(changedComponents);
+  const selectRequestedSpecs = (specs) => specs.flatMap((spec) => {
+    const owners = [...manifestSpecComponents(spec)].filter((component) => requested.has(component));
+    if (owners.length === 0) return [];
+    const sourceRevisions = new Set(owners.map((component) => {
+      const sourceRevision = lock.components?.[component]?.sourceRevision;
+      if (!/^[a-f0-9]{40}$/u.test(sourceRevision ?? '')) {
+        throw new Error(`Component release lacks a governed source revision for ${component}`);
+      }
+      return sourceRevision;
+    }));
+    if (sourceRevisions.size !== 1) {
+      throw new Error(
+        `Component release manifest ${spec.path} spans incompatible source revisions for: ${owners.join(', ')}`
+      );
+    }
+    return [{ ...spec, artifactSourceRevision: [...sourceRevisions][0] }];
+  });
+  const foundation = selectRequestedSpecs([SUPABASE_MANIFEST, GITEA_MANIFEST]);
+  const base = selectRequestedSpecs(baseManifestSpecs(lock));
+  const exposed = new Set(
+    [...foundation, ...base].flatMap((spec) => [...manifestSpecComponents(spec)])
+  );
+  const missing = changedComponents.filter((component) => !exposed.has(component));
+  if (missing.length > 0) {
+    throw new Error(`Component release has no governed manifest for: ${missing.join(', ')}`);
+  }
+  return { foundation, base };
+}
+
 function installArtifactCount(lock) {
   return foundationArtifactPaths(lock).length + 2 + baseManifestSpecs(lock).length;
 }
@@ -298,12 +359,36 @@ export const CORE_ROLLOUTS = Object.freeze([
   ['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s'],
   ['opensphere-console', 'deployment/opensphere-console-backend', '600s'],
   ['opensphere-console', 'deployment/foundation-bootstrap-reconciler', '600s'],
+  ['opensphere-console', 'deployment/platform-release-reconciler', '600s'],
   ['opensphere-console', 'deployment/opensphere-notification-dispatcher', '600s'],
   ['opensphere-console', 'deployment/opensphere-external-channel-executor', '600s'],
   ['opensphere-console', 'deployment/opensphere-console-oaa-gateway', '600s'],
   ['opensphere-console', 'deployment/oaa-governed-adapter', '600s'],
   ['opensphere-console', 'deployment/opensphere-console', '600s']
 ]);
+
+export const COMPONENT_ROLLOUTS = Object.freeze({
+  console: [['opensphere-console', 'deployment/opensphere-console', '600s']],
+  backend: [
+    ['opensphere-console', 'deployment/opensphere-console-backend', '600s'],
+    ['opensphere-console', 'deployment/foundation-bootstrap-reconciler', '600s'],
+    ['opensphere-console', 'deployment/platform-release-reconciler', '600s']
+  ],
+  dupaController: [['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s']],
+  oaaGateway: [['opensphere-console', 'deployment/opensphere-console-oaa-gateway', '600s']],
+  oaaGovernedAdapter: [['opensphere-console', 'deployment/oaa-governed-adapter', '600s']],
+  notificationDispatcher: [
+    ['opensphere-console', 'deployment/opensphere-notification-dispatcher', '600s'],
+    ['opensphere-console', 'deployment/opensphere-external-channel-executor', '600s']
+  ],
+  gitea: [['opensphere-console-change', 'deployment/opensphere-gitea', '900s']],
+  giteaPostgres: [['opensphere-console-change', 'deployment/opensphere-gitea-postgres', '600s']],
+  supabasePostgres: [['opensphere-console-data', 'statefulset/opensphere-supabase-postgres', '600s']],
+  supabaseAuth: [['opensphere-console-data', 'deployment/opensphere-supabase-auth', '600s']],
+  supabaseRest: [['opensphere-console-data', 'deployment/opensphere-supabase-rest', '600s']],
+  supabaseStorage: [['opensphere-console-data', 'deployment/opensphere-supabase-storage', '600s']],
+  recovery: []
+});
 
 function hex(bytes) {
   return randomBytes(bytes).toString('hex');
@@ -350,37 +435,6 @@ function ensureGenericSecret(namespace, name, literals = {}, files = {}) {
     data
   })}\n`);
   return true;
-}
-
-function ensureFoundationDataEngineSecretAccess() {
-  applyYaml(`${JSON.stringify({
-    apiVersion: 'rbac.authorization.k8s.io/v1',
-    kind: 'Role',
-    metadata: { name: 'foundation-console-valkey-secret-manager', namespace: 'opensphere-foundation' },
-    rules: [{
-      apiGroups: [''], resources: ['secrets'],
-      resourceNames: ['foundation-data-valkey-auth', 'rustfs-credentials'],
-      verbs: ['get', 'patch']
-    }]
-  })}\n`);
-  applyYaml(`${JSON.stringify({
-    apiVersion: 'rbac.authorization.k8s.io/v1',
-    kind: 'RoleBinding',
-    metadata: { name: 'foundation-console-valkey-secret-manager', namespace: 'opensphere-foundation' },
-    roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'Role', name: 'foundation-console-valkey-secret-manager' },
-    subjects: [{ kind: 'ServiceAccount', name: 'opensphere-foundation', namespace: 'opensphere-console' }]
-  })}\n`);
-}
-
-export function ensureFoundationDataEngineCredentials() {
-  ensureGenericSecret('opensphere-foundation', 'foundation-data-valkey-auth', {
-    password: randomBytes(32).toString('base64')
-  });
-  ensureGenericSecret('opensphere-foundation', 'rustfs-credentials', {
-    access_key: `opensphere-${randomBytes(9).toString('hex')}`,
-    secret_key: randomBytes(32).toString('base64url')
-  });
-  ensureFoundationDataEngineSecretAccess();
 }
 
 function ensureRecoveryTargetSecret(namespace, source) {
@@ -474,8 +528,15 @@ function validateAuthEnvironment(value) {
   return selectAuthEnvironment('edge', value);
 }
 
-async function fetchReleaseArtifact(lock, path, { optional404 = false } = {}) {
-  const response = await fetchWithRetry(`${RAW_ROOT}/${lock.sourceRevision}/${path}`);
+async function fetchReleaseArtifact(
+  lock,
+  path,
+  { optional404 = false, sourceRevision = lock.sourceRevision } = {}
+) {
+  if (!/^[a-f0-9]{40}$/u.test(sourceRevision ?? '')) {
+    throw new Error(`Release artifact source revision is invalid for ${path}`);
+  }
+  const response = await fetchWithRetry(`${RAW_ROOT}/${sourceRevision}/${path}`);
   if (optional404 && response.status === 404) return null;
   if (!response.ok) throw new Error(`Release artifact download failed (${path}): HTTP ${response.status}`);
   return response.text();
@@ -487,7 +548,8 @@ export function renderManifest(
   sourceYaml,
   storageClass,
   consoleUrl = defaultConsoleUrl('edge', 'development'),
-  authEnvironment = 'development'
+  authEnvironment = 'development',
+  { sourceRevision = lock.sourceRevision } = {}
 ) {
   let yaml = sourceYaml;
   for (const [pattern, component] of spec.replacements ?? []) {
@@ -506,7 +568,7 @@ export function renderManifest(
   yaml = yaml.replaceAll('__OPENSPHERE_SUPABASE_NAMESPACE__', 'opensphere-console-data');
   yaml = yaml.replaceAll('https://localhost:8090', normalizedConsoleUrl);
   yaml = configureShellServiceEndpoint(yaml, normalizedConsoleUrl);
-  yaml = yaml.replaceAll('__OPENSPHERE_RELEASE_REVISION__', lock.sourceRevision);
+  yaml = yaml.replaceAll('__OPENSPHERE_RELEASE_REVISION__', sourceRevision);
   yaml = yaml.replaceAll(
     'name: AUTH_ENVIRONMENT, value: "development"',
     `name: AUTH_ENVIRONMENT, value: "${validateAuthEnvironment(authEnvironment)}"`
@@ -527,10 +589,19 @@ export async function fetchManifest(
   spec,
   storageClass,
   consoleUrl = defaultConsoleUrl('edge', 'development'),
-  authEnvironment = 'development'
+  authEnvironment = 'development',
+  { sourceRevision = lock.sourceRevision } = {}
 ) {
-  const sourceYaml = await fetchReleaseArtifact(lock, spec.path);
-  return renderManifest(lock, spec, sourceYaml, storageClass, consoleUrl, authEnvironment);
+  const sourceYaml = await fetchReleaseArtifact(lock, spec.path, { sourceRevision });
+  return renderManifest(
+    lock,
+    spec,
+    sourceYaml,
+    storageClass,
+    consoleUrl,
+    authEnvironment,
+    { sourceRevision }
+  );
 }
 
 async function writeReleaseArtifact(root, path, contents) {
@@ -660,6 +731,76 @@ function applyRelease(release, label, progress, { preserveHostLocalEdgeTrust = f
   }
 }
 
+function manifestDocuments(yaml) {
+  return String(yaml)
+    .split(/^---\s*$/mu)
+    .map((document) => document.trim())
+    .filter(Boolean);
+}
+
+function escapeExpression(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+export function componentReleaseWorkloadManifests(
+  lock,
+  prepared,
+  changedComponents = lock.changedComponents
+) {
+  if (!Array.isArray(changedComponents) || changedComponents.length === 0) {
+    throw new Error('Component release requires a non-empty changed component set');
+  }
+  const sources = [...prepared.foundation.release, ...prepared.base];
+  const selected = new Map();
+  for (const component of changedComponents) {
+    const image = lock.components?.[component]?.image;
+    if (!image) throw new Error(`Component release lock lacks ${component}`);
+    const imageLine = new RegExp(
+      `^[ \\t]*(?:-[ \\t]*)?image:[ \\t]+["']?${escapeExpression(image)}["']?[ \\t]*(?:#.*)?$`,
+      'mu'
+    );
+    let found = false;
+    for (const source of sources) {
+      const baseSpec = baseManifestSpecs(lock).find(({ path }) => path === source.path);
+      const completeOwners = baseSpec ? manifestSpecComponents(baseSpec) : new Set();
+      if (completeOwners.size === 1 && completeOwners.has(component)) {
+        if (!imageLine.test(source.yaml)) continue;
+        found = true;
+        selected.set(`${source.path}#complete`, {
+          path: `${source.path}#${component}`,
+          yaml: source.yaml.endsWith('\n') ? source.yaml : `${source.yaml}\n`
+        });
+        continue;
+      }
+      manifestDocuments(source.yaml).forEach((document, index) => {
+        if (!imageLine.test(document)) return;
+        found = true;
+        selected.set(`${source.path}#${index}`, {
+          path: `${source.path}#${component}`,
+          yaml: `${document}\n`
+        });
+      });
+    }
+    if (!found) {
+      throw new Error(`Component release artifact does not expose workload image ${component}`);
+    }
+  }
+  return [...selected.values()];
+}
+
+function installPreparedComponentRelease(
+  lock,
+  prepared,
+  _storageClass,
+  _consoleUrl,
+  label,
+  changedComponents = lock.changedComponents,
+  progress
+) {
+  const release = componentReleaseWorkloadManifests(lock, prepared, changedComponents);
+  applyRelease(release, label, progress);
+}
+
 function inventoryKey(resource) {
   return [resource.apiVersion, resource.kind, resource.namespace ?? '', resource.name].join('|');
 }
@@ -753,28 +894,66 @@ export function terminalPodError(pods) {
   return null;
 }
 
-function waitForCoreRollouts(progress) {
-  for (const [namespace, resource, timeout] of CORE_ROLLOUTS) {
+export function workloadReady(workload) {
+  const desired = Number(workload.spec?.replicas ?? 1);
+  const observedGeneration = Number(workload.status?.observedGeneration ?? 0);
+  const generation = Number(workload.metadata?.generation ?? 0);
+  if (observedGeneration < generation) return false;
+
+  const ready = Number(workload.status?.readyReplicas ?? 0) === desired;
+  const updated = Number(workload.status?.updatedReplicas ?? 0) === desired;
+  if (!ready || !updated) return false;
+
+  const kind = String(workload.kind ?? '').toLowerCase();
+  if (kind === 'deployment') {
+    return Number(workload.status?.availableReplicas ?? 0) === desired
+      && Number(workload.status?.unavailableReplicas ?? 0) === 0;
+  }
+  if (kind === 'statefulset') {
+    return Number(workload.status?.currentReplicas ?? 0) === desired
+      && Boolean(workload.status?.currentRevision)
+      && workload.status.currentRevision === workload.status.updateRevision;
+  }
+  return true;
+}
+
+function waitForRollouts(rollouts, progress) {
+  for (const [namespace, resource, timeout] of rollouts) {
     progress?.wait(`${namespace}/${resource} rollout`, `timeout=${timeout}`);
     const deadline = Date.now() + Number.parseInt(timeout, 10) * 1000;
-    while (Date.now() < deadline) {
-      try {
-        kubectl(['-n', namespace, 'rollout', 'status', resource, '--timeout=15s'], { capture: true });
+    while (true) {
+      const workload = JSON.parse(kubectl(['-n', namespace, 'get', resource, '-o', 'json'], { capture: true }));
+      if (workloadReady(workload)) {
         progress?.item('준비', `${namespace}/${resource}`);
         break;
-      } catch (rolloutError) {
-        const workload = JSON.parse(kubectl(['-n', namespace, 'get', resource, '-o', 'json'], { capture: true }));
-        const selector = Object.entries(workload.spec?.selector?.matchLabels ?? {})
-          .map(([key, value]) => `${key}=${value}`).join(',');
-        const pods = JSON.parse(kubectl([
-          '-n', namespace, 'get', 'pods', ...(selector ? ['-l', selector] : []), '-o', 'json'
-        ], { capture: true }));
-        const terminal = terminalPodError(pods);
-        if (terminal) throw new Error(`${resource} has a terminal pod error: ${terminal}`);
-        if (Date.now() >= deadline) throw rolloutError;
       }
+      const selector = Object.entries(workload.spec?.selector?.matchLabels ?? {})
+        .map(([key, value]) => `${key}=${value}`).join(',');
+      const pods = JSON.parse(kubectl([
+        '-n', namespace, 'get', 'pods', ...(selector ? ['-l', selector] : []), '-o', 'json'
+      ], { capture: true }));
+      const terminal = terminalPodError(pods);
+      if (terminal) throw new Error(`${resource} has a terminal pod error: ${terminal}`);
+      if (Date.now() >= deadline) {
+        throw new Error(`${resource} did not reach its current generation and exact replica readiness within ${timeout}`);
+      }
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_000);
     }
   }
+}
+
+function waitForCoreRollouts(progress) {
+  waitForRollouts(CORE_ROLLOUTS, progress);
+}
+
+export function waitForComponentRollouts(changedComponents, progress) {
+  const unique = new Map();
+  for (const component of changedComponents) {
+    const rollouts = COMPONENT_ROLLOUTS[component];
+    if (!rollouts) throw new Error(`Component rollout contract is missing for ${component}`);
+    for (const rollout of rollouts) unique.set(`${rollout[0]}|${rollout[1]}`, rollout);
+  }
+  waitForRollouts([...unique.values()], progress);
 }
 
 export function waitForJobCompletion(
@@ -1003,6 +1182,43 @@ async function prepareRelease(
   return { foundation, base, all: [...foundation.release, ...base] };
 }
 
+export async function prepareComponentRelease(
+  lock,
+  root,
+  storageClass,
+  consoleUrl,
+  authEnvironment,
+  { changedComponents = lock.changedComponents } = {}
+) {
+  const specs = componentReleaseManifestSpecs(lock, changedComponents);
+  const [foundationRelease, base] = await Promise.all([
+    Promise.all(specs.foundation.map(async (spec) => ({
+      path: spec.path,
+      yaml: await fetchManifest(
+        lock,
+        spec,
+        storageClass,
+        consoleUrl,
+        authEnvironment,
+        { sourceRevision: spec.artifactSourceRevision }
+      )
+    }))),
+    Promise.all(specs.base.map(async (spec) => ({
+      path: spec.path,
+      yaml: await fetchManifest(
+        lock,
+        spec,
+        storageClass,
+        consoleUrl,
+        authEnvironment,
+        { sourceRevision: spec.artifactSourceRevision }
+      )
+    })))
+  ]);
+  const foundation = { root, release: foundationRelease };
+  return { foundation, base, all: [...foundationRelease, ...base] };
+}
+
 export async function preflightReleaseArtifacts(lock, {
   storageClass,
   consoleUrl,
@@ -1057,6 +1273,9 @@ export async function bootstrap(lock, {
 } = {}) {
   progress?.step('release lock 구조와 채널 공급망 재검증');
   validateLock(lock);
+  if (lock.releaseScope === RELEASE_SCOPE_COMPONENT) {
+    throw new Error('Component release locks are upgrade-only and cannot bootstrap a cluster');
+  }
   await verifyReleaseLock(lock, {
     registryCredentials,
     requiredPlatforms,
@@ -1227,11 +1446,7 @@ export async function bootstrap(lock, {
       'backup-encryption-key': randomBytes(32).toString('base64'),
       'internal-token': hex(32)
     });
-    // Foundation Valkey는 Console/Control Plane에 namespace-wide Secret create
-    // 권한을 주지 않는다. 플랫폼 installer가 exact Secret을 최초 1회 만들고,
-    // ensureGenericSecret의 merge 규칙으로 resume·reboot·upgrade 시 값을 보존한다.
-    ensureFoundationDataEngineCredentials();
-    progress?.done('CLI·notification·external-channel runtime 및 Valkey·RustFS exact Secret·RBAC 준비');
+    progress?.done('CLI·notification·external-channel runtime Secret 준비');
 
     progress?.step('Supabase·Gitea foundation 및 OpenSphere workload 적용');
     installPreparedRelease(
@@ -1283,6 +1498,7 @@ export async function upgrade(
 ) {
   validateLock(previousLock, { allowLegacyComponentSet: true });
   validateLock(targetLock);
+  validateReleaseTransition(previousLock, targetLock);
   promotionBlocked(targetLock.channel);
   const operations = {
     readInstallationLock,
@@ -1291,8 +1507,11 @@ export async function upgrade(
     preflight,
     ensureRegistryPullSecrets,
     prepareRelease,
+    prepareComponentRelease,
     installPreparedRelease,
+    installPreparedComponentRelease,
     waitForCoreRollouts,
+    waitForComponentRollouts,
     verifyInstallation,
     recordInstallationState,
     readReleaseInventory,
@@ -1340,30 +1559,68 @@ export async function upgrade(
   operations.ensureManagedNamespaces();
   operations.ensureRegistryPullSecrets(targetLock, registryCredentials);
   const initialAdmin = config.initialAdmin;
+  const componentTransition = targetLock.releaseScope === RELEASE_SCOPE_COMPONENT;
+  const changedComponents = componentTransition ? targetLock.changedComponents : [];
   const targetWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-target-'));
   const rollbackWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-rollback-'));
   try {
     console.log('[준비] 대상 release와 이전 release rollback artifact 검증');
-    const [target, rollback] = await Promise.all([
-      operations.prepareRelease(
-        targetLock, targetWork, config.storageClass, effectiveConsoleUrl, config.authEnvironment
-      ),
-      operations.prepareRelease(
-        previousLock,
-        rollbackWork,
-        config.storageClass,
-        effectiveConsoleUrl,
-        config.authEnvironment,
-        { optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS }
-      )
-    ]);
-    const previousInventory = operations.readReleaseInventory()
+    const [target, rollback] = componentTransition
+      ? await Promise.all([
+        operations.prepareComponentRelease(
+          targetLock,
+          targetWork,
+          config.storageClass,
+          effectiveConsoleUrl,
+          config.authEnvironment,
+          { changedComponents }
+        ),
+        operations.prepareComponentRelease(
+          previousLock,
+          rollbackWork,
+          config.storageClass,
+          effectiveConsoleUrl,
+          config.authEnvironment,
+          { changedComponents }
+        )
+      ])
+      : await Promise.all([
+        operations.prepareRelease(
+          targetLock, targetWork, config.storageClass, effectiveConsoleUrl, config.authEnvironment
+        ),
+        operations.prepareRelease(
+          previousLock,
+          rollbackWork,
+          config.storageClass,
+          effectiveConsoleUrl,
+          config.authEnvironment,
+          { optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS }
+        )
+      ]);
+    const recordedInventory = operations.readReleaseInventory();
+    if (componentTransition && !recordedInventory) {
+      throw new Error('Component release requires the existing complete release inventory');
+    }
+    const previousInventory = recordedInventory
       ?? operations.releaseResourceInventory(rollback.all);
-    const targetInventory = operations.releaseResourceInventory(target.all);
+    const targetInventory = componentTransition
+      ? previousInventory
+      : operations.releaseResourceInventory(target.all);
     try {
-      operations.installPreparedRelease(
-        targetLock, target, config.storageClass, effectiveConsoleUrl, '업그레이드'
-      );
+      if (componentTransition) {
+        operations.installPreparedComponentRelease(
+          targetLock,
+          target,
+          config.storageClass,
+          effectiveConsoleUrl,
+          '업그레이드',
+          changedComponents
+        );
+      } else {
+        operations.installPreparedRelease(
+          targetLock, target, config.storageClass, effectiveConsoleUrl, '업그레이드'
+        );
+      }
       operations.recordInstallationState(
         targetLock,
         config.storageClass,
@@ -1372,12 +1629,16 @@ export async function upgrade(
         config.authEnvironment,
         config.shellTlsSecret
       );
-      operations.waitForCoreRollouts();
+      if (componentTransition) operations.waitForComponentRollouts(changedComponents);
+      else operations.waitForCoreRollouts();
       const evidence = await operations.verifyInstallation(targetLock, {
         consoleUrl: effectiveConsoleUrl,
-        requireZeroRestarts: false
+        requireZeroRestarts: false,
+        componentSelection: componentTransition ? changedComponents : null
       });
-      operations.pruneReleaseResources(previousInventory, targetInventory);
+      if (!componentTransition) {
+        operations.pruneReleaseResources(previousInventory, targetInventory);
+      }
       operations.recordReleaseInventory(targetLock, targetInventory);
       return {
         changed: true,
@@ -1388,9 +1649,20 @@ export async function upgrade(
     } catch (upgradeError) {
       console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
       try {
-        operations.installPreparedRelease(
-          previousLock, rollback, config.storageClass, effectiveConsoleUrl, '롤백'
-        );
+        if (componentTransition) {
+          operations.installPreparedComponentRelease(
+            previousLock,
+            rollback,
+            config.storageClass,
+            effectiveConsoleUrl,
+            '롤백',
+            changedComponents
+          );
+        } else {
+          operations.installPreparedRelease(
+            previousLock, rollback, config.storageClass, effectiveConsoleUrl, '롤백'
+          );
+        }
         operations.recordInstallationState(
           previousLock,
           config.storageClass,
@@ -1399,13 +1671,17 @@ export async function upgrade(
           config.authEnvironment,
           config.shellTlsSecret
         );
-        operations.waitForCoreRollouts();
+        if (componentTransition) operations.waitForComponentRollouts(changedComponents);
+        else operations.waitForCoreRollouts();
         await operations.verifyInstallation(previousLock, {
           consoleUrl: effectiveConsoleUrl,
           requireZeroRestarts: false,
-          mode: 'rollback'
+          mode: 'rollback',
+          componentSelection: componentTransition ? changedComponents : null
         });
-        operations.pruneReleaseResources(targetInventory, previousInventory);
+        if (!componentTransition) {
+          operations.pruneReleaseResources(targetInventory, previousInventory);
+        }
         operations.recordReleaseInventory(previousLock, previousInventory);
       } catch (rollbackError) {
         throw new Error(`Upgrade failed (${upgradeError.message}); rollback also failed (${rollbackError.message})`);

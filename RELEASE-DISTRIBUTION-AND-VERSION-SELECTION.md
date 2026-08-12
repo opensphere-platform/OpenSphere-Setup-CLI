@@ -8,6 +8,20 @@ OpenSphere 설치 입력은 mutable tag 목록이 아니라, Console anchor dige
 `OpenSphereReleaseBOM`이다. BOM은 한 source revision에서 빌드된 13개 필수 이미지를 하나의
 원자적 release로 묶는다.
 
+`integrated` lock은 위 BOM과 동일한 통합 release다. 로컬 `edge`의 영향을 받은 이미지만
+다시 빌드하는 경우에는 `component` lock을 사용한다. component lock도 13개 전체 목록을
+가진 원자적 설치 상태이며, 부분 목록이 아니다. 다음 전이 증명을 release digest에 결속한다.
+
+- `baseReleaseDigest`: 현재 클러스터에 설치된 직전 lock
+- `changedComponents`: 이번에 실제로 다시 빌드한 component의 정렬된 집합
+- 목록에 없는 component: 직전 lock의 repository·image digest·source revision·registry
+  요구를 byte-for-byte 계승
+- 목록에 있는 component: 새 source revision과 digest를 사용하며 실제로 직전 lock과 달라야 함
+
+component lock은 localhost `edge`의 **upgrade 전용** 계약이다. fresh bootstrap,
+`candidate`/`stable`, signed Release BOM 승격에는 사용할 수 없다. 실패하면 직전의 완전한
+base lock과 사전 확보한 artifact로 rollback한 뒤 그 상태를 다시 검증한다.
+
 필수 컴포넌트:
 
 ```text
@@ -70,6 +84,9 @@ Setup은 다음을 모두 만족해야 release lock을 반환한다.
 - 지원 platform이 `linux/amd64`, `linux/arm64`
 - 계산한 canonical release digest가 BOM/lock과 일치
 
+component upgrade lock은 위 공통 항목과 함께 base digest 일치, 동일 channel/trust,
+동일한 13개 component 집합, 명시된 변경 외의 byte-for-byte 계승을 추가로 검증한다.
+
 Setup은 그 source revision에서 manifest, installer와 SQL migration을 받는다. manifest의 모든
 image는 BOM digest로 치환되고 tag-only, upstream registry 또는 미해결 placeholder가 남으면
 설치를 중단한다.
@@ -109,7 +126,8 @@ namespace별 `opensphere-ghcr-pull` Secret으로만 전달한다.
 다음은 자동 복구 또는 추정 없이 fail-closed한다.
 
 - BOM/attestation 부재 또는 trust root 불일치
-- source revision 혼합
+- integrated/BOM release의 source revision 혼합
+- component release의 base digest 불일치, 숨은 component 변경 또는 허위 변경 목록
 - 누락·추가 component
 - mutable/tag-only 이미지
 - 지원 node architecture 부재
