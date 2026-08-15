@@ -72,6 +72,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Require canonical Setup main release source
+        shell: pwsh
+        env:
+          BOUND_REF: ${{ github.ref }}
+          BOUND_SHA: ${{ github.sha }}
+        run: |
+          if ($env:BOUND_REF -ne 'refs/heads/main') {
+            throw "Private Setup publication requires refs/heads/main, got $env:BOUND_REF"
+          }
+          $head = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -ne $env:BOUND_SHA) {
+            throw 'Checked-out Setup HEAD differs from the workflow source revision'
+          }
+          git fetch --prune --no-tags origin main
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch canonical Setup origin/main' }
+          $originMain = (git rev-parse refs/remotes/origin/main).Trim()
+          if ($LASTEXITCODE -ne 0 -or $head -ne $originMain) {
+            throw 'Private Setup publication requires fresh canonical origin/main'
+          }
+
       - uses: actions/setup-node@v4
         with:
           node-version: '24.18.0'
@@ -91,15 +111,16 @@ jobs:
         with:
           repository: ${{ steps.console_source.outputs.repository }}
           ref: ${{ steps.console_source.outputs.revision }}
+          fetch-depth: 0
           path: _fixtures/OpenSphere-console
 
       - name: Verify governed Console checkout
         shell: pwsh
         run: |
-          $actual = (git -C _fixtures/OpenSphere-console rev-parse HEAD).Trim()
-          if ($actual -ne '${{ steps.console_source.outputs.revision }}') {
-            throw "Console checkout revision mismatch: $actual"
-          }
+          node scripts/verify-console-source-checkout.mjs `
+            --checkout '_fixtures/OpenSphere-console' `
+            --current-only
+          if ($LASTEXITCODE -ne 0) { throw 'Console source checkout verification failed' }
 
       - name: Refuse public distribution
         shell: pwsh
