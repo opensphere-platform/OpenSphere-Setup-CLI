@@ -90,8 +90,8 @@ function parseArguments(args) {
   const values = { checkout: '', previousLock: '', transitionMode: '' };
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === '--checkout' && args[index + 1]) values.checkout = args[++index];
-    else if (arg === '--previous-lock' && args[index + 1]) {
+    if (arg === '--checkout' && args[index + 1] && !values.checkout) values.checkout = args[++index];
+    else if (arg === '--previous-lock' && args[index + 1] && !values.transitionMode) {
       values.previousLock = args[++index];
       values.transitionMode = 'previous';
     } else if (arg === '--allow-bootstrap' && !values.transitionMode) {
