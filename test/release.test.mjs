@@ -64,6 +64,26 @@ function validLock(channel = 'edge') {
   };
 }
 
+function componentPublicationBinding() {
+  return {
+    contract: 'opensphere-edge-component-publication-binding/v1',
+    publisher: 'scripts/Publish-LocalEdgeBackendComponent.ps1',
+    publisherGitBlob: '1'.repeat(40),
+    publisherSha256: `sha256:${'1'.repeat(64)}`,
+    documentSha256: `sha256:${'2'.repeat(64)}`,
+    signatureSha256: `sha256:${'3'.repeat(64)}`,
+    keyId: 'opensphere-edge-local-v1',
+    setupSourceRevision: '4'.repeat(40),
+    setupSourceLockSha256: `sha256:${'5'.repeat(64)}`,
+    setupManifestProjectionGitBlob: '6'.repeat(40),
+    setupManifestProjectionSha256: `sha256:${'6'.repeat(64)}`,
+    migrationSetDigest: `sha256:${'6'.repeat(64)}`,
+    platformRevision: '7'.repeat(40),
+    inventorySha256: `sha256:${'7'.repeat(64)}`,
+    verificationSetDigest: `sha256:${'8'.repeat(64)}`,
+  };
+}
+
 function validComponentTransition(changedComponents = ['backend']) {
   const base = validLock('edge');
   base.trust = LOCAL_EDGE_TRUST;
@@ -73,6 +93,7 @@ function validComponentTransition(changedComponents = ['backend']) {
   target.releaseScope = RELEASE_SCOPE_COMPONENT;
   target.baseReleaseDigest = base.releaseDigest;
   target.changedComponents = [...changedComponents].sort();
+  target.componentPublication = componentPublicationBinding();
   target.sourceRevision = targetRevision;
   for (const name of target.changedComponents) {
     target.components[name].image =
@@ -87,7 +108,8 @@ function validComponentTransition(changedComponents = ['backend']) {
     {
       releaseScope: target.releaseScope,
       baseReleaseDigest: target.baseReleaseDigest,
-      changedComponents: target.changedComponents
+      changedComponents: target.changedComponents,
+      componentPublication: target.componentPublication
     }
   );
   return { base, target };
@@ -351,7 +373,8 @@ test('component release transition binds its base digest and explicit change set
     {
       releaseScope: wrongBase.releaseScope,
       baseReleaseDigest: wrongBase.baseReleaseDigest,
-      changedComponents: wrongBase.changedComponents
+      changedComponents: wrongBase.changedComponents,
+      componentPublication: wrongBase.componentPublication
     }
   );
   assert.throws(
@@ -370,7 +393,8 @@ test('component release transition binds its base digest and explicit change set
     {
       releaseScope: hiddenChange.releaseScope,
       baseReleaseDigest: hiddenChange.baseReleaseDigest,
-      changedComponents: hiddenChange.changedComponents
+      changedComponents: hiddenChange.changedComponents,
+      componentPublication: hiddenChange.componentPublication
     }
   );
   assert.throws(
@@ -388,7 +412,8 @@ test('component release transition binds its base digest and explicit change set
     {
       releaseScope: noChange.releaseScope,
       baseReleaseDigest: noChange.baseReleaseDigest,
-      changedComponents: noChange.changedComponents
+      changedComponents: noChange.changedComponents,
+      componentPublication: noChange.componentPublication
     }
   );
   assert.throws(
@@ -411,7 +436,8 @@ test('component release scope is edge-local, canonical, and digest-bound', () =>
     {
       releaseScope: promoted.releaseScope,
       baseReleaseDigest: promoted.baseReleaseDigest,
-      changedComponents: promoted.changedComponents
+      changedComponents: promoted.changedComponents,
+      componentPublication: promoted.componentPublication
     }
   );
   assert.throws(() => validateLock(promoted), /localhost edge trust|accepted only for the edge channel/);
@@ -426,7 +452,8 @@ test('component release scope is edge-local, canonical, and digest-bound', () =>
     {
       releaseScope: unsorted.releaseScope,
       baseReleaseDigest: unsorted.baseReleaseDigest,
-      changedComponents: unsorted.changedComponents
+      changedComponents: unsorted.changedComponents,
+      componentPublication: unsorted.componentPublication
     }
   );
   assert.throws(() => validateLock(unsorted), /canonical sorted set/);
