@@ -82,6 +82,11 @@ test('Setup consumes the Console digest-bound migration manifest without a handw
   assert.equal(manifest.migrations[0].name, '0001_console_backbone.sql');
   assert.equal(manifest.latestMigrationId, '0063');
   assert.equal(manifest.migrations.at(-1).name, '0063_osaa_canonical_identity_and_conversations.sql');
+  const latest = manifest.migrations.at(-1);
+  assert.equal(manifest.latestMigrationId, latest.id);
+  assert.match(latest.name, new RegExp(`^${latest.id}_[a-z0-9_]+[.]sql$`));
+  assert.ok(Number.parseInt(latest.id, 10) >= 62,
+    'Bootstrap A and later releases must retain at least the canonical 0062 migration authority');
   assert.equal(new Set(manifest.migrations.map(({ id }) => id)).size, manifest.migrations.length);
   assert.equal(manifest.schemaVersion, 2);
   const legacyV1 = structuredClone(manifest);

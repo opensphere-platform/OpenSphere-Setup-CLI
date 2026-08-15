@@ -36,6 +36,26 @@ const MIGRATION_MANIFEST = Object.freeze({
   migrationCount: 52
 });
 
+function componentPublicationBinding() {
+  return {
+    contract: 'opensphere-edge-component-publication-binding/v1',
+    publisher: 'scripts/Publish-LocalEdgeBackendComponent.ps1',
+    publisherGitBlob: '1'.repeat(40),
+    publisherSha256: `sha256:${'1'.repeat(64)}`,
+    documentSha256: `sha256:${'2'.repeat(64)}`,
+    signatureSha256: `sha256:${'3'.repeat(64)}`,
+    keyId: 'opensphere-edge-local-v1',
+    setupSourceRevision: '4'.repeat(40),
+    setupSourceLockSha256: `sha256:${'5'.repeat(64)}`,
+    setupManifestProjectionGitBlob: '6'.repeat(40),
+    setupManifestProjectionSha256: `sha256:${'6'.repeat(64)}`,
+    migrationSetDigest: `sha256:${'6'.repeat(64)}`,
+    platformRevision: '7'.repeat(40),
+    inventorySha256: `sha256:${'7'.repeat(64)}`,
+    verificationSetDigest: `sha256:${'8'.repeat(64)}`,
+  };
+}
+
 function lock(revision, digestCharacter) {
   const imageDigest = `sha256:${digestCharacter.repeat(64)}`;
   const components = Object.fromEntries(Object.entries(COMPONENTS).map(([name, repository]) => [
@@ -98,6 +118,7 @@ function componentTarget(previous, revision, changedComponents = ['backend']) {
   target.releaseScope = RELEASE_SCOPE_COMPONENT;
   target.baseReleaseDigest = previous.releaseDigest;
   target.changedComponents = [...changedComponents].sort();
+  target.componentPublication = componentPublicationBinding();
   target.sourceRevision = revision;
   delete target.releaseBom;
   for (const name of target.changedComponents) {
@@ -113,7 +134,8 @@ function componentTarget(previous, revision, changedComponents = ['backend']) {
     {
       releaseScope: target.releaseScope,
       baseReleaseDigest: target.baseReleaseDigest,
-      changedComponents: target.changedComponents
+      changedComponents: target.changedComponents,
+      componentPublication: target.componentPublication
     }
   );
   return target;
@@ -157,6 +179,35 @@ function agentIdentityCutoverLocks() {
   return { previous, target };
 }
 
+function bootstrapBoundComponentTarget(previous, revision) {
+  const target = componentTarget(previous, revision, ['backend']);
+  target.componentPublication.bootstrapFrom = {
+    contract: 'opensphere-backend-component-bootstrap/v1',
+    requestId: '11111111-2222-4333-8444-555555555555',
+    releaseDigest: `sha256:${'9'.repeat(64)}`,
+    sourceRevision: '9'.repeat(40),
+    image: `ghcr.io/opensphere-platform/opensphere-console-backend@sha256:${'9'.repeat(64)}`,
+    mergeRevision: '8'.repeat(40),
+    receiptOperationId: 'operation:bootstrap-a',
+    governedDocumentSha256: `sha256:${'7'.repeat(64)}`,
+    receiptSha256: `sha256:${'6'.repeat(64)}`,
+    handoffState: 'BootstrapApplied',
+    convergenceState: 'PendingConvergence',
+    foundationFeatureGate: 'Closed',
+    trustConfigUid: '11111111-2222-4333-8444-555555555555',
+    trustConfigResourceVersion: '12345',
+    trustKeySpkiSha256: `sha256:${'5'.repeat(64)}`,
+  };
+  target.releaseDigest = calculateReleaseDigest(target.channel, target.components, target.trust,
+    undefined, {
+      releaseScope: target.releaseScope,
+      baseReleaseDigest: target.baseReleaseDigest,
+      changedComponents: target.changedComponents,
+      componentPublication: target.componentPublication,
+    });
+  return target;
+}
+
 function runtime(previous, events, {
   failTarget = false,
   failMigration = false,
@@ -166,6 +217,14 @@ function runtime(previous, events, {
     verifyReleaseLock: async (release, options) =>
       events.push(`supply:${release.sourceRevision}:${options?.allowLegacyComponentSet === true}`),
     ensureManagedNamespaces: () => events.push('namespaces'),
+    ensurePlatformReleaseAuthorityTls: async () => {
+      events.push('release-tls');
+      return { secret: {}, configMap: {}, service: {} };
+    },
+    cleanupBootstrapAInitializer: async ({ bootstrapFrom, targetReleaseDigest }) => {
+      events.push(`cleanup-bootstrap-a:${bootstrapFrom.sourceRevision}:${targetReleaseDigest}`);
+      return { contract: 'opensphere-bootstrap-a-initializer-cleanup/v1', residueCount: 0 };
+    },
     ensureRegistryPullSecrets: () => events.push('registry'),
     readInstallationLock: () => previous,
     readInstallationConfig: () => ({
@@ -201,7 +260,13 @@ function runtime(previous, events, {
     ) => {
       events.push(`prepare-component:${release.sourceRevision}:${changedComponents.join(',')}:migrations=${includeMigrations}`);
       return {
-        foundation: { root: release.sourceRevision, release: [] },
+        foundation: {
+          root: release.sourceRevision,
+          release: [],
+          ...(includeMigrations && changedComponents.includes('backend') ? {
+            migration: { manifest: { setDigest: release.componentPublication?.migrationSetDigest } }
+          } : {})
+        },
         base: [{ path: 'component.yaml', yaml: release.sourceRevision }],
         all: [{ path: 'component.yaml', yaml: release.sourceRevision }]
       };
@@ -340,6 +405,63 @@ test('OSAA identity cutover never performs a false legacy rollback after the one
   assert.equal(events.some((event) => event.startsWith(`verify:${previous.sourceRevision}:`)), false);
 });
 
+test('Bootstrap B cleans A initializer only after target verify and returns exact receipt evidence key', async () => {
+  const previous = lock('1'.repeat(40), 'a');
+  previous.trust = LOCAL_EDGE_TRUST;
+  delete previous.releaseBom;
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
+  const target = bootstrapBoundComponentTarget(previous, '2'.repeat(40));
+  const events = [];
+  const result = await upgrade(previous, target, {
+    runtime: runtime(previous, events, { recordedInventory: [{ name: 'complete-release' }] })
+  });
+  const verify = events.indexOf(`verify:${target.sourceRevision}:backend`);
+  const cleanup = events.indexOf(
+    `cleanup-bootstrap-a:${target.componentPublication.bootstrapFrom.sourceRevision}:${target.releaseDigest}`);
+  assert.ok(verify >= 0 && cleanup > verify);
+  assert.equal(events.filter((event) => event === 'release-tls').length, 2);
+  assert.deepEqual(result.evidence.bootstrapAInitializerCleanup,
+    { contract: 'opensphere-bootstrap-a-initializer-cleanup/v1', residueCount: 0 });
+  assert.equal('bootstrapACleanup' in result.evidence, false);
+  assert.equal('bootstrapAInitializerCleanup' in result, false);
+});
+
+test('already-current Bootstrap B replays immutable cleanup journal convergence', async () => {
+  const base = lock('1'.repeat(40), 'a');
+  base.trust = LOCAL_EDGE_TRUST;
+  delete base.releaseBom;
+  base.releaseDigest = calculateReleaseDigest('edge', base.components, LOCAL_EDGE_TRUST);
+  const target = bootstrapBoundComponentTarget(base, '2'.repeat(40));
+  const events = [];
+  const result = await upgrade(target, structuredClone(target), {
+    runtime: runtime(target, events, { recordedInventory: [{ name: 'complete-release' }] })
+  });
+  assert.equal(result.changed, false);
+  assert.ok(events.includes(
+    `cleanup-bootstrap-a:${target.componentPublication.bootstrapFrom.sourceRevision}:${target.releaseDigest}`));
+  assert.deepEqual(result.evidence.bootstrapAInitializerCleanup,
+    { contract: 'opensphere-bootstrap-a-initializer-cleanup/v1', residueCount: 0 });
+  assert.equal(events.some((event) => event.startsWith('install-component:')), false);
+});
+
+test('partial Bootstrap A cleanup fails NeedsAttention without rollback or authority recreation', async () => {
+  const previous = lock('1'.repeat(40), 'a');
+  previous.trust = LOCAL_EDGE_TRUST;
+  delete previous.releaseBom;
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
+  const target = bootstrapBoundComponentTarget(previous, '2'.repeat(40));
+  const events = [];
+  const injected = runtime(previous, events, { recordedInventory: [{ name: 'complete-release' }] });
+  injected.cleanupBootstrapAInitializer = async () => {
+    events.push('cleanup-partial');
+    throw new Error('simulated partial cleanup');
+  };
+  await assert.rejects(upgrade(previous, target, { runtime: injected }),
+    /NeedsAttention: Bootstrap A initializer cleanup did not complete; rollback was not attempted/);
+  assert.equal(events.filter((event) => event === 'release-tls').length, 2);
+  assert.equal(events.some((event) => event.startsWith('install-component:롤백:')), false);
+});
+
 test('component release preparation selects only manifests that own changed images', () => {
   const previous = lock('1'.repeat(40), 'a');
   const target = componentTarget(previous, '2'.repeat(40), ['dupaController']);
@@ -391,11 +513,34 @@ test('component release preparation selects only manifests that own changed imag
   assert.doesNotMatch(renderedRecovery, new RegExp(`value: ${stacked.sourceRevision}`));
 });
 
+test('Backend component release binds the signed migration set before any target mutation', async () => {
+  const previous = lock('1'.repeat(40), 'a');
+  previous.trust = LOCAL_EDGE_TRUST;
+  delete previous.releaseBom;
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
+  const target = componentTarget(previous, '2'.repeat(40), ['backend']);
+  const events = [];
+  const baseRuntime = runtime(previous, events, { recordedInventory: [{ name: 'complete-release' }] });
+  const prepare = baseRuntime.prepareComponentRelease;
+  baseRuntime.prepareComponentRelease = async (...args) => {
+    const prepared = await prepare(...args);
+    if (args[0] === target) prepared.foundation.migration.manifest.setDigest = `sha256:${'f'.repeat(64)}`;
+    return prepared;
+  };
+  await assert.rejects(
+    upgrade(previous, target, { runtime: baseRuntime }),
+    /migration set differs from the materialized target migrations/
+  );
+  assert.equal(events.some((event) => event.startsWith('install-component:')), false);
+  assert.equal(events.some((event) => event.startsWith('record:')), false);
+});
+
 test('component rollout waits for every workload sharing the changed image', () => {
   assert.deepEqual(COMPONENT_ROLLOUTS.backend.map(([, workload]) => workload), [
     'deployment/opensphere-console-backend',
     'deployment/foundation-bootstrap-reconciler',
-    'deployment/platform-release-reconciler'
+    'deployment/platform-release-reconciler',
+    'deployment/foundation-owner-release-reconciler'
   ]);
   assert.deepEqual(COMPONENT_ROLLOUTS.notificationDispatcher.map(([, workload]) => workload), [
     'deployment/opensphere-notification-dispatcher',
@@ -451,20 +596,36 @@ test('component release applies only workload documents that contain a changed e
   assert.doesNotMatch(selected[0].yaml, new RegExp(target.components.console.image.replaceAll('.', '\\.')));
 });
 
-test('a single-owner component manifest applies its RBAC and workload atomically', () => {
+test('Bootstrap A backend manifest refuses an incomplete initializer document set', () => {
   const previous = lock('1'.repeat(40), 'a');
   previous.trust = LOCAL_EDGE_TRUST;
   delete previous.releaseBom;
   previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
   const target = componentTarget(previous, '2'.repeat(40), ['backend']);
-  const selected = componentReleaseWorkloadManifests(target, {
+  assert.throws(() => componentReleaseWorkloadManifests(target, {
     foundation: { release: [] },
-    base: [{
-      path: 'backend/opensphere-console-backend/deploy.yaml',
-      yaml: [
+    base: [{ path: 'backend/opensphere-console-backend/deploy.yaml', yaml: [
         'apiVersion: rbac.authorization.k8s.io/v1',
         'kind: Role',
-        'metadata: { name: opensphere-console-backend-installation-lock }',
+        'metadata: { name: platform-release-tls-initializer }',
+        '---',
+        'apiVersion: v1',
+        'kind: ServiceAccount',
+        'metadata: { name: platform-release-tls-initializer }',
+        '---',
+        'apiVersion: v1',
+        'kind: Service',
+        'metadata: { name: opensphere-platform-release-authority }',
+        'spec: { ports: [{ port: 8446 }] }',
+        '---',
+        'apiVersion: batch/v1',
+        'kind: Job',
+        'metadata: { name: opensphere-tls-init-a }',
+        'spec:',
+        '  template:',
+        '    spec:',
+        '      containers:',
+        `        - image: ${target.components.backend.image}`,
         '---',
         'apiVersion: apps/v1',
         'kind: Deployment',
@@ -474,13 +635,8 @@ test('a single-owner component manifest applies its RBAC and workload atomically
         '    spec:',
         '      containers:',
         `        - image: ${target.components.backend.image}`
-      ].join('\n')
-    }]
-  });
-  assert.equal(selected.length, 1);
-  assert.match(selected[0].yaml, /kind: Role/);
-  assert.match(selected[0].yaml, /opensphere-console-backend-installation-lock/);
-  assert.match(selected[0].yaml, new RegExp(target.components.backend.image.replaceAll('.', '\\.')));
+      ].join('\n') }]
+  }), /Bootstrap initializer|Unexpected Bootstrap initializer/);
 });
 
 test('a component release applies its explicitly owned static CRD before the DUPA workload', () => {

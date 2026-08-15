@@ -382,7 +382,8 @@ export function calculateReleaseDigest(
     ...(contract?.releaseScope ? { releaseScope: contract.releaseScope } : {}),
     ...(contract?.baseReleaseDigest ? { baseReleaseDigest: contract.baseReleaseDigest } : {}),
     ...(contract?.changedComponents ? { changedComponents: contract.changedComponents } : {}),
-    ...(contract?.auxiliaryArtifacts ? { auxiliaryArtifacts: contract.auxiliaryArtifacts } : {})
+    ...(contract?.auxiliaryArtifacts ? { auxiliaryArtifacts: contract.auxiliaryArtifacts } : {}),
+    ...(contract?.componentPublication ? { componentPublication: contract.componentPublication } : {})
   });
   return `sha256:${createHash('sha256').update(payload).digest('hex')}`;
 }
@@ -701,9 +702,13 @@ async function verifyLocalEdgeLock(lock, {
   registryCredentials,
   requiredPlatforms = defaultEdgePlatforms(),
   onProgress,
-  allowInstalledAgentIdentityCutover = false
+  allowInstalledAgentIdentityCutover = false,
+  allowUnsignedComponentBootstrapBase = false
 } = {}) {
-  const validated = validateLock(lock, { allowInstalledAgentIdentityCutover });
+  const validated = validateLock(lock, {
+    allowInstalledAgentIdentityCutover,
+    allowUnsignedComponentBootstrapBase
+  });
   if (canonicalTrust(validated.trust) !== LOCAL_EDGE_TRUST || validated.channel !== 'edge') {
     throw new Error('Only a localhost edge lock may use local image verification');
   }
@@ -779,12 +784,14 @@ export async function verifyReleaseLock(lock, {
   onProgress,
   allowLegacyComponentSet = false,
   allowInstalledAgentIdentityCutover = false,
+  allowUnsignedComponentBootstrapBase = false,
   allowLegacyReleaseArtifacts = false,
   allowRetiredEdgeRollback = false
 } = {}) {
   const validated = validateLock(lock, {
     allowLegacyComponentSet,
-    allowInstalledAgentIdentityCutover
+    allowInstalledAgentIdentityCutover,
+    allowUnsignedComponentBootstrapBase
   });
   if (isRetiredEdgeAttestationLock(validated)) {
     if (!allowRetiredEdgeRollback) {
@@ -801,7 +808,8 @@ export async function verifyReleaseLock(lock, {
       registryCredentials,
       requiredPlatforms,
       onProgress,
-      allowInstalledAgentIdentityCutover
+      allowInstalledAgentIdentityCutover,
+      allowUnsignedComponentBootstrapBase
     });
   }
   const pointer = assertSignedReleaseBom(validated);
@@ -870,7 +878,8 @@ export function migrateLegacyReleaseLock(lock) {
 
 export function validateLock(lock, {
   allowLegacyComponentSet = false,
-  allowInstalledAgentIdentityCutover = false
+  allowInstalledAgentIdentityCutover = false,
+  allowUnsignedComponentBootstrapBase = false
 } = {}) {
   if (lock?.apiVersion !== RELEASE_API_VERSION || lock?.kind !== 'OpenSphereReleaseLock') {
     throw new Error('Invalid OpenSphere release lock');
@@ -898,7 +907,8 @@ export function validateLock(lock, {
     throw new Error(`Release lock scope is invalid: ${releaseScope}`);
   }
   if (releaseScope === RELEASE_SCOPE_INTEGRATED
-      && (lock.baseReleaseDigest !== undefined || lock.changedComponents !== undefined)) {
+      && (lock.baseReleaseDigest !== undefined || lock.changedComponents !== undefined
+        || lock.componentPublication !== undefined)) {
     throw new Error('Integrated release lock cannot declare a component transition');
   }
   if (releaseScope === RELEASE_SCOPE_COMPONENT) {
@@ -921,6 +931,14 @@ export function validateLock(lock, {
     }
     if (lock.releaseBom !== undefined) {
       throw new Error('Component release locks cannot claim a signed Release BOM');
+    }
+    if (lock.componentPublication === undefined) {
+      if (!allowUnsignedComponentBootstrapBase
+          || JSON.stringify(lock.changedComponents) !== JSON.stringify(['backend'])) {
+        throw new Error('Component release locks require a signed component publication binding');
+      }
+    } else {
+      validateComponentPublicationBinding(lock.componentPublication);
     }
   }
   const componentProfile = installedComponentProfile(lock.components, {
@@ -997,7 +1015,8 @@ export function validateLock(lock, {
         ...(releaseScope === RELEASE_SCOPE_COMPONENT
           ? {
               baseReleaseDigest: lock.baseReleaseDigest,
-              changedComponents: lock.changedComponents
+              changedComponents: lock.changedComponents,
+              componentPublication: lock.componentPublication
             }
           : {}),
         ...(lock.auxiliaryArtifacts ? { auxiliaryArtifacts: lock.auxiliaryArtifacts } : {})
@@ -1016,6 +1035,63 @@ export function validateLock(lock, {
   return lock;
 }
 
+function validateComponentPublicationBinding(value) {
+  const expected = [
+    'contract', 'publisher', 'publisherGitBlob', 'publisherSha256', 'documentSha256',
+    'signatureSha256', 'keyId', 'setupSourceRevision', 'setupSourceLockSha256',
+    'setupManifestProjectionGitBlob', 'setupManifestProjectionSha256', 'migrationSetDigest',
+    'platformRevision', 'inventorySha256', 'verificationSetDigest',
+    ...(value?.bootstrapFrom === undefined ? [] : ['bootstrapFrom'])
+  ];
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+      || Object.keys(value).sort().join(',') !== expected.sort().join(',')
+      || value.contract !== 'opensphere-edge-component-publication-binding/v1'
+      || value.publisher !== 'scripts/Publish-LocalEdgeBackendComponent.ps1'
+      || !/^[a-f0-9]{40,64}$/.test(value.publisherGitBlob ?? '')
+      || !['publisherSha256','documentSha256','signatureSha256','setupSourceLockSha256',
+        'setupManifestProjectionSha256','migrationSetDigest','inventorySha256','verificationSetDigest']
+        .every((key) => /^sha256:[a-f0-9]{64}$/.test(value[key] ?? ''))
+      || value.keyId !== 'opensphere-edge-local-v1'
+      || !/^[a-f0-9]{40}$/.test(value.setupSourceRevision ?? '')
+      || !/^[a-f0-9]{40,64}$/.test(value.setupManifestProjectionGitBlob ?? '')
+      || !/^[a-f0-9]{40}$/.test(value.platformRevision ?? '')) {
+    throw new Error('Component release publication binding is invalid');
+  }
+  if (value.bootstrapFrom !== undefined) validateBackendBootstrapFrom(value.bootstrapFrom);
+  return value;
+}
+
+function validateBackendBootstrapFrom(value) {
+  const expected = [
+    'contract', 'requestId', 'releaseDigest', 'sourceRevision', 'image', 'mergeRevision',
+    'receiptOperationId', 'governedDocumentSha256', 'receiptSha256', 'handoffState',
+    'convergenceState', 'foundationFeatureGate', 'trustConfigUid',
+    'trustConfigResourceVersion', 'trustKeySpkiSha256'
+  ];
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+      || Object.keys(value).sort().join(',') !== expected.sort().join(',')
+      || value.contract !== 'opensphere-backend-component-bootstrap/v1'
+      || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+        .test(value.requestId ?? '')
+      || !/^sha256:[a-f0-9]{64}$/.test(value.releaseDigest ?? '')
+      || !/^[a-f0-9]{40}$/.test(value.sourceRevision ?? '')
+      || !/^ghcr\.io\/opensphere-platform\/opensphere-console-backend@sha256:[a-f0-9]{64}$/
+        .test(value.image ?? '')
+      || !/^[a-f0-9]{40,64}$/.test(value.mergeRevision ?? '')
+      || !/^[A-Za-z0-9:._-]{8,255}$/.test(value.receiptOperationId ?? '')
+      || !['governedDocumentSha256','receiptSha256']
+        .every((key) => /^sha256:[a-f0-9]{64}$/.test(value[key] ?? ''))
+      || !/^[A-Za-z0-9._:-]{8,128}$/.test(value.trustConfigUid ?? '')
+      || !/^[A-Za-z0-9._:-]{1,128}$/.test(value.trustConfigResourceVersion ?? '')
+      || !/^sha256:[a-f0-9]{64}$/.test(value.trustKeySpkiSha256 ?? '')
+      || value.handoffState !== 'BootstrapApplied'
+      || value.convergenceState !== 'PendingConvergence'
+      || value.foundationFeatureGate !== 'Closed') {
+    throw new Error('Component release bootstrapFrom binding is invalid');
+  }
+  return value;
+}
+
 function sameComponent(left, right) {
   return JSON.stringify(stableValue(left)) === JSON.stringify(stableValue(right));
 }
@@ -1027,7 +1103,8 @@ function sameComponent(left, right) {
 export function validateReleaseTransition(baseLock, targetLock) {
   const base = validateLock(baseLock, {
     allowLegacyComponentSet: true,
-    allowInstalledAgentIdentityCutover: true
+    allowInstalledAgentIdentityCutover: true,
+    allowUnsignedComponentBootstrapBase: true
   });
   const target = validateLock(targetLock);
   if ((target.releaseScope ?? RELEASE_SCOPE_INTEGRATED) !== RELEASE_SCOPE_COMPONENT) {
