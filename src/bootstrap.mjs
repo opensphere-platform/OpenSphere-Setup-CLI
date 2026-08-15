@@ -43,6 +43,9 @@ import {
 } from './recovery-target.mjs';
 import { reportReleaseProgress } from './progress.mjs';
 import { materializeRuntimeAsset } from './runtime-assets.mjs';
+import { ensurePlatformReleaseAuthorityTls } from './platform-release-authority-tls.mjs';
+import { cleanupBootstrapAInitializer } from './platform-release-bootstrap-cleanup.mjs';
+import { projectBootstrapInitializerManifest } from './platform-release-bootstrap-manifest.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RAW_ROOT = 'https://raw.githubusercontent.com/opensphere-platform/OpenSphere-console';
@@ -377,7 +380,8 @@ export const COMPONENT_ROLLOUTS = Object.freeze({
   backend: [
     ['opensphere-console', 'deployment/opensphere-console-backend', '600s'],
     ['opensphere-console', 'deployment/foundation-bootstrap-reconciler', '600s'],
-    ['opensphere-console', 'deployment/platform-release-reconciler', '600s']
+    ['opensphere-console', 'deployment/platform-release-reconciler', '600s'],
+    ['opensphere-console', 'deployment/foundation-owner-release-reconciler', '600s']
   ],
   dupaController: [['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s']],
   oaaGateway: [['opensphere-console', 'deployment/opensphere-console-oaa-gateway', '600s']],
@@ -862,9 +866,17 @@ export function componentReleaseWorkloadManifests(
       if (completeOwners.size === 1 && completeOwners.has(component)) {
         if (!imageLine.test(source.yaml)) continue;
         found = true;
+        const yaml = component === 'backend'
+          ? projectBootstrapInitializerManifest({
+            yaml: source.yaml,
+            sourceRevision: lock.sourceRevision,
+            backendImage: image,
+            bootstrapFrom: lock.componentPublication?.bootstrapFrom,
+          }).yaml
+          : source.yaml;
         selected.set(`${source.path}#complete`, {
           path: `${source.path}#${component}`,
-          yaml: source.yaml.endsWith('\n') ? source.yaml : `${source.yaml}\n`
+          yaml: yaml.endsWith('\n') ? yaml : `${yaml}\n`
         });
         continue;
       }
@@ -1162,7 +1174,10 @@ function readStoredInstallationLock() {
 
 export function readInstallationLock() {
   const lock = readStoredInstallationLock();
-  return lock ? validateLock(lock, { allowLegacyComponentSet: true }) : null;
+  return lock ? validateLock(lock, {
+    allowLegacyComponentSet: true,
+    allowUnsignedComponentBootstrapBase: true
+  }) : null;
 }
 
 // The retired Kanidm/PostgreSQL/RustFS release shape is not migratable by a
@@ -1620,9 +1635,14 @@ export async function upgrade(
   targetLock,
   { storageClass, consoleUrl, registryCredentials, requiredPlatforms, runtime = {} } = {}
 ) {
-  validateLock(previousLock, { allowLegacyComponentSet: true });
+  validateLock(previousLock, {
+    allowLegacyComponentSet: true,
+    allowUnsignedComponentBootstrapBase: true
+  });
   validateLock(targetLock);
-  validateReleaseTransition(previousLock, targetLock);
+  if (previousLock.releaseDigest !== targetLock.releaseDigest) {
+    validateReleaseTransition(previousLock, targetLock);
+  }
   promotionBlocked(targetLock.channel);
   const operations = {
     readInstallationLock,
@@ -1645,6 +1665,8 @@ export async function upgrade(
     ensureManagedNamespaces: () => {
       for (const namespace of MANAGED_NAMESPACES) ensureNamespace(namespace);
     },
+    ensurePlatformReleaseAuthorityTls,
+    cleanupBootstrapAInitializer,
     ...runtime
   };
   await Promise.all([
@@ -1652,6 +1674,7 @@ export async function upgrade(
       registryCredentials,
       requiredPlatforms,
       allowLegacyComponentSet: true,
+      allowUnsignedComponentBootstrapBase: true,
       allowRetiredEdgeRollback: true
     }),
     operations.verifyReleaseLock(targetLock, { registryCredentials, requiredPlatforms })
@@ -1672,11 +1695,23 @@ export async function upgrade(
     throw new Error(`Installation uses Console URL ${effectiveConsoleUrl}; changing it requires endpoint migration`);
   }
   if (previousLock.releaseDigest === targetLock.releaseDigest) {
+    let evidence = await operations.verifyInstallation(previousLock, { consoleUrl: effectiveConsoleUrl });
+    if (targetLock.releaseScope === RELEASE_SCOPE_COMPONENT
+        && targetLock.changedComponents?.includes('backend')
+        && targetLock.componentPublication?.bootstrapFrom) {
+      const authority = await operations.ensurePlatformReleaseAuthorityTls();
+      const bootstrapAInitializerCleanup = await operations.cleanupBootstrapAInitializer({
+        bootstrapFrom: targetLock.componentPublication.bootstrapFrom,
+        targetReleaseDigest: targetLock.releaseDigest,
+        authority,
+      });
+      evidence = { ...evidence, bootstrapAInitializerCleanup };
+    }
     return {
       changed: false,
-      lock: previousLock,
+      lock: targetLock,
       consoleUrl: effectiveConsoleUrl,
-      evidence: await operations.verifyInstallation(previousLock, { consoleUrl: effectiveConsoleUrl })
+      evidence
     };
   }
   operations.preflight({ storageClass: config.storageClass, channel: targetLock.channel });
@@ -1725,6 +1760,14 @@ export async function upgrade(
           }
         )
       ]);
+    if (componentTransition && changedComponents.includes('backend')) {
+      const boundMigrationSetDigest = targetLock.componentPublication?.migrationSetDigest;
+      const materializedMigrationSetDigest = target.foundation?.migration?.manifest?.setDigest;
+      if (!/^sha256:[a-f0-9]{64}$/.test(boundMigrationSetDigest ?? '')
+          || materializedMigrationSetDigest !== boundMigrationSetDigest) {
+        throw new Error('Backend component publication migration set differs from the materialized target migrations');
+      }
+    }
     const recordedInventory = operations.readReleaseInventory();
     if (componentTransition && !recordedInventory) {
       throw new Error('Component release requires the existing complete release inventory');
@@ -1734,8 +1777,12 @@ export async function upgrade(
     const targetInventory = componentTransition
       ? previousInventory
       : operations.releaseResourceInventory(target.all);
+    let bootstrapACleanupStarted = false;
     try {
       if (componentTransition) {
+        if (changedComponents.includes('backend')) {
+          await operations.ensurePlatformReleaseAuthorityTls();
+        }
         operations.installPreparedComponentRelease(
           targetLock,
           target,
@@ -1759,11 +1806,23 @@ export async function upgrade(
       );
       if (componentTransition) operations.waitForComponentRollouts(changedComponents);
       else operations.waitForCoreRollouts();
-      const evidence = await operations.verifyInstallation(targetLock, {
+      let evidence = await operations.verifyInstallation(targetLock, {
         consoleUrl: effectiveConsoleUrl,
         requireZeroRestarts: false,
         componentSelection: componentTransition ? changedComponents : null
       });
+      let bootstrapAInitializerCleanup;
+      if (componentTransition && changedComponents.includes('backend')
+          && targetLock.componentPublication?.bootstrapFrom) {
+        const authority = await operations.ensurePlatformReleaseAuthorityTls();
+        bootstrapACleanupStarted = true;
+        bootstrapAInitializerCleanup = await operations.cleanupBootstrapAInitializer({
+          bootstrapFrom: targetLock.componentPublication.bootstrapFrom,
+          targetReleaseDigest: targetLock.releaseDigest,
+          authority,
+        });
+        evidence = { ...evidence, bootstrapAInitializerCleanup };
+      }
       if (!componentTransition) {
         operations.pruneReleaseResources(previousInventory, targetInventory);
       }
@@ -1775,6 +1834,9 @@ export async function upgrade(
         evidence
       };
     } catch (upgradeError) {
+      if (bootstrapACleanupStarted) {
+        throw new Error(`NeedsAttention: Bootstrap A initializer cleanup did not complete; rollback was not attempted and the retained TLS authority must not be recreated (${upgradeError.message})`);
+      }
       console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
       try {
         if (componentTransition) {
