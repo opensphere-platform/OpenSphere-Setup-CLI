@@ -151,6 +151,15 @@ test('CI and private packaging use the governed Console revision instead of floa
     `${path} must not rewrite the verified Console fixture`);
     assert.doesNotMatch(workflow, /^\s+repository: opensphere-platform\/OpenSphere-console\s*$/mu);
   }
+  const privateWorkflow = readFileSync(
+    new URL('../.github/workflows/publish-private-platforms.yml', import.meta.url), 'utf8'
+  );
+  assert.match(privateWorkflow, /name: Require canonical Setup main release source/u);
+  assert.match(privateWorkflow, /BOUND_REF: \$\{\{ github[.]ref \}\}/u);
+  assert.match(privateWorkflow, /BOUND_SHA: \$\{\{ github[.]sha \}\}/u);
+  assert.match(privateWorkflow, /refs\/heads\/main/u);
+  assert.match(privateWorkflow, /rev-parse refs\/remotes\/origin\/main/u);
+  assert.doesNotMatch(privateWorkflow, /github[.]event[.]pull_request[.]base[.]sha/u);
 });
 
 test('CODEOWNERS protects every Console source authority input', () => {
