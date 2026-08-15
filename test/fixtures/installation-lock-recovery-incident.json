@@ -1,0 +1,60 @@
+{
+  "contract": "opensphere-codex-incident-evidence/v1",
+  "incidentId": "2026-08-15-installation-lock-accidental-delete",
+  "status": "recovery-pending-explicit-approval",
+  "resource": {
+    "context": "docker-desktop",
+    "apiVersion": "v1",
+    "kind": "ConfigMap",
+    "namespace": "opensphere-console",
+    "name": "opensphere-installation-lock",
+    "preDeleteUid": "7016251f-c144-4e71-8b54-0df6e956854a",
+    "preDeleteResourceVersion": null
+  },
+  "event": {
+    "observedAtKst": "2026-08-15T22:53:08+09:00",
+    "command": "kubectl delete --raw /api/v1/namespaces/opensphere-console/configmaps/opensphere-installation-lock?dryRun=All -f - -v=8",
+    "expectedBehavior": "server-side dry-run only",
+    "observedBehavior": "resource deleted",
+    "firstNotFoundAtKst": "2026-08-15T22:53:14+09:00"
+  },
+  "postcondition": {
+    "getResult": "NotFound",
+    "recoveryMutationPerformed": false,
+    "allFurtherClusterMutationsStopped": true,
+    "openSpherePodCount": 96,
+    "openSpherePvcCount": 16,
+    "unexpectedNewWorkloadDeletionObserved": false,
+    "nonRunningPodsWerePreExistingPlatformReleaseFailureJobs": 3
+  },
+  "authoritativeRecoveryEvidence": {
+    "installedReleaseDigest": "sha256:3c39bccb079c8019b51e1d736775b9b9677a235c25584ae51f5da5d010048911",
+    "giteaRepository": "opensphere/platform-declarations",
+    "giteaCommit": "c51319d2bddac715eea840417552dde46de686de",
+    "giteaPath": "platform-release/requests/a649530f-c8d5-4a0f-a461-9707bc9809b8.json",
+    "requestId": "a649530f-c8d5-4a0f-a461-9707bc9809b8",
+    "operationId": "a649530f-c8d5-4a0f-a461-9707bc9809b8:c51319d2bddac715eea840417552dde46de686de:1",
+    "appliedSourceRevision": "59778b3cfe26cadc93f832ecb67e0c3720b3d803",
+    "receiptReceivedAt": "2026-08-15T07:45:37.035426+00:00",
+    "receiptResult": "signed Platform Release applied and verified",
+    "installationEvidenceConfigMap": {
+      "name": "opensphere-installation-evidence",
+      "uid": "b6b66c91-f04c-4ada-8b07-c474f6ddf6a7",
+      "resourceVersion": "13330542",
+      "releaseDigest": "sha256:3c39bccb079c8019b51e1d736775b9b9677a235c25584ae51f5da5d010048911",
+      "runtimeImagesMatchLock": true
+    },
+    "releaseInventoryConfigMap": {
+      "name": "opensphere-release-inventory",
+      "uid": "dbc61098-0895-4375-b43f-6303a75878dd",
+      "resourceVersion": "13330552",
+      "releaseDigest": "sha256:3c39bccb079c8019b51e1d736775b9b9677a235c25584ae51f5da5d010048911"
+    }
+  },
+  "recoveryPolicy": {
+    "runbookState": "OpenSphere namespaces exist without an installation lock",
+    "automaticInstallOrRemoval": "stopped",
+    "requiredDecision": "explicit preservation and exact lock reconstruction approval",
+    "dataDeletionAuthorized": false
+  }
+}
