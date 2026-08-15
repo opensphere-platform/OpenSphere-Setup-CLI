@@ -18,6 +18,12 @@ import {
 } from '../src/installation-lock-recovery-prepare.mjs';
 
 const repositoryRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
+const testTempParent = join(dirname(tmpdir()), 'opensphere-installation-lock-recovery-tests');
+
+async function recoveryTemp(prefix) {
+  await mkdir(testTempParent, { recursive: true });
+  return mkdtemp(join(testTempParent, prefix));
+}
 
 function fakeApprovalDocument(_bundle, { approvalId, reason, approvedAt, expiresAt }) {
   return {
@@ -58,7 +64,7 @@ async function toolingBoundary() {
 }
 
 async function layout() {
-  const root = await mkdtemp(join(tmpdir(), 'opensphere-recovery-prepare-'));
+  const root = await recoveryTemp('opensphere-recovery-prepare-');
   const workspaceRoot = join(root, 'workspace');
   const receiptDirectory = join(root, 'receipts');
   const quarantineDirectory = join(root, 'quarantine');

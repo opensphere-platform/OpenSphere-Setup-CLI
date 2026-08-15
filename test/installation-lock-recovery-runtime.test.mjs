@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { link, lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, symlink, unlink, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import {
@@ -32,6 +32,11 @@ const mockCustody = {
     await rename(source, destination);
   },
 };
+const testTempParent = join(dirname(tmpdir()), 'opensphere-installation-lock-recovery-tests');
+async function recoveryTemp(prefix) {
+  await mkdir(testTempParent, { recursive: true });
+  return mkdtemp(join(testTempParent, prefix));
+}
 function createDurableInstallationLockRecoveryReceiptStore(receiptDirectory, workspaceRoot, options = {}) {
   return createReceiptStoreImpl(receiptDirectory, workspaceRoot, { ...mockCustody, ...options });
 }
@@ -253,7 +258,7 @@ function parseJson(value, label) {
 }
 
 async function tempLayout() {
-  const base = await mkdtemp(join(tmpdir(), 'opensphere-lock-recovery-'));
+  const base = await recoveryTemp('opensphere-lock-recovery-');
   const workspace = join(base, 'workspace');
   const receipts = join(base, 'receipts');
   const quarantine = join(base, 'quarantine');

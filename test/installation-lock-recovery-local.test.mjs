@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   link, mkdir, mkdtemp, readFile, rename, rm, symlink, unlink, writeFile,
 } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { sha256 } from '../src/installation-lock-recovery.mjs';
@@ -21,6 +21,11 @@ const mockCustody = {
   ensureDirectoryCustodyFn: async () => {},
   assertDirectoryCustodyFn: async () => {},
 };
+const testTempParent = join(dirname(tmpdir()), 'opensphere-installation-lock-recovery-tests');
+async function recoveryTemp(prefix) {
+  await mkdir(testTempParent, { recursive: true });
+  return mkdtemp(join(testTempParent, prefix));
+}
 function quarantineStaleInstallationLock(options) {
   return quarantineStaleInstallationLockImpl({ ...mockCustody, ...options });
 }
@@ -48,7 +53,7 @@ function staleFixture() {
 }
 
 async function layout() {
-  const root = await mkdtemp(join(tmpdir(), 'opensphere-stale-quarantine-'));
+  const root = await recoveryTemp('opensphere-stale-quarantine-');
   const workspaceRoot = join(root, 'workspace');
   const quarantineDirectory = join(root, 'quarantine');
   const receiptDirectory = join(root, 'receipts');
@@ -81,7 +86,7 @@ test('reviewed stale fixture is the exact known cache and is never a recovery lo
 
 test('actual Windows atomic move never overwrites an existing destination', async (t) => {
   if (process.platform !== 'win32') return t.skip('Windows-only atomic move contract');
-  const root = await mkdtemp(join(tmpdir(), 'opensphere-no-replace-move-'));
+  const root = await recoveryTemp('opensphere-no-replace-move-');
   t.after(() => rm(root, { recursive: true, force: true }));
   const source = join(root, 'source.txt');
   const destination = join(root, 'destination.txt');
