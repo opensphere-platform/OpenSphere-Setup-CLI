@@ -18,14 +18,30 @@ jobs:
       OPENSPHERE_CONSOLE_SOURCE: ${{ github.workspace }}/_fixtures/OpenSphere-console
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout canonical Console manifests
-        uses: actions/checkout@v4
-        with:
-          repository: opensphere-platform/OpenSphere-console
-          path: _fixtures/OpenSphere-console
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Resolve governed Console source
+        id: console_source
+        shell: pwsh
+        run: |
+          $source = node scripts/resolve-console-source-lock.mjs | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Console source lock resolution failed' }
+          "repository=$($source.githubRepository)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "revision=$($source.revision)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+      - name: Checkout canonical Console manifests
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.console_source.outputs.repository }}
+          ref: ${{ steps.console_source.outputs.revision }}
+          path: _fixtures/OpenSphere-console
+      - name: Verify governed Console checkout
+        shell: pwsh
+        run: |
+          $actual = (git -C _fixtures/OpenSphere-console rev-parse HEAD).Trim()
+          if ($actual -ne '${{ steps.console_source.outputs.revision }}') {
+            throw "Console checkout revision mismatch: $actual"
+          }
       - name: Install and smoke-test canonical Setup command
         shell: pwsh
         run: |
