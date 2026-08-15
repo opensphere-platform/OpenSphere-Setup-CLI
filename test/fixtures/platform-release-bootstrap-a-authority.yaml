@@ -1,0 +1,745 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensphere-platform-release-authority
+  namespace: opensphere-console
+  labels: { app: opensphere-platform-release-authority }
+spec:
+  selector: { app: opensphere-console-backend }
+  ports: [{ name: https, port: 8446, targetPort: release-tls }]
+---
+# Bootstrap A applies this complete backend-owned manifest through the old
+# component selector. This one-shot identity may create only the immutable
+# TLS pair and validates/reuses it across response loss or Pod replacement.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: platform-release-tls-initializer, namespace: opensphere-console }
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: platform-release-tls-initializer, namespace: opensphere-console }
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps", "services"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["opensphere-platform-release-authority-tls"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["opensphere-platform-release-control-ca"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["opensphere-platform-release-authority"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: platform-release-tls-initializer, namespace: opensphere-console }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: platform-release-tls-initializer }
+subjects:
+  - { kind: ServiceAccount, name: platform-release-tls-initializer, namespace: opensphere-console }
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: platform-release-tls-initializer-custody }
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["secrets", "configmaps", "services"]
+  validations:
+    - expression: >-
+        request.userInfo.username
+          != 'system:serviceaccount:opensphere-console:platform-release-tls-initializer'
+        || (
+          request.operation == 'CREATE'
+          && request.namespace == 'opensphere-console'
+          && (
+            (object.kind == 'Secret'
+              && object.metadata.name == 'opensphere-platform-release-authority-tls')
+            || (object.kind == 'ConfigMap'
+              && object.metadata.name == 'opensphere-platform-release-control-ca')
+            || (object.kind == 'Service'
+              && object.metadata.name == 'opensphere-platform-release-authority'
+              && size(object.metadata.labels) == 1
+              && object.metadata.labels['app'] == 'opensphere-platform-release-authority'
+              && object.spec.selector == {'app':'opensphere-console-backend'}
+              && object.spec.type == 'ClusterIP'
+              && (!has(object.spec.externalIPs) || size(object.spec.externalIPs) == 0)
+              && (!has(object.spec.externalName) || object.spec.externalName == '')
+              && !has(object.spec.loadBalancerClass)
+              && size(object.spec.ports) == 1
+              && object.spec.ports[0].name == 'https'
+              && object.spec.ports[0].port == 8446
+              && object.spec.ports[0].protocol == 'TCP'
+              && object.spec.ports[0].targetPort == 'release-tls'
+              && (!has(object.spec.ports[0].appProtocol))
+              && (!has(object.spec.ports[0].nodePort) || object.spec.ports[0].nodePort == 0)
+              && object.spec.clusterIP != 'None'
+              && size(object.spec.clusterIPs) == 1
+              && object.spec.clusterIPs[0] == object.spec.clusterIP
+              && size(object.spec.ipFamilies) == 1
+              && object.spec.ipFamilyPolicy == 'SingleStack'
+              && object.spec.internalTrafficPolicy == 'Cluster'
+              && object.spec.sessionAffinity == 'None'
+              && (!has(object.spec.sessionAffinityConfig))
+              && (!has(object.spec.publishNotReadyAddresses)
+                || !object.spec.publishNotReadyAddresses)
+              && (!has(object.spec.externalTrafficPolicy)
+                || object.spec.externalTrafficPolicy == 'Cluster')
+              && (!has(object.spec.healthCheckNodePort)
+                || object.spec.healthCheckNodePort == 0)
+              && (!has(object.spec.loadBalancerIP) || object.spec.loadBalancerIP == ''))
+          )
+        )
+      message: Platform Release TLS initializer may create only its exact authority resources.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: opensphere-platform-release-authority-service-custody }
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["services"]
+  validations:
+    - expression: >-
+        !(
+          request.namespace == 'opensphere-console'
+          && request.name == 'opensphere-platform-release-authority'
+        ) || (
+          (
+            (request.operation == 'CREATE'
+              && request.userInfo.username in [
+                'system:serviceaccount:opensphere-console:platform-release-tls-initializer',
+                'system:serviceaccount:opensphere-console:platform-release-executor'
+              ])
+            || (request.operation == 'UPDATE'
+              && request.userInfo.username
+                == 'system:serviceaccount:opensphere-console:platform-release-executor')
+          )
+          && object.kind == 'Service'
+          && object.metadata.namespace == 'opensphere-console'
+          && object.metadata.name == 'opensphere-platform-release-authority'
+          && size(object.metadata.labels) == 1
+          && object.metadata.labels['app'] == 'opensphere-platform-release-authority'
+          && object.spec.selector == {'app':'opensphere-console-backend'}
+          && object.spec.type == 'ClusterIP'
+          && (!has(object.spec.externalIPs) || size(object.spec.externalIPs) == 0)
+          && (!has(object.spec.externalName) || object.spec.externalName == '')
+          && !has(object.spec.loadBalancerClass)
+          && size(object.spec.ports) == 1
+          && object.spec.ports[0].name == 'https'
+          && object.spec.ports[0].port == 8446
+          && object.spec.ports[0].protocol == 'TCP'
+          && object.spec.ports[0].targetPort == 'release-tls'
+          && (!has(object.spec.ports[0].appProtocol))
+          && (!has(object.spec.ports[0].nodePort) || object.spec.ports[0].nodePort == 0)
+          && object.spec.clusterIP != 'None'
+          && size(object.spec.clusterIPs) == 1
+          && object.spec.clusterIPs[0] == object.spec.clusterIP
+          && size(object.spec.ipFamilies) == 1
+          && object.spec.ipFamilyPolicy == 'SingleStack'
+          && object.spec.internalTrafficPolicy == 'Cluster'
+          && object.spec.sessionAffinity == 'None'
+          && (!has(object.spec.sessionAffinityConfig))
+          && (!has(object.spec.publishNotReadyAddresses)
+            || !object.spec.publishNotReadyAddresses)
+          && (!has(object.spec.externalTrafficPolicy)
+            || object.spec.externalTrafficPolicy == 'Cluster')
+          && (!has(object.spec.healthCheckNodePort) || object.spec.healthCheckNodePort == 0)
+          && (!has(object.spec.loadBalancerIP) || object.spec.loadBalancerIP == '')
+        )
+      message: Platform Release authority Service is exact, internal-only and cannot be deleted.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: opensphere-platform-release-authority-service-custody }
+spec:
+  policyName: opensphere-platform-release-authority-service-custody
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: opensphere-bootstrap-a-initializer-cleanup-journal-custody }
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+        resources: ["configmaps"]
+  validations:
+    - expression: >-
+        !(
+          request.namespace == 'opensphere-console'
+          && request.name == 'opensphere-bootstrap-a-initializer-cleanup-journal'
+        ) || (
+          request.operation == 'CREATE'
+          && request.userInfo.username
+            == 'system:serviceaccount:opensphere-console:platform-release-executor'
+          && object.kind == 'ConfigMap'
+          && object.metadata.namespace == 'opensphere-console'
+          && object.metadata.name == 'opensphere-bootstrap-a-initializer-cleanup-journal'
+          && size(object.metadata.labels) == 1
+          && object.metadata.labels['opensphere.io/purpose']
+            == 'bootstrap-a-initializer-cleanup-journal'
+          && object.immutable == true
+          && size(object.data) == 1
+          && object.data.all(k, k == 'journal.json')
+          && size(object.data['journal.json']) > 0
+          && size(object.data['journal.json']) < 1048576
+          && object.data['journal.json'].contains(
+            '"contract":"opensphere-bootstrap-a-initializer-cleanup-journal/v1"'
+          )
+          && object.data['journal.json'].contains('"deletedResources":[')
+          && object.data['journal.json'].contains(
+            '"contract":"opensphere-platform-release-authority-retained/v1"'
+          )
+        )
+      message: Bootstrap A cleanup journal is immutable, create-once executor custody.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: opensphere-bootstrap-a-initializer-cleanup-journal-custody }
+spec:
+  policyName: opensphere-bootstrap-a-initializer-cleanup-journal-custody
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: platform-release-tls-initializer-custody }
+spec:
+  policyName: platform-release-tls-initializer-custody
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: platform-release-tls-initializer-job-boundary }
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: apps/v1
+    kind: Deployment
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["jobs"]
+  validations:
+    - expression: >-
+        !(
+          object.spec.template.spec.serviceAccountName == 'platform-release-tls-initializer'
+          || object.metadata.name.startsWith('opensphere-tls-init-')
+          || (has(object.metadata.labels) && 'app' in object.metadata.labels
+            && object.metadata.labels['app'] == 'platform-release-tls-initializer')
+        ) || (
+          request.userInfo.username
+            == 'system:serviceaccount:opensphere-console:platform-release-executor'
+          && object.metadata.namespace == 'opensphere-console'
+          && object.metadata.name.matches('^opensphere-tls-init-[a-f0-9]{40}$')
+          && size(object.metadata.labels) == 2
+          && object.metadata.labels['app'] == 'platform-release-tls-initializer'
+          && object.metadata.labels['opensphere.io/source-revision'].matches('^[a-f0-9]{40}$')
+          && object.metadata.name == 'opensphere-tls-init-'
+            + object.metadata.labels['opensphere.io/source-revision']
+          && object.metadata.labels.all(k, k in ['app','opensphere.io/source-revision'])
+          && (!has(object.metadata.annotations) || size(object.metadata.annotations) == 0)
+          && (!has(object.metadata.ownerReferences) || size(object.metadata.ownerReferences) == 0)
+          && object.spec.parallelism == 1
+          && object.spec.completions == 1
+          && object.spec.completionMode == 'NonIndexed'
+          && object.spec.manualSelector == false
+          && object.spec.suspend == false
+          && object.spec.podReplacementPolicy == 'TerminatingOrFailed'
+          && (!has(object.spec.podFailurePolicy))
+          && (!has(object.spec.successPolicy))
+          && (!has(object.spec.backoffLimitPerIndex))
+          && (!has(object.spec.maxFailedIndexes))
+          && (!has(object.spec.managedBy) || object.spec.managedBy == '')
+          && size(object.spec.selector.matchLabels) == 1
+          && object.spec.selector.matchLabels.all(k, k == 'batch.kubernetes.io/controller-uid')
+          && (!has(object.spec.selector.matchExpressions)
+            || size(object.spec.selector.matchExpressions) == 0)
+          && object.spec.backoffLimit == 0
+          && object.spec.activeDeadlineSeconds == 600
+          && object.spec.ttlSecondsAfterFinished == 86400
+          && object.spec.template.metadata.labels['app'] == 'platform-release-tls-initializer'
+          && object.spec.template.metadata.labels['opensphere.io/source-revision']
+            == object.metadata.labels['opensphere.io/source-revision']
+          && object.spec.template.metadata.labels['batch.kubernetes.io/job-name']
+            == object.metadata.name
+          && object.spec.template.metadata.labels['job-name'] == object.metadata.name
+          && object.spec.template.metadata.labels['batch.kubernetes.io/controller-uid']
+            == object.spec.selector.matchLabels['batch.kubernetes.io/controller-uid']
+          && object.spec.template.metadata.labels['controller-uid']
+            == object.spec.selector.matchLabels['batch.kubernetes.io/controller-uid']
+          && object.spec.template.metadata.labels.all(k, k in [
+            'app','opensphere.io/source-revision','controller-uid','job-name',
+            'batch.kubernetes.io/controller-uid','batch.kubernetes.io/job-name'
+          ])
+          && (!has(object.spec.template.metadata.annotations)
+            || size(object.spec.template.metadata.annotations) == 0)
+          && object.spec.template.spec.serviceAccountName == 'platform-release-tls-initializer'
+          && object.spec.template.spec.serviceAccount == 'platform-release-tls-initializer'
+          && object.spec.template.spec.automountServiceAccountToken == false
+          && object.spec.template.spec.restartPolicy == 'Never'
+          && object.spec.template.spec.dnsPolicy == 'ClusterFirst'
+          && object.spec.template.spec.schedulerName == 'default-scheduler'
+          && object.spec.template.spec.terminationGracePeriodSeconds == 30
+          && (!has(object.spec.template.spec.hostNetwork) || !object.spec.template.spec.hostNetwork)
+          && (!has(object.spec.template.spec.hostPID) || !object.spec.template.spec.hostPID)
+          && (!has(object.spec.template.spec.hostIPC) || !object.spec.template.spec.hostIPC)
+          && (!has(object.spec.template.spec.shareProcessNamespace)
+            || !object.spec.template.spec.shareProcessNamespace)
+          && (!has(object.spec.template.spec.hostUsers) || object.spec.template.spec.hostUsers)
+          && (!has(object.spec.template.spec.hostname) || object.spec.template.spec.hostname == '')
+          && (!has(object.spec.template.spec.subdomain) || object.spec.template.spec.subdomain == '')
+          && (!has(object.spec.template.spec.setHostnameAsFQDN)
+            || !object.spec.template.spec.setHostnameAsFQDN)
+          && (!has(object.spec.template.spec.nodeName) || object.spec.template.spec.nodeName == '')
+          && (!has(object.spec.template.spec.nodeSelector)
+            || size(object.spec.template.spec.nodeSelector) == 0)
+          && (!has(object.spec.template.spec.affinity))
+          && (!has(object.spec.template.spec.tolerations)
+            || size(object.spec.template.spec.tolerations) == 0)
+          && (!has(object.spec.template.spec.topologySpreadConstraints)
+            || size(object.spec.template.spec.topologySpreadConstraints) == 0)
+          && (!has(object.spec.template.spec.schedulingGates)
+            || size(object.spec.template.spec.schedulingGates) == 0)
+          && (!has(object.spec.template.spec.hostAliases)
+            || size(object.spec.template.spec.hostAliases) == 0)
+          && (!has(object.spec.template.spec.runtimeClassName)
+            || object.spec.template.spec.runtimeClassName == '')
+          && (!has(object.spec.template.spec.priorityClassName)
+            || object.spec.template.spec.priorityClassName == '')
+          && (!has(object.spec.template.spec.dnsConfig))
+          && (!has(object.spec.template.spec.readinessGates)
+            || size(object.spec.template.spec.readinessGates) == 0)
+          && (!has(object.spec.template.spec.resourceClaims)
+            || size(object.spec.template.spec.resourceClaims) == 0)
+          && object.spec.template.spec.securityContext.runAsNonRoot
+          && object.spec.template.spec.securityContext.seccompProfile.type == 'RuntimeDefault'
+          && (!has(object.spec.template.spec.securityContext.runAsUser))
+          && (!has(object.spec.template.spec.securityContext.runAsGroup))
+          && (!has(object.spec.template.spec.securityContext.fsGroup))
+          && (!has(object.spec.template.spec.securityContext.supplementalGroups)
+            || size(object.spec.template.spec.securityContext.supplementalGroups) == 0)
+          && (!has(object.spec.template.spec.securityContext.sysctls)
+            || size(object.spec.template.spec.securityContext.sysctls) == 0)
+          && (!has(object.spec.template.spec.securityContext.seLinuxOptions))
+          && (!has(object.spec.template.spec.securityContext.windowsOptions))
+          && size(object.spec.template.spec.imagePullSecrets) == 1
+          && object.spec.template.spec.imagePullSecrets[0].name == 'opensphere-ghcr-pull'
+          && (!has(object.spec.template.spec.initContainers)
+            || size(object.spec.template.spec.initContainers) == 0)
+          && (!has(object.spec.template.spec.ephemeralContainers)
+            || size(object.spec.template.spec.ephemeralContainers) == 0)
+          && size(object.spec.template.spec.volumes) == 2
+          && object.spec.template.spec.volumes[0].name == 'kube-api-access'
+          && has(object.spec.template.spec.volumes[0].projected)
+          && object.spec.template.spec.volumes[0].projected.defaultMode == 256
+          && size(object.spec.template.spec.volumes[0].projected.sources) == 2
+          && object.spec.template.spec.volumes[0].projected.sources[0].serviceAccountToken.path == 'token'
+          && object.spec.template.spec.volumes[0].projected.sources[0].serviceAccountToken.audience
+            == 'https://kubernetes.default.svc'
+          && object.spec.template.spec.volumes[0].projected.sources[0].serviceAccountToken.expirationSeconds == 600
+          && object.spec.template.spec.volumes[0].projected.sources[1].configMap.name == 'kube-root-ca.crt'
+          && size(object.spec.template.spec.volumes[0].projected.sources[1].configMap.items) == 1
+          && object.spec.template.spec.volumes[0].projected.sources[1].configMap.items[0].key == 'ca.crt'
+          && object.spec.template.spec.volumes[0].projected.sources[1].configMap.items[0].path == 'ca.crt'
+          && (!has(object.spec.template.spec.volumes[0].projected.sources[1].configMap.optional)
+            || !object.spec.template.spec.volumes[0].projected.sources[1].configMap.optional)
+          && object.spec.template.spec.volumes[1].name == 'tmp'
+          && has(object.spec.template.spec.volumes[1].emptyDir)
+          && (!has(object.spec.template.spec.volumes[1].emptyDir.medium)
+            || object.spec.template.spec.volumes[1].emptyDir.medium == '')
+          && (!has(object.spec.template.spec.volumes[1].emptyDir.sizeLimit))
+          && size(object.spec.template.spec.containers) == 1
+          && object.spec.template.spec.containers[0].name == 'initializer'
+          && params.metadata.namespace == 'opensphere-console'
+          && params.metadata.name == 'opensphere-console-backend'
+          && size(params.spec.template.spec.containers) == 1
+          && params.spec.template.spec.containers[0].name == 'api'
+          && params.spec.template.spec.containers[0].image.matches(
+            '^ghcr[.]io/opensphere-platform/opensphere-console-backend@sha256:[a-f0-9]{64}$'
+          )
+          && object.spec.template.spec.containers[0].image
+            == params.spec.template.spec.containers[0].image
+          && object.spec.template.spec.containers[0].imagePullPolicy == 'IfNotPresent'
+          && object.spec.template.spec.containers[0].command
+            == ['node','/app/opensphere-console-backend/platform-release-tls-initializer.mjs']
+          && (!has(object.spec.template.spec.containers[0].args)
+            || size(object.spec.template.spec.containers[0].args) == 0)
+          && (!has(object.spec.template.spec.containers[0].envFrom)
+            || size(object.spec.template.spec.containers[0].envFrom) == 0)
+          && object.spec.template.spec.containers[0].env.map(e, e.name)
+            == ['HOME','NODE_EXTRA_CA_CERTS','PLATFORM_RELEASE_TLS_INITIALIZER_PROFILE']
+          && object.spec.template.spec.containers[0].env[0].value == '/tmp/home'
+          && object.spec.template.spec.containers[0].env[1].value
+            == '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt'
+          && object.spec.template.spec.containers[0].env[2].value
+            == 'opensphere-platform-release-tls-initializer/v1'
+          && object.spec.template.spec.containers[0].env.all(e,
+            has(e.value) && !has(e.valueFrom))
+          && size(object.spec.template.spec.containers[0].volumeMounts) == 2
+          && object.spec.template.spec.containers[0].volumeMounts[0].name == 'kube-api-access'
+          && object.spec.template.spec.containers[0].volumeMounts[0].mountPath
+            == '/var/run/secrets/kubernetes.io/serviceaccount'
+          && object.spec.template.spec.containers[0].volumeMounts[0].readOnly
+          && (!has(object.spec.template.spec.containers[0].volumeMounts[0].subPath)
+            || object.spec.template.spec.containers[0].volumeMounts[0].subPath == '')
+          && (!has(object.spec.template.spec.containers[0].volumeMounts[0].subPathExpr)
+            || object.spec.template.spec.containers[0].volumeMounts[0].subPathExpr == '')
+          && object.spec.template.spec.containers[0].volumeMounts[1].name == 'tmp'
+          && object.spec.template.spec.containers[0].volumeMounts[1].mountPath == '/tmp'
+          && !object.spec.template.spec.containers[0].volumeMounts[1].readOnly
+          && (!has(object.spec.template.spec.containers[0].volumeMounts[1].subPath)
+            || object.spec.template.spec.containers[0].volumeMounts[1].subPath == '')
+          && (!has(object.spec.template.spec.containers[0].volumeMounts[1].subPathExpr)
+            || object.spec.template.spec.containers[0].volumeMounts[1].subPathExpr == '')
+          && (!has(object.spec.template.spec.containers[0].volumeDevices)
+            || size(object.spec.template.spec.containers[0].volumeDevices) == 0)
+          && (!has(object.spec.template.spec.containers[0].ports)
+            || size(object.spec.template.spec.containers[0].ports) == 0)
+          && (!has(object.spec.template.spec.containers[0].workingDir)
+            || object.spec.template.spec.containers[0].workingDir == '')
+          && (!has(object.spec.template.spec.containers[0].lifecycle))
+          && (!has(object.spec.template.spec.containers[0].livenessProbe))
+          && (!has(object.spec.template.spec.containers[0].readinessProbe))
+          && (!has(object.spec.template.spec.containers[0].startupProbe))
+          && object.spec.template.spec.containers[0].terminationMessagePath == '/dev/termination-log'
+          && object.spec.template.spec.containers[0].terminationMessagePolicy == 'File'
+          && object.spec.template.spec.containers[0].resources.requests
+            == {'cpu':'20m','memory':'64Mi'}
+          && object.spec.template.spec.containers[0].resources.limits
+            == {'cpu':'500m','memory':'256Mi'}
+          && (!has(object.spec.template.spec.containers[0].resources.claims)
+            || size(object.spec.template.spec.containers[0].resources.claims) == 0)
+          && object.spec.template.spec.containers[0].securityContext.runAsNonRoot
+          && !object.spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          && object.spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          && object.spec.template.spec.containers[0].securityContext.capabilities.drop == ['ALL']
+          && (!has(object.spec.template.spec.containers[0].securityContext.capabilities.add)
+            || size(object.spec.template.spec.containers[0].securityContext.capabilities.add) == 0)
+          && (!has(object.spec.template.spec.containers[0].securityContext.privileged)
+            || !object.spec.template.spec.containers[0].securityContext.privileged)
+          && (!has(object.spec.template.spec.containers[0].securityContext.runAsUser))
+          && (!has(object.spec.template.spec.containers[0].securityContext.runAsGroup))
+          && (!has(object.spec.template.spec.containers[0].securityContext.procMount))
+          && (!has(object.spec.template.spec.containers[0].securityContext.seccompProfile))
+          && (!has(object.spec.template.spec.containers[0].stdin)
+            || !object.spec.template.spec.containers[0].stdin)
+          && (!has(object.spec.template.spec.containers[0].stdinOnce)
+            || !object.spec.template.spec.containers[0].stdinOnce)
+          && (!has(object.spec.template.spec.containers[0].tty)
+            || !object.spec.template.spec.containers[0].tty)
+        )
+      message: Platform Release TLS initializer Job is outside its one-shot exact boundary.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: platform-release-tls-initializer-job-boundary }
+spec:
+  policyName: platform-release-tls-initializer-job-boundary
+  paramRef:
+    name: opensphere-console-backend
+    namespace: opensphere-console
+    parameterNotFoundAction: Deny
+  validationActions: [Deny]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata: { name: platform-release-tls-initializer-pod-boundary }
+spec:
+  failurePolicy: Fail
+  paramKind:
+    apiVersion: apps/v1
+    kind: Deployment
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+  validations:
+    - expression: >-
+        !(
+          object.spec.serviceAccountName == 'platform-release-tls-initializer'
+          || object.metadata.name.startsWith('opensphere-tls-init-')
+          || (has(object.metadata.labels) && 'app' in object.metadata.labels
+            && object.metadata.labels['app'] == 'platform-release-tls-initializer')
+        ) || (
+          request.userInfo.username in [
+            'system:kube-controller-manager',
+            'system:serviceaccount:kube-system:job-controller'
+          ]
+          && object.metadata.namespace == 'opensphere-console'
+          && object.metadata.name.matches(
+            '^opensphere-tls-init-[a-f0-9]{40}-[a-z0-9]{5}$'
+          )
+          && object.metadata.generateName
+            == object.metadata.ownerReferences[0].name + '-'
+          && object.metadata.labels['app'] == 'platform-release-tls-initializer'
+          && object.metadata.labels['opensphere.io/source-revision'].matches('^[a-f0-9]{40}$')
+          && object.metadata.labels.all(k, k in [
+            'app','opensphere.io/source-revision','controller-uid','job-name',
+            'batch.kubernetes.io/controller-uid','batch.kubernetes.io/job-name'
+          ])
+          && (!has(object.metadata.annotations) || size(object.metadata.annotations) == 0)
+          && object.spec.serviceAccountName == 'platform-release-tls-initializer'
+          && object.spec.serviceAccount == 'platform-release-tls-initializer'
+          && object.spec.automountServiceAccountToken == false
+          && object.spec.restartPolicy == 'Never'
+          && size(object.metadata.ownerReferences) == 1
+          && object.metadata.ownerReferences[0].apiVersion == 'batch/v1'
+          && object.metadata.ownerReferences[0].kind == 'Job'
+          && object.metadata.ownerReferences[0].name.matches(
+            '^opensphere-tls-init-[a-f0-9]{40}$'
+          )
+          && object.metadata.ownerReferences[0].controller
+          && object.metadata.ownerReferences[0].blockOwnerDeletion
+          && object.metadata.ownerReferences[0].name
+            == 'opensphere-tls-init-' + object.metadata.labels['opensphere.io/source-revision']
+          && object.metadata.labels['job-name'] == object.metadata.ownerReferences[0].name
+          && object.metadata.labels['batch.kubernetes.io/job-name']
+            == object.metadata.ownerReferences[0].name
+          && object.metadata.labels['controller-uid']
+            == string(object.metadata.ownerReferences[0].uid)
+          && object.metadata.labels['batch.kubernetes.io/controller-uid']
+            == string(object.metadata.ownerReferences[0].uid)
+          && object.spec.dnsPolicy == 'ClusterFirst'
+          && object.spec.schedulerName == 'default-scheduler'
+          && object.spec.terminationGracePeriodSeconds == 30
+          && object.spec.enableServiceLinks
+          && object.spec.priority == 0
+          && object.spec.preemptionPolicy == 'PreemptLowerPriority'
+          && (!has(object.spec.priorityClassName) || object.spec.priorityClassName == '')
+          && (!has(object.spec.hostNetwork) || !object.spec.hostNetwork)
+          && (!has(object.spec.hostPID) || !object.spec.hostPID)
+          && (!has(object.spec.hostIPC) || !object.spec.hostIPC)
+          && (!has(object.spec.shareProcessNamespace) || !object.spec.shareProcessNamespace)
+          && (!has(object.spec.hostUsers) || object.spec.hostUsers)
+          && (!has(object.spec.hostname) || object.spec.hostname == '')
+          && (!has(object.spec.subdomain) || object.spec.subdomain == '')
+          && (!has(object.spec.setHostnameAsFQDN) || !object.spec.setHostnameAsFQDN)
+          && (!has(object.spec.nodeName) || object.spec.nodeName == '')
+          && (!has(object.spec.nodeSelector) || size(object.spec.nodeSelector) == 0)
+          && (!has(object.spec.affinity))
+          && size(object.spec.tolerations) == 2
+          && object.spec.tolerations.all(t,
+            t.key in ['node.kubernetes.io/not-ready','node.kubernetes.io/unreachable']
+            && t.operator == 'Exists'
+            && t.effect == 'NoExecute'
+            && t.tolerationSeconds == 300
+            && (!has(t.value) || t.value == '')
+          )
+          && size(object.spec.tolerations.filter(t, t.key == 'node.kubernetes.io/not-ready')) == 1
+          && size(object.spec.tolerations.filter(t, t.key == 'node.kubernetes.io/unreachable')) == 1
+          && (!has(object.spec.topologySpreadConstraints)
+            || size(object.spec.topologySpreadConstraints) == 0)
+          && (!has(object.spec.schedulingGates) || size(object.spec.schedulingGates) == 0)
+          && (!has(object.spec.hostAliases) || size(object.spec.hostAliases) == 0)
+          && (!has(object.spec.runtimeClassName) || object.spec.runtimeClassName == '')
+          && (!has(object.spec.dnsConfig))
+          && (!has(object.spec.readinessGates) || size(object.spec.readinessGates) == 0)
+          && (!has(object.spec.resourceClaims) || size(object.spec.resourceClaims) == 0)
+          && object.spec.securityContext.runAsNonRoot
+          && object.spec.securityContext.seccompProfile.type == 'RuntimeDefault'
+          && (!has(object.spec.securityContext.runAsUser))
+          && (!has(object.spec.securityContext.runAsGroup))
+          && (!has(object.spec.securityContext.fsGroup))
+          && (!has(object.spec.securityContext.supplementalGroups)
+            || size(object.spec.securityContext.supplementalGroups) == 0)
+          && (!has(object.spec.securityContext.sysctls)
+            || size(object.spec.securityContext.sysctls) == 0)
+          && (!has(object.spec.securityContext.seLinuxOptions))
+          && (!has(object.spec.securityContext.windowsOptions))
+          && size(object.spec.imagePullSecrets) == 1
+          && object.spec.imagePullSecrets[0].name == 'opensphere-ghcr-pull'
+          && (!has(object.spec.initContainers) || size(object.spec.initContainers) == 0)
+          && (!has(object.spec.ephemeralContainers) || size(object.spec.ephemeralContainers) == 0)
+          && size(object.spec.volumes) == 2
+          && object.spec.volumes[0].name == 'kube-api-access'
+          && has(object.spec.volumes[0].projected)
+          && object.spec.volumes[0].projected.defaultMode == 256
+          && size(object.spec.volumes[0].projected.sources) == 2
+          && object.spec.volumes[0].projected.sources[0].serviceAccountToken.path == 'token'
+          && object.spec.volumes[0].projected.sources[0].serviceAccountToken.audience
+            == 'https://kubernetes.default.svc'
+          && object.spec.volumes[0].projected.sources[0].serviceAccountToken.expirationSeconds == 600
+          && object.spec.volumes[0].projected.sources[1].configMap.name == 'kube-root-ca.crt'
+          && size(object.spec.volumes[0].projected.sources[1].configMap.items) == 1
+          && object.spec.volumes[0].projected.sources[1].configMap.items[0].key == 'ca.crt'
+          && object.spec.volumes[0].projected.sources[1].configMap.items[0].path == 'ca.crt'
+          && (!has(object.spec.volumes[0].projected.sources[1].configMap.optional)
+            || !object.spec.volumes[0].projected.sources[1].configMap.optional)
+          && object.spec.volumes[1].name == 'tmp'
+          && has(object.spec.volumes[1].emptyDir)
+          && (!has(object.spec.volumes[1].emptyDir.medium)
+            || object.spec.volumes[1].emptyDir.medium == '')
+          && (!has(object.spec.volumes[1].emptyDir.sizeLimit))
+          && size(object.spec.containers) == 1
+          && object.spec.containers[0].name == 'initializer'
+          && params.metadata.namespace == 'opensphere-console'
+          && params.metadata.name == 'opensphere-console-backend'
+          && size(params.spec.template.spec.containers) == 1
+          && params.spec.template.spec.containers[0].name == 'api'
+          && params.spec.template.spec.containers[0].image.matches(
+            '^ghcr[.]io/opensphere-platform/opensphere-console-backend@sha256:[a-f0-9]{64}$'
+          )
+          && object.spec.containers[0].image == params.spec.template.spec.containers[0].image
+          && object.spec.containers[0].imagePullPolicy == 'IfNotPresent'
+          && object.spec.containers[0].command
+            == ['node','/app/opensphere-console-backend/platform-release-tls-initializer.mjs']
+          && (!has(object.spec.containers[0].args) || size(object.spec.containers[0].args) == 0)
+          && (!has(object.spec.containers[0].envFrom) || size(object.spec.containers[0].envFrom) == 0)
+          && object.spec.containers[0].env.map(e, e.name)
+            == ['HOME','NODE_EXTRA_CA_CERTS','PLATFORM_RELEASE_TLS_INITIALIZER_PROFILE']
+          && object.spec.containers[0].env[0].value == '/tmp/home'
+          && object.spec.containers[0].env[1].value
+            == '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt'
+          && object.spec.containers[0].env[2].value
+            == 'opensphere-platform-release-tls-initializer/v1'
+          && object.spec.containers[0].env.all(e, has(e.value) && !has(e.valueFrom))
+          && size(object.spec.containers[0].volumeMounts) == 2
+          && object.spec.containers[0].volumeMounts[0].name == 'kube-api-access'
+          && object.spec.containers[0].volumeMounts[0].mountPath
+            == '/var/run/secrets/kubernetes.io/serviceaccount'
+          && object.spec.containers[0].volumeMounts[0].readOnly
+          && (!has(object.spec.containers[0].volumeMounts[0].subPath)
+            || object.spec.containers[0].volumeMounts[0].subPath == '')
+          && (!has(object.spec.containers[0].volumeMounts[0].subPathExpr)
+            || object.spec.containers[0].volumeMounts[0].subPathExpr == '')
+          && object.spec.containers[0].volumeMounts[1].name == 'tmp'
+          && object.spec.containers[0].volumeMounts[1].mountPath == '/tmp'
+          && !object.spec.containers[0].volumeMounts[1].readOnly
+          && (!has(object.spec.containers[0].volumeMounts[1].subPath)
+            || object.spec.containers[0].volumeMounts[1].subPath == '')
+          && (!has(object.spec.containers[0].volumeMounts[1].subPathExpr)
+            || object.spec.containers[0].volumeMounts[1].subPathExpr == '')
+          && (!has(object.spec.containers[0].volumeDevices)
+            || size(object.spec.containers[0].volumeDevices) == 0)
+          && (!has(object.spec.containers[0].ports) || size(object.spec.containers[0].ports) == 0)
+          && (!has(object.spec.containers[0].workingDir)
+            || object.spec.containers[0].workingDir == '')
+          && (!has(object.spec.containers[0].lifecycle))
+          && (!has(object.spec.containers[0].livenessProbe))
+          && (!has(object.spec.containers[0].readinessProbe))
+          && (!has(object.spec.containers[0].startupProbe))
+          && object.spec.containers[0].terminationMessagePath == '/dev/termination-log'
+          && object.spec.containers[0].terminationMessagePolicy == 'File'
+          && object.spec.containers[0].resources.requests == {'cpu':'20m','memory':'64Mi'}
+          && object.spec.containers[0].resources.limits == {'cpu':'500m','memory':'256Mi'}
+          && (!has(object.spec.containers[0].resources.claims)
+            || size(object.spec.containers[0].resources.claims) == 0)
+          && object.spec.containers[0].securityContext.runAsNonRoot
+          && !object.spec.containers[0].securityContext.allowPrivilegeEscalation
+          && object.spec.containers[0].securityContext.readOnlyRootFilesystem
+          && object.spec.containers[0].securityContext.capabilities.drop == ['ALL']
+          && (!has(object.spec.containers[0].securityContext.capabilities.add)
+            || size(object.spec.containers[0].securityContext.capabilities.add) == 0)
+          && (!has(object.spec.containers[0].securityContext.privileged)
+            || !object.spec.containers[0].securityContext.privileged)
+          && (!has(object.spec.containers[0].securityContext.runAsUser))
+          && (!has(object.spec.containers[0].securityContext.runAsGroup))
+          && (!has(object.spec.containers[0].securityContext.procMount))
+          && (!has(object.spec.containers[0].securityContext.seccompProfile))
+          && (!has(object.spec.containers[0].stdin) || !object.spec.containers[0].stdin)
+          && (!has(object.spec.containers[0].stdinOnce) || !object.spec.containers[0].stdinOnce)
+          && (!has(object.spec.containers[0].tty) || !object.spec.containers[0].tty)
+        )
+      message: Direct Pods cannot use the Platform Release TLS initializer identity.
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: platform-release-tls-initializer-pod-boundary }
+spec:
+  policyName: platform-release-tls-initializer-pod-boundary
+  paramRef:
+    name: opensphere-console-backend
+    namespace: opensphere-console
+    parameterNotFoundAction: Deny
+  validationActions: [Deny]
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensphere-tls-init-__OPENSPHERE_RELEASE_REVISION__
+  namespace: opensphere-console
+  labels:
+    app: platform-release-tls-initializer
+    opensphere.io/source-revision: __OPENSPHERE_RELEASE_REVISION__
+spec:
+  parallelism: 1
+  completions: 1
+  completionMode: NonIndexed
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: platform-release-tls-initializer
+        opensphere.io/source-revision: __OPENSPHERE_RELEASE_REVISION__
+    spec:
+      serviceAccountName: platform-release-tls-initializer
+      automountServiceAccountToken: false
+      restartPolicy: Never
+      imagePullSecrets: [{ name: opensphere-ghcr-pull }]
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: initializer
+          image: ghcr.io/opensphere-platform/opensphere-console-backend@sha256:8ff3652e8087e57c9e150e1b4a59ac64e19c7330cae6234d454f85075fb42e84
+          imagePullPolicy: IfNotPresent
+          command: ["node", "/app/opensphere-console-backend/platform-release-tls-initializer.mjs"]
+          env:
+            - { name: HOME, value: /tmp/home }
+            - { name: NODE_EXTRA_CA_CERTS, value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt }
+            - { name: PLATFORM_RELEASE_TLS_INITIALIZER_PROFILE, value: opensphere-platform-release-tls-initializer/v1 }
+          volumeMounts: [{ name: kube-api-access, mountPath: /var/run/secrets/kubernetes.io/serviceaccount, readOnly: true }, { name: tmp, mountPath: /tmp }]
+          resources:
+            requests: { cpu: 20m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: kube-api-access
+          projected:
+            defaultMode: 256
+            sources:
+              - serviceAccountToken: { path: token, audience: "https://kubernetes.default.svc", expirationSeconds: 600 }
+              - configMap: { name: kube-root-ca.crt, items: [{ key: ca.crt, path: ca.crt }] }
+        - { name: tmp, emptyDir: {} }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: platform-release-tls-initializer, namespace: opensphere-console }
+spec:
+  podSelector: { matchLabels: { app: platform-release-tls-initializer } }
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+          podSelector: { matchLabels: { k8s-app: kube-dns } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    - to: [{ ipBlock: { cidr: 10.96.0.1/32 } }]
+      ports: [{ protocol: TCP, port: 443 }]

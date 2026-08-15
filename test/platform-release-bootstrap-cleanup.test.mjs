@@ -1,9 +1,7 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
-import { resolve, sep } from 'node:path';
 import test from 'node:test';
-import { pathToFileURL } from 'node:url';
 
 import {
   bootstrapACleanupResourceSet,
@@ -18,11 +16,8 @@ const sourceImage = `ghcr.io/opensphere-platform/opensphere-console-backend@sha2
 const requestId = '11111111-2222-4333-8444-555555555555';
 const targetReleaseDigest = `sha256:${'b'.repeat(64)}`;
 const key = (kind, name) => `${kind}/${name}`;
-const CONSOLE_SOURCE = process.env.OPENSPHERE_CONSOLE_SOURCE
-  ? pathToFileURL(`${resolve(process.env.OPENSPHERE_CONSOLE_SOURCE)}${sep}`)
-  : new URL('../../OpenSphere-console/', import.meta.url);
 const deploySource = readFileSync(
-  new URL('backend/opensphere-console-backend/deploy.yaml', CONSOLE_SOURCE), 'utf8'
+  new URL('./fixtures/platform-release-bootstrap-a-authority.yaml', import.meta.url), 'utf8'
 ).replaceAll('\r\n', '\n');
 
 function sourceDocuments() {
