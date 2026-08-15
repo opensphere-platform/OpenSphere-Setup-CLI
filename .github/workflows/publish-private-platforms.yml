@@ -72,11 +72,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+          cache: npm
+
+      - name: Resolve governed Console source
+        id: console_source
+        shell: pwsh
+        run: |
+          $source = node scripts/resolve-console-source-lock.mjs | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Console source lock resolution failed' }
+          "repository=$($source.githubRepository)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "revision=$($source.revision)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
       - name: Checkout canonical Console manifests
         uses: actions/checkout@v4
         with:
-          repository: opensphere-platform/OpenSphere-console
+          repository: ${{ steps.console_source.outputs.repository }}
+          ref: ${{ steps.console_source.outputs.revision }}
           path: _fixtures/OpenSphere-console
+
+      - name: Verify governed Console checkout
+        shell: pwsh
+        run: |
+          $actual = (git -C _fixtures/OpenSphere-console rev-parse HEAD).Trim()
+          if ($actual -ne '${{ steps.console_source.outputs.revision }}') {
+            throw "Console checkout revision mismatch: $actual"
+          }
 
       - name: Refuse public distribution
         shell: pwsh
@@ -85,11 +108,6 @@ jobs:
         run: |
           $visibility = gh api "repos/$env:GITHUB_REPOSITORY" --jq .visibility
           if ($visibility -ne 'private') { throw "Refusing public Setup distribution: $visibility" }
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24.18.0'
-          cache: npm
 
       - name: Install and test
         shell: pwsh
