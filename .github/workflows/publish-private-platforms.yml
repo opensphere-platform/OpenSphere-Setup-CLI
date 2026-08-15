@@ -86,20 +86,51 @@ jobs:
           "repository=$($source.githubRepository)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "revision=$($source.revision)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+      - name: Materialize previous Console source lock
+        id: previous_console_source
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if (-not $env:BASE_SHA) {
+            "mode=current-only" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            exit 0
+          }
+          git fetch --no-tags origin $env:BASE_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch the pull request base revision' }
+          $raw = git show "$env:BASE_SHA`:console-source.lock.json" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $path = Join-Path $env:RUNNER_TEMP 'previous-console-source.lock.json'
+            [System.IO.File]::WriteAllText($path, ($raw -join "`n") + "`n", [System.Text.UTF8Encoding]::new($false))
+            "mode=previous" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+            "path=$path" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          } elseif ($LASTEXITCODE -eq 128) {
+            "mode=bootstrap" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          } else {
+            throw 'Failed to inspect the previous Console source lock'
+          }
+
       - name: Checkout canonical Console manifests
         uses: actions/checkout@v4
         with:
           repository: ${{ steps.console_source.outputs.repository }}
           ref: ${{ steps.console_source.outputs.revision }}
+          fetch-depth: 0
           path: _fixtures/OpenSphere-console
 
       - name: Verify governed Console checkout
         shell: pwsh
         run: |
-          $actual = (git -C _fixtures/OpenSphere-console rev-parse HEAD).Trim()
-          if ($actual -ne '${{ steps.console_source.outputs.revision }}') {
-            throw "Console checkout revision mismatch: $actual"
+          $arguments = @('--checkout', '_fixtures/OpenSphere-console')
+          if ('${{ steps.previous_console_source.outputs.mode }}' -eq 'previous') {
+            $arguments += @('--previous-lock', '${{ steps.previous_console_source.outputs.path }}')
+          } elseif ('${{ steps.previous_console_source.outputs.mode }}' -eq 'bootstrap') {
+            $arguments += '--allow-bootstrap'
+          } else {
+            $arguments += '--current-only'
           }
+          node scripts/verify-console-source-checkout.mjs @arguments
+          if ($LASTEXITCODE -ne 0) { throw 'Console source checkout verification failed' }
 
       - name: Refuse public distribution
         shell: pwsh
