@@ -1,15 +1,13 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { resolve, sep } from 'node:path';
 import test from 'node:test';
-import { pathToFileURL } from 'node:url';
 
 import { componentReleaseWorkloadManifests } from '../src/bootstrap.mjs';
 import { projectBootstrapInitializerManifest } from '../src/platform-release-bootstrap-manifest.mjs';
 
-const CONSOLE_SOURCE = process.env.OPENSPHERE_CONSOLE_SOURCE
-  ? pathToFileURL(`${resolve(process.env.OPENSPHERE_CONSOLE_SOURCE)}${sep}`)
-  : new URL('../../OpenSphere-console/', import.meta.url);
+const AUTHORITY_FIXTURE = new URL(
+  './fixtures/platform-release-bootstrap-a-authority.yaml', import.meta.url
+);
 const revision = 'a'.repeat(40);
 const image = `ghcr.io/opensphere-platform/opensphere-console-backend@sha256:${'b'.repeat(64)}`;
 const bootstrapFrom = {
@@ -34,9 +32,9 @@ function metadataValue(document, key) {
 }
 
 function fixture() {
-  let source = readFileSync(
-    new URL('backend/opensphere-console-backend/deploy.yaml', CONSOLE_SOURCE), 'utf8'
-  ).replaceAll('\r\n', '\n');
+  let source = readFileSync(AUTHORITY_FIXTURE, 'utf8').replaceAll('\r\n', '\n');
+  assert.equal(documents(source).length, 16,
+    'committed Bootstrap A authority fixture must contain exactly 16 documents');
   const images = new Set(source.match(
     /ghcr\.io\/opensphere-platform\/opensphere-console-backend@sha256:[a-f0-9]{64}/gu
   ) || []);
@@ -44,6 +42,20 @@ function fixture() {
   source = source.replaceAll([...images][0], image);
   source = source.replaceAll('__OPENSPHERE_RELEASE_REVISION__', revision);
   return source;
+}
+
+function componentFixture() {
+  return `${fixture()}---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: opensphere-console-backend, namespace: opensphere-console }
+spec:
+  template:
+    spec:
+      containers:
+        - name: backend
+          image: ${image}
+`;
 }
 
 function mutateDocument(yaml, kind, name, mutate) {
@@ -94,7 +106,7 @@ test('component application uses the same committed Bootstrap B projection', () 
   };
   const selected = componentReleaseWorkloadManifests(lock, {
     foundation: { release: [] },
-    base: [{ path: 'backend/opensphere-console-backend/deploy.yaml', yaml: fixture() }],
+    base: [{ path: 'backend/opensphere-console-backend/deploy.yaml', yaml: componentFixture() }],
   });
   assert.equal(selected.length, 1);
   assert.doesNotMatch(selected[0].yaml, /name: platform-release-tls-initializer(?:\s|$)/);
