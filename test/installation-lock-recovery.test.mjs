@@ -22,7 +22,9 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const fixture = (name, encoding = 'utf8') => fs.readFileSync(
   path.join(here, 'fixtures', name), encoding
 );
-const incidentText = fixture('installation-lock-recovery-incident.json');
+const incidentText = Buffer.from(
+  fixture('installation-lock-recovery-incident.base64').trim(), 'base64'
+).toString('utf8');
 const governedText = Buffer.from(
   fixture('installation-lock-recovery-governed-change.base64').trim(), 'base64'
 ).toString('utf8');
