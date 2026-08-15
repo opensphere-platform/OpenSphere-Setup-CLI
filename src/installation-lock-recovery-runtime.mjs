@@ -439,7 +439,6 @@ export async function createDurableInstallationLockRecoveryReceiptStore(
     ]) {
       if (!current.isDirectory() || current.isSymbolicLink()
           || current.dev !== expected.dev || current.ino !== expected.ino
-          || current.ctimeMs !== expected.ctimeMs
           || await realpath(label === 'recovery receipt directory' ? directory : workspace)
             !== (label === 'recovery receipt directory' ? directory : workspace)) {
         throw new Error(`${label} identity changed during recovery`);
@@ -448,7 +447,6 @@ export async function createDurableInstallationLockRecoveryReceiptStore(
     const currentTemporary = await lstat(temporaryDirectory);
     if (!currentTemporary.isDirectory() || currentTemporary.isSymbolicLink()
         || currentTemporary.dev !== temporaryStat.dev || currentTemporary.ino !== temporaryStat.ino
-        || currentTemporary.ctimeMs !== temporaryStat.ctimeMs
         || await realpath(temporaryDirectory) !== resolve(temporaryDirectory)) {
       throw new Error('recovery receipt temporary directory identity changed during recovery');
     }
@@ -463,7 +461,6 @@ export async function createDurableInstallationLockRecoveryReceiptStore(
     const currentStaging = await lstat(stagingDirectory);
     if (!currentStaging.isDirectory() || currentStaging.isSymbolicLink()
         || currentStaging.dev !== stagingStat.dev || currentStaging.ino !== stagingStat.ino
-        || currentStaging.ctimeMs !== stagingStat.ctimeMs
         || await realpath(stagingDirectory) !== resolve(stagingDirectory)) {
       throw new Error('recovery receipt staging directory identity changed during recovery');
     }
