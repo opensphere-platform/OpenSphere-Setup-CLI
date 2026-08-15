@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  link, mkdir, mkdtemp, readFile, rename, rm, symlink, unlink, writeFile,
+  link, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, unlink, writeFile,
 } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -21,10 +21,10 @@ const mockCustody = {
   ensureDirectoryCustodyFn: async () => {},
   assertDirectoryCustodyFn: async () => {},
 };
-const testTempParent = join(dirname(tmpdir()), 'opensphere-installation-lock-recovery-tests');
 async function recoveryTemp(prefix) {
+  const testTempParent = join(dirname(tmpdir()), 'opensphere-installation-lock-recovery-tests');
   await mkdir(testTempParent, { recursive: true });
-  return mkdtemp(join(testTempParent, prefix));
+  return mkdtemp(join(await realpath(testTempParent), prefix));
 }
 function quarantineStaleInstallationLock(options) {
   return quarantineStaleInstallationLockImpl({ ...mockCustody, ...options });

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import {
-  mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile,
+  mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile,
 } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -18,11 +18,10 @@ import {
 } from '../src/installation-lock-recovery-prepare.mjs';
 
 const repositoryRoot = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const testTempParent = join(dirname(tmpdir()), 'opensphere-installation-lock-recovery-tests');
-
 async function recoveryTemp(prefix) {
+  const testTempParent = join(dirname(tmpdir()), 'opensphere-installation-lock-recovery-tests');
   await mkdir(testTempParent, { recursive: true });
-  return mkdtemp(join(testTempParent, prefix));
+  return mkdtemp(join(await realpath(testTempParent), prefix));
 }
 
 function fakeApprovalDocument(_bundle, { approvalId, reason, approvedAt, expiresAt }) {
