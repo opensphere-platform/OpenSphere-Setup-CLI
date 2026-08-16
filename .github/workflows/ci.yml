@@ -182,4 +182,6 @@ jobs:
           name: audit-evidence-supabase-${{ github.run_id }}
           path: ${{ runner.temp }}/audit-evidence
           if-no-files-found: error
-          retention-days: 90
+          # PR evidence is short-lived diagnostic material. Keep one review
+          # window without exhausting the GitHub Free 500 MB storage pool.
+          retention-days: 7
