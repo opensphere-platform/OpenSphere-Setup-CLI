@@ -31,6 +31,18 @@ import {
 import { preflight, readNodePlatforms } from './preflight.mjs';
 import { printOpenSphereBanner } from './banner.mjs';
 import { startRecoveryDrill } from './recovery-drill.mjs';
+import {
+  INSTALLATION_LOCK_RECOVERY_CONFIRMATION,
+  recoverInstallationLockFromPlan,
+} from './installation-lock-recovery-runtime.mjs';
+import {
+  INSTALLATION_LOCK_STALE_QUARANTINE_CONFIRMATION,
+  quarantineStaleInstallationLockFromIntent,
+} from './installation-lock-recovery-local.mjs';
+import {
+  INSTALLATION_LOCK_RECOVERY_PREPARE_CONFIRMATION,
+  prepareInstallationLockRecovery,
+} from './installation-lock-recovery-prepare.mjs';
 
 function option(names, fallback) {
   const aliases = Array.isArray(names) ? names : [names];
@@ -118,6 +130,15 @@ Usage:
   opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
   opensphere-setup recovery-drill --component <supabase|gitea> --manifest-key <s3-object-key>
       --confirm ISOLATED-RECOVERY-DRILL [--context <kube-context>]
+  opensphere-setup recover-installation-lock --plan <immutable-signed-plan.json>
+      --confirm ${INSTALLATION_LOCK_RECOVERY_CONFIRMATION} [--context docker-desktop]
+  opensphere-setup quarantine-stale-installation-lock --intent <immutable-intent.json>
+      --confirm ${INSTALLATION_LOCK_STALE_QUARANTINE_CONFIRMATION}
+  opensphere-setup prepare-installation-lock-recovery --evidence <immutable-bundle.json>
+      --approval-key <private-pkcs8-p256.pem> --reason-file <immutable-reason.txt>
+      --approval-id <uuid-v4> --approved-at <ISO-8601> --expires-at <ISO-8601,max-30m>
+      --output-dir <outside-repo-directory>
+      --confirm ${INSTALLATION_LOCK_RECOVERY_PREPARE_CONFIRMATION}
   opensphere-setup reset-initial-admin --confirm RESET-INITIAL-ADMIN [--context <kube-context>]
   opensphere-setup uninstall --purge-data --confirm DELETE-OPENSPHERE [--context <kube-context>]
   opensphere-setup install-cli [--console <url>] [--install-dir <directory>]
@@ -157,6 +178,51 @@ async function main() {
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
   if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.17');
+
+  if (command === 'recover-installation-lock') {
+    if (hasOption('--workspace-root') || hasOption('--receipt-dir')) {
+      throw new Error('recovery workspace and receipt paths are signed plan fields and cannot be overridden');
+    }
+    if (context && context !== 'docker-desktop') {
+      throw new Error('installation-lock recovery Kubernetes context is signed as docker-desktop');
+    }
+    const result = await recoverInstallationLockFromPlan({
+      planPath: option('--plan', ''),
+      confirmation: option('--confirm', ''),
+    });
+    console.log(`[완료] installation-lock semantic reconstruction ${result.planDigest}`);
+    console.log(`Receipt UID/RV: ${result.recoveredUid}/${result.recoveredResourceVersion}`);
+    return;
+  }
+
+  if (command === 'quarantine-stale-installation-lock') {
+    if (hasOption('--workspace-root') || hasOption('--receipt-dir') || hasOption('--quarantine-dir')) {
+      throw new Error('stale quarantine paths are immutable intent fields and cannot be overridden');
+    }
+    const localState = await quarantineStaleInstallationLockFromIntent({
+      intentPath: option('--intent', ''),
+      confirmation: option('--confirm', ''),
+    });
+    console.log(`[완료] stale installation-lock quarantine ${localState.quarantine.operationId}`);
+    console.log(`Journal SHA256: ${localState.quarantine.journalSha256}`);
+    return;
+  }
+
+  if (command === 'prepare-installation-lock-recovery') {
+    const result = await prepareInstallationLockRecovery({
+      evidenceBundlePath: option('--evidence', ''),
+      approvalKeyPath: option('--approval-key', ''),
+      reasonFilePath: option('--reason-file', ''),
+      approvalId: option('--approval-id', ''),
+      approvedAt: option('--approved-at', ''),
+      expiresAt: option('--expires-at', ''),
+      outputDirectory: option('--output-dir', ''),
+      confirmation: option('--confirm', ''),
+    });
+    console.log(`[완료] signed installation-lock recovery plan ${result.planDigest}`);
+    console.log(`Preparation receipt SHA256: ${result.preparationReceiptSha256}`);
+    return;
+  }
 
   printOpenSphereBanner({ command });
 
