@@ -169,6 +169,9 @@ test('CODEOWNERS protects every Console source authority input', () => {
     '/scripts/resolve-console-source-lock.mjs',
     '/scripts/verify-console-source-checkout.mjs', '/test/console-source-lock.test.mjs',
   ]) {
-    assert.match(owners, new RegExp(`^${path.replaceAll('.', '[.]')} @opensphere-platform$`, 'mu'));
+    assert.match(
+      owners,
+      new RegExp(`^${path.replaceAll('.', '[.]')} @opensphere-platform @choimars$`, 'mu')
+    );
   }
 });
