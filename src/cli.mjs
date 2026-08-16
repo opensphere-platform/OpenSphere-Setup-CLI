@@ -314,7 +314,7 @@ async function main() {
       } else {
         progress.done('신규 설치 상태');
         progress.step(
-          '릴리스 anchor 및 13개 이미지 공급망 검증',
+          '릴리스 anchor·13개 component·독립 CLI artifact 공급망 검증',
           `channel=${channel}`
         );
         lock = await resolveChannel(channel, {

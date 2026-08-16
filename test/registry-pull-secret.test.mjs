@@ -32,4 +32,8 @@ test('release credential requirement is derived from component evidence', () => 
     console: { registryCredentialsRequired: false },
     control: { registryCredentialsRequired: true }
   } }), true);
+  assert.equal(releaseNeedsRegistryCredentials({
+    components: { console: { registryCredentialsRequired: false } },
+    auxiliaryArtifacts: { cliArtifacts: { registryCredentialsRequired: true } }
+  }), true);
 });

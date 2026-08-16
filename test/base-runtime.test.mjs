@@ -14,7 +14,7 @@ import {
   SUPABASE_MANIFEST,
   verifySupabaseMigrationArtifact,
 } from '../src/bootstrap.mjs';
-import { COMPONENTS } from '../src/release.mjs';
+import { AUXILIARY_ARTIFACTS, COMPONENTS } from '../src/release.mjs';
 import { DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB } from '../src/doctor.mjs';
 
 const CONSOLE_SOURCE = process.env.OPENSPHERE_CONSOLE_SOURCE
@@ -30,7 +30,12 @@ function localReleaseLock() {
       }
     ]
   ));
-  return { sourceRevision: '1'.repeat(40), components };
+  const auxiliaryArtifacts = {
+    cliArtifacts: {
+      image: `ghcr.io/opensphere-platform/${AUXILIARY_ARTIFACTS.cliArtifacts}@sha256:${'f'.repeat(64)}`
+    }
+  };
+  return { sourceRevision: '1'.repeat(40), components, auxiliaryArtifacts };
 }
 
 test('fresh bootstrap is Supabase Data & Identity plus separate Gitea change authority', () => {
@@ -120,6 +125,7 @@ test('base Main Shell includes Backend, DUPA, notification, OAA, governed adapte
   const paths = BASE_MANIFESTS.map(({ path }) => path);
   for (const path of [
     'backend/opensphere-console-backend/deploy.yaml',
+    'backend/os-cli/deploy.yaml',
     'backend/dupa-control/opensphere-console-dupa-controller.yaml',
     'backend/notification-dispatcher/deploy.yaml',
     'backend/recovery/recovery-jobs.yaml',
@@ -133,7 +139,7 @@ test('base Main Shell includes Backend, DUPA, notification, OAA, governed adapte
   assert.equal(paths.some((path) => /kanidm|backbone/.test(path)), false);
 });
 
-test('rollout order establishes Supabase and Gitea before OAA and Main Shell', () => {
+test('rollout order establishes Supabase, Gitea and the CLI artifact before Main Shell', () => {
   const index = (namespace, resource) =>
     CORE_ROLLOUTS.findIndex(([candidateNamespace, candidateResource]) =>
       candidateNamespace === namespace && candidateResource === resource);
@@ -142,14 +148,28 @@ test('rollout order establishes Supabase and Gitea before OAA and Main Shell', (
   const backend = index('opensphere-console', 'deployment/opensphere-console-backend');
   const foundationBootstrap = index('opensphere-console', 'deployment/foundation-bootstrap-reconciler');
   const oaa = index('opensphere-console', 'deployment/opensphere-console-oaa-gateway');
+  const cliArtifact = index('opensphere-console', 'deployment/os-cli');
   const shell = index('opensphere-console', 'deployment/opensphere-console');
-  assert.ok(supabase >= 0 && gitea >= 0 && backend >= 0 && foundationBootstrap >= 0 && oaa >= 0 && shell >= 0);
+  assert.ok(supabase >= 0 && gitea >= 0 && backend >= 0 && foundationBootstrap >= 0
+    && oaa >= 0 && cliArtifact >= 0 && shell >= 0);
   assert.ok(supabase < backend);
   assert.ok(gitea < backend);
   assert.ok(backend < foundationBootstrap);
   assert.ok(foundationBootstrap < oaa);
   assert.ok(backend < oaa);
+  assert.ok(cliArtifact < shell);
   assert.ok(oaa < shell);
+});
+
+test('fresh install downloads os only after the lock-bound CLI artifact and Console are Ready', () => {
+  const cli = readFileSync(new URL('../src/cli.mjs', import.meta.url), 'utf8');
+  const bootstrapCall = cli.indexOf('const bootstrapResult = await bootstrap(lock');
+  const cliInstall = cli.indexOf('const installedCli = await installConsoleCliFromCluster', bootstrapCall);
+  assert.ok(bootstrapCall >= 0 && cliInstall > bootstrapCall);
+  const bootstrap = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
+  const waitCall = bootstrap.indexOf('waitForCoreRollouts(lock, progress)');
+  const verifyCall = bootstrap.indexOf('const evidence = await verifyInstallation(lock', waitCall);
+  assert.ok(waitCall >= 0 && verifyCall > waitCall);
 });
 
 test('every release base workload references the Setup-managed GHCR pull Secret', () => {
@@ -157,6 +177,7 @@ test('every release base workload references the Setup-managed GHCR pull Secret'
     'backend/supabase/bootstrap/supabase.yaml',
     'backend/gitea/bootstrap/gitea.yaml',
     'backend/opensphere-console-backend/deploy.yaml',
+    'backend/os-cli/deploy.yaml',
     'backend/dupa-control/opensphere-console-dupa-controller.yaml',
     'backend/notification-dispatcher/deploy.yaml',
     'backend/recovery/recovery-jobs.yaml',
@@ -214,6 +235,24 @@ test('every canonical Console manifest renders with only governed immutable imag
       );
     }
   }
+});
+
+test('custom Console endpoint rewrites every canonical public-origin authority', () => {
+  const lock = localReleaseLock();
+  const spec = BASE_MANIFESTS.find(({ path }) => path === 'backend/opensphere-console-backend/deploy.yaml');
+  assert.ok(spec, 'Console backend manifest must remain a governed base manifest');
+  const source = readFileSync(new URL(spec.path, CONSOLE_SOURCE), 'utf8');
+  const rendered = renderManifest(
+    lock,
+    spec,
+    source,
+    'hostpath',
+    'https://localhost:18090',
+    'development'
+  );
+  assert.doesNotMatch(rendered, /https:\/\/localhost:1114/);
+  assert.match(rendered, /name: SUPABASE_AUTH_ISSUER, value: "https:\/\/localhost:18090\/auth\/v1"/);
+  assert.match(rendered, /name: CONSOLE_PUBLIC_URL, value: "https:\/\/localhost:18090"/);
 });
 
 test('selected StorageClass is rendered into every Supabase PVC', () => {

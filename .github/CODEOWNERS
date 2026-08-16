@@ -1,0 +1,6 @@
+/.github/CODEOWNERS @opensphere-platform @choimars
+/.github/workflows/ @opensphere-platform @choimars
+/console-source.lock.json @opensphere-platform @choimars
+/scripts/resolve-console-source-lock.mjs @opensphere-platform @choimars
+/scripts/verify-console-source-checkout.mjs @opensphere-platform @choimars
+/test/console-source-lock.test.mjs @opensphere-platform @choimars

@@ -84,6 +84,14 @@ export const COMPONENTS = Object.freeze({
   recovery: 'opensphere-console-recovery'
 });
 
+// Runtime-distributed artifacts are independently published and deployed but
+// are not part of the canonical 13-component Platform Release lifecycle. They
+// remain digest-pinned in the installation lock so a mutable auxiliary tag can
+// never decide which executable a fresh cluster serves.
+export const AUXILIARY_ARTIFACTS = Object.freeze({
+  cliArtifacts: 'opensphere-os-cli'
+});
+
 // Per CONSTITUTION-0004 v1.3.0, OAA Core is Main Shell native required
 // runtime, not an optional AI subShell staging package. It is part of the
 // base Console runtime lifecycle (clean bootstrap, upgrade, rollback,
@@ -364,7 +372,8 @@ export function calculateReleaseDigest(
     ...(releaseBom ? { releaseBom } : {}),
     ...(contract?.releaseScope ? { releaseScope: contract.releaseScope } : {}),
     ...(contract?.baseReleaseDigest ? { baseReleaseDigest: contract.baseReleaseDigest } : {}),
-    ...(contract?.changedComponents ? { changedComponents: contract.changedComponents } : {})
+    ...(contract?.changedComponents ? { changedComponents: contract.changedComponents } : {}),
+    ...(contract?.auxiliaryArtifacts ? { auxiliaryArtifacts: contract.auxiliaryArtifacts } : {})
   });
   return `sha256:${createHash('sha256').update(payload).digest('hex')}`;
 }
@@ -666,7 +675,11 @@ async function verifyLocalEdgeLock(lock, {
   if (canonicalTrust(validated.trust) !== LOCAL_EDGE_TRUST || validated.channel !== 'edge') {
     throw new Error('Only a localhost edge lock may use local image verification');
   }
-  const metadata = await Promise.all(Object.entries(validated.components).map(async ([name, component]) => {
+  const releaseEntries = [
+    ...Object.entries(validated.components),
+    ...Object.entries(validated.auxiliaryArtifacts ?? {})
+  ];
+  const metadata = await Promise.all(releaseEntries.map(async ([name, component]) => {
     report(onProgress, { type: 'local-component-start', component: name, image: component.image });
     const inspected = await inspectImageFn(component.repository, component.image, {
       registryCredentials,
@@ -894,6 +907,37 @@ export function validateLock(lock, { allowLegacyComponentSet = false } = {}) {
       throw new Error(`Component ${name} registry credential requirement is invalid`);
     }
   }
+  if (lock.auxiliaryArtifacts !== undefined) {
+    if (trust !== LOCAL_EDGE_TRUST || lock.channel !== 'edge') {
+      throw new Error('Auxiliary runtime artifacts currently require localhost edge trust');
+    }
+    const names = Object.keys(lock.auxiliaryArtifacts);
+    const expectedAuxiliaryNames = Object.keys(AUXILIARY_ARTIFACTS);
+    if (JSON.stringify(names) !== JSON.stringify(expectedAuxiliaryNames)) {
+      throw new Error('Release lock auxiliary artifact set is not canonical');
+    }
+    for (const name of expectedAuxiliaryNames) {
+      const repository = AUXILIARY_ARTIFACTS[name];
+      const artifact = lock.auxiliaryArtifacts[name];
+      if (artifact?.repository !== repository) {
+        throw new Error(`Auxiliary artifact ${name} repository is not canonical`);
+      }
+      if (!new RegExp(`^${REGISTRY}/${OWNER}/${repository}@sha256:[a-f0-9]{64}$`).test(artifact?.image ?? '')) {
+        throw new Error(`Auxiliary artifact ${name} is not digest-pinned`);
+      }
+      if (!/^[a-f0-9]{40}$/.test(artifact?.sourceRevision ?? '')) {
+        throw new Error(`Auxiliary artifact ${name} source revision is invalid`);
+      }
+      if (releaseScope === RELEASE_SCOPE_INTEGRATED
+          && artifact.sourceRevision !== lock.sourceRevision) {
+        throw new Error(`Auxiliary artifact ${name} source revision differs from the release`);
+      }
+      if (artifact.registryCredentialsRequired !== undefined
+          && typeof artifact.registryCredentialsRequired !== 'boolean') {
+        throw new Error(`Auxiliary artifact ${name} registry credential requirement is invalid`);
+      }
+    }
+  }
   if (trust === LOCAL_EDGE_TRUST && lock.releaseBom !== undefined) {
     throw new Error('Local edge release locks cannot claim a signed Release BOM');
   }
@@ -906,9 +950,10 @@ export function validateLock(lock, { allowLegacyComponentSet = false } = {}) {
               baseReleaseDigest: lock.baseReleaseDigest,
               changedComponents: lock.changedComponents
             }
-          : {})
+          : {}),
+        ...(lock.auxiliaryArtifacts ? { auxiliaryArtifacts: lock.auxiliaryArtifacts } : {})
       }
-    : undefined;
+    : (lock.auxiliaryArtifacts ? { auxiliaryArtifacts: lock.auxiliaryArtifacts } : undefined);
   const expectedDigest = calculateReleaseDigest(
     lock.channel,
     lock.components,
@@ -944,6 +989,9 @@ export function validateReleaseTransition(baseLock, targetLock) {
   }
   if (canonicalTrust(target.trust) !== canonicalTrust(base.trust)) {
     throw new Error('Component release lock trust root differs from its base release');
+  }
+  if (!sameComponent(base.auxiliaryArtifacts, target.auxiliaryArtifacts)) {
+    throw new Error('Component release cannot change auxiliary runtime artifacts');
   }
   const baseNames = Object.keys(base.components ?? {}).sort();
   const targetNames = Object.keys(target.components ?? {}).sort();
@@ -1006,7 +1054,29 @@ async function resolveLocalEdgeRelease(reference, anchor, {
     return [name, releaseComponent(repository, inspected)];
   }));
   const components = Object.fromEntries(resolved);
-  const releaseDigest = calculateReleaseDigest('edge', components, LOCAL_EDGE_TRUST);
+  const auxiliaryResolved = await Promise.all(Object.entries(AUXILIARY_ARTIFACTS).map(async ([name, repository]) => {
+    report(onProgress, {
+      type: 'local-auxiliary-start',
+      component: name,
+      repository,
+      reference: anchorMetadata.immutableTag
+    });
+    const inspected = await resolveImageFn(repository, anchorMetadata.immutableTag, {
+      registryCredentials,
+      requiredPlatforms: targetPlatforms
+    });
+    assertLocalEdgeImage(inspected, {
+      repository,
+      sourceRevision: anchorMetadata.sourceRevision,
+      releaseTag: anchorMetadata.releaseTag
+    });
+    report(onProgress, { type: 'local-auxiliary-complete', component: name, image: inspected.image });
+    return [name, releaseComponent(repository, inspected)];
+  }));
+  const auxiliaryArtifacts = Object.fromEntries(auxiliaryResolved);
+  const releaseDigest = calculateReleaseDigest('edge', components, LOCAL_EDGE_TRUST, undefined, {
+    auxiliaryArtifacts
+  });
   return validateLock({
     apiVersion: RELEASE_API_VERSION,
     kind: 'OpenSphereReleaseLock',
@@ -1016,6 +1086,7 @@ async function resolveLocalEdgeRelease(reference, anchor, {
     source: SOURCE,
     sourceRevision: anchorMetadata.sourceRevision,
     trust: LOCAL_EDGE_TRUST,
+    auxiliaryArtifacts,
     components
   });
 }
