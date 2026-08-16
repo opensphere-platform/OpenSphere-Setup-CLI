@@ -177,6 +177,9 @@ jobs:
         run: bash scripts/collect-audit-evidence.sh kind-opensphere-e2e "$RUNNER_TEMP/audit-evidence"
       - name: Upload redacted audit evidence
         if: always()
+        # Diagnostic retention must not override the substantive install,
+        # identity and CLI verification result when account storage is full.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: audit-evidence-supabase-${{ github.run_id }}

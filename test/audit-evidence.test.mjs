@@ -8,7 +8,7 @@ const collector = readFileSync(new URL('../scripts/collect-audit-evidence.sh', i
 test('clean-cluster CI preserves redacted, post-run audit evidence for one review window', () => {
   assert.match(workflow, /Collect redacted audit evidence[\s\S]*?if: always\(\)/);
   assert.match(workflow, /name: audit-evidence-supabase/);
-  assert.match(workflow, /actions\/upload-artifact@v4/);
+  assert.match(workflow, /Upload redacted audit evidence[\s\S]*?continue-on-error: true[\s\S]*?actions\/upload-artifact@v4/);
   assert.match(workflow, /retention-days: 7/);
   assert.doesNotMatch(workflow, /retention-days: (?:[89]\d|\d{3,})/);
 });
