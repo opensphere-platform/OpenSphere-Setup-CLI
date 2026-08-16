@@ -177,9 +177,14 @@ jobs:
         run: bash scripts/collect-audit-evidence.sh kind-opensphere-e2e "$RUNNER_TEMP/audit-evidence"
       - name: Upload redacted audit evidence
         if: always()
+        # Diagnostic retention must not override the substantive install,
+        # identity and CLI verification result when account storage is full.
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: audit-evidence-supabase-${{ github.run_id }}
           path: ${{ runner.temp }}/audit-evidence
           if-no-files-found: error
-          retention-days: 90
+          # PR evidence is short-lived diagnostic material. Keep one review
+          # window without exhausting the GitHub Free 500 MB storage pool.
+          retention-days: 7
