@@ -623,6 +623,7 @@ export function renderManifest(
   yaml = yaml.replaceAll('__OPENSPHERE_CONSOLE_URL__', normalizedConsoleUrl);
   yaml = yaml.replaceAll('__OPENSPHERE_SUPABASE_NAMESPACE__', 'opensphere-console-data');
   yaml = yaml.replaceAll('https://localhost:8090', normalizedConsoleUrl);
+  yaml = yaml.replaceAll('https://localhost:1114', normalizedConsoleUrl);
   yaml = configureShellServiceEndpoint(yaml, normalizedConsoleUrl);
   yaml = yaml.replaceAll('__OPENSPHERE_RELEASE_REVISION__', sourceRevision);
   yaml = yaml.replaceAll(

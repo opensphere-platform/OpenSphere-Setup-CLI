@@ -237,6 +237,24 @@ test('every canonical Console manifest renders with only governed immutable imag
   }
 });
 
+test('custom Console endpoint rewrites every canonical public-origin authority', () => {
+  const lock = localReleaseLock();
+  const spec = BASE_MANIFESTS.find(({ path }) => path === 'backend/opensphere-console-backend/deploy.yaml');
+  assert.ok(spec, 'Console backend manifest must remain a governed base manifest');
+  const source = readFileSync(new URL(spec.path, CONSOLE_SOURCE), 'utf8');
+  const rendered = renderManifest(
+    lock,
+    spec,
+    source,
+    'hostpath',
+    'https://localhost:18090',
+    'development'
+  );
+  assert.doesNotMatch(rendered, /https:\/\/localhost:1114/);
+  assert.match(rendered, /name: SUPABASE_AUTH_ISSUER, value: "https:\/\/localhost:18090\/auth\/v1"/);
+  assert.match(rendered, /name: CONSOLE_PUBLIC_URL, value: "https:\/\/localhost:18090"/);
+});
+
 test('selected StorageClass is rendered into every Supabase PVC', () => {
   const lock = localReleaseLock();
   const source = readFileSync(new URL(SUPABASE_MANIFEST.path, CONSOLE_SOURCE), 'utf8');
