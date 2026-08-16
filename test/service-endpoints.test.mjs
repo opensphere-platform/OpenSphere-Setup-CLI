@@ -40,3 +40,23 @@ test('installation verification requires every Supabase/Gitea/Main Shell Service
     /has no ready EndpointSlice endpoint: opensphere-console-data\/opensphere-supabase-postgres/
   );
 });
+
+test('a lock-bound CLI artifact requires its independent Service endpoint', () => {
+  const { services, slices } = fixture();
+  assert.throws(
+    () => verifyRequiredServiceEndpoints(services, slices, { includeCliArtifacts: true }),
+    /Required Service is missing: opensphere-console\/os-cli/u
+  );
+  services.push({ metadata: { namespace: 'opensphere-console', name: 'os-cli' } });
+  slices.push({
+    metadata: {
+      namespace: 'opensphere-console',
+      labels: { 'kubernetes.io/service-name': 'os-cli' }
+    },
+    endpoints: [{ addresses: ['10.0.0.2'], conditions: { ready: true } }]
+  });
+  assert.equal(
+    verifyRequiredServiceEndpoints(services, slices, { includeCliArtifacts: true }).length,
+    required.length + 1
+  );
+});

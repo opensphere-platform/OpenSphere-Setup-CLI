@@ -83,6 +83,12 @@ export function reportReleaseProgress(progress, event) {
     case 'local-component-complete':
       progress.item('레지스트리', `${component} local edge 일치 (${imageDigest(event.image)})`);
       break;
+    case 'local-auxiliary-start':
+      progress.item('보조 artifact', `${component} local immutable tag·라벨 검사`);
+      break;
+    case 'local-auxiliary-complete':
+      progress.item('보조 artifact', `${component} local edge 일치 (${imageDigest(event.image)})`);
+      break;
     case 'component-start':
       progress.item('레지스트리', `${component} digest·source revision 검사`);
       break;

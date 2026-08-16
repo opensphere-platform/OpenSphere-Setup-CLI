@@ -9,7 +9,11 @@ import {
 test('artifact preflight materializes the complete release and always removes its temporary directory', async () => {
   const calls = [];
   const result = await preflightReleaseArtifacts(
-    { sourceRevision: 'a'.repeat(40), components: { recovery: {} } },
+    {
+      sourceRevision: 'a'.repeat(40),
+      components: { recovery: {} },
+      auxiliaryArtifacts: { cliArtifacts: { image: `ghcr.io/example@sha256:${'b'.repeat(64)}` } }
+    },
     {
       storageClass: 'hostpath',
       consoleUrl: 'https://localhost:8090',
@@ -53,6 +57,14 @@ test('bootstrap delegates channel-specific trust to release verification instead
   assert.match(bootstrapBody, /await verifyReleaseLock\(lock,/);
   assert.match(bootstrapBody, /requiredPlatforms,/);
   assert.doesNotMatch(bootstrapBody, /assertSignedReleaseBom/);
+});
+
+test('fresh bootstrap refuses a release lock that omits the independent CLI artifact', async () => {
+  const source = await readFile(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
+  const bootstrapStart = source.indexOf('export async function bootstrap');
+  const namespaceMutation = source.indexOf('ensureNamespace(namespace)', bootstrapStart);
+  const auxiliaryGate = source.indexOf("if (!installed && !lock.auxiliaryArtifacts?.cliArtifacts)", bootstrapStart);
+  assert.ok(auxiliaryGate > bootstrapStart && auxiliaryGate < namespaceMutation);
 });
 
 test('doctor invokes the same complete artifact preflight before reporting success', async () => {

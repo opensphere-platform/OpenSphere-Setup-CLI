@@ -158,6 +158,14 @@ export const BASE_MANIFESTS = Object.freeze([
   { path: 'backend/dupa-control/dupa-trusted-keys.yaml' },
   { path: 'backend/dupa-control/clidownload-rbac.yaml' },
   {
+    path: 'backend/os-cli/deploy.yaml',
+    requiresAuxiliaryArtifact: 'cliArtifacts',
+    auxiliaryReplacements: [[
+      '__OPENSPHERE_OS_CLI_IMAGE__',
+      'cliArtifacts'
+    ]]
+  },
+  {
     path: 'backend/dupa-control/opensphere-console-dupa-controller.yaml',
     replacements: [[
       '(?:ghcr\\.io/opensphere-platform/)?opensphere-console-(?:dupa-controller|dupa)(?:@sha256:[A-Za-z0-9_]+|:[A-Za-z0-9][A-Za-z0-9._-]*)',
@@ -304,9 +312,11 @@ function foundationArtifactPaths(lock) {
 }
 
 function baseManifestSpecs(lock) {
-  return isPreRecoveryRelease(lock)
+  const specs = isPreRecoveryRelease(lock)
     ? BASE_MANIFESTS.filter(({ path }) => !LEGACY_RECOVERY_MANIFESTS.has(path))
     : BASE_MANIFESTS;
+  return specs.filter(({ requiresAuxiliaryArtifact }) =>
+    !requiresAuxiliaryArtifact || Boolean(lock.auxiliaryArtifacts?.[requiresAuxiliaryArtifact]));
 }
 
 function manifestSpecComponents(spec) {
@@ -369,6 +379,7 @@ export const CORE_ROLLOUTS = Object.freeze([
   ['opensphere-console', 'deployment/opensphere-external-channel-executor', '600s'],
   ['opensphere-console', 'deployment/opensphere-console-oaa-gateway', '600s'],
   ['opensphere-console', 'deployment/oaa-governed-adapter', '600s'],
+  ['opensphere-console', 'deployment/os-cli', '600s'],
   ['opensphere-console', 'deployment/opensphere-console', '600s']
 ]);
 
@@ -594,6 +605,15 @@ export function renderManifest(
     const expression = new RegExp(pattern, 'g');
     if (!expression.test(yaml)) {
       throw new Error(`Manifest ${spec.path} no longer exposes the governed ${component} image slot`);
+    }
+    yaml = yaml.replace(new RegExp(pattern, 'g'), image);
+  }
+  for (const [pattern, artifact] of spec.auxiliaryReplacements ?? []) {
+    const image = lock.auxiliaryArtifacts?.[artifact]?.image;
+    if (!image) throw new Error(`Release lock lacks auxiliary artifact ${artifact}`);
+    const expression = new RegExp(pattern, 'g');
+    if (!expression.test(yaml)) {
+      throw new Error(`Manifest ${spec.path} no longer exposes the governed ${artifact} artifact slot`);
     }
     yaml = yaml.replace(new RegExp(pattern, 'g'), image);
   }
@@ -1040,8 +1060,11 @@ function waitForRollouts(rollouts, progress) {
   }
 }
 
-function waitForCoreRollouts(progress) {
-  waitForRollouts(CORE_ROLLOUTS, progress);
+function waitForCoreRollouts(lock, progress) {
+  const rollouts = lock?.auxiliaryArtifacts?.cliArtifacts
+    ? CORE_ROLLOUTS
+    : CORE_ROLLOUTS.filter(([, resource]) => resource !== 'deployment/os-cli');
+  waitForRollouts(rollouts, progress);
 }
 
 export function waitForComponentRollouts(changedComponents, progress) {
@@ -1410,6 +1433,9 @@ export async function bootstrap(lock, {
   );
   const installed = readInstallationLock();
   const existingNamespaces = existingOpenSphereNamespaces();
+  if (!installed && !lock.auxiliaryArtifacts?.cliArtifacts) {
+    throw new Error('Fresh installation release lock lacks the digest-bound Console CLI artifact');
+  }
   if (installed && installed.releaseDigest !== lock.releaseDigest) {
     throw new Error(`Existing installation is locked to ${installed.releaseDigest}; upgrade is a separate transaction`);
   }
@@ -1583,8 +1609,8 @@ export async function bootstrap(lock, {
     );
     recordInitialAdmin(initialAdmin, 'required');
     progress?.done('Kubernetes API 적용 완료');
-    progress?.step('Supabase·Gitea·OAA·Main Shell rollout 대기');
-    waitForCoreRollouts(progress);
+    progress?.step('Supabase·Gitea·OAA·CLI artifact·Main Shell rollout 대기');
+    waitForCoreRollouts(lock, progress);
     progress?.done('핵심 workload Ready');
 
     progress?.step('Pod·Service·runtime image·초기 관리자 상태 최종 검증');
@@ -1758,7 +1784,7 @@ export async function upgrade(
         config.shellTlsSecret
       );
       if (componentTransition) operations.waitForComponentRollouts(changedComponents);
-      else operations.waitForCoreRollouts();
+      else operations.waitForCoreRollouts(targetLock);
       const evidence = await operations.verifyInstallation(targetLock, {
         consoleUrl: effectiveConsoleUrl,
         requireZeroRestarts: false,
@@ -1802,7 +1828,7 @@ export async function upgrade(
           config.shellTlsSecret
         );
         if (componentTransition) operations.waitForComponentRollouts(changedComponents);
-        else operations.waitForCoreRollouts();
+        else operations.waitForCoreRollouts(previousLock);
         await operations.verifyInstallation(previousLock, {
           consoleUrl: effectiveConsoleUrl,
           requireZeroRestarts: false,
