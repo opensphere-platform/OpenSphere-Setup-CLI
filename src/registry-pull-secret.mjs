@@ -3,7 +3,10 @@ import { REGISTRY, normalizeRegistryCredentials } from './release.mjs';
 export const REGISTRY_PULL_SECRET = 'opensphere-ghcr-pull';
 
 export function releaseNeedsRegistryCredentials(lock) {
-  return Object.values(lock?.components ?? {})
+  return [
+    ...Object.values(lock?.components ?? {}),
+    ...Object.values(lock?.auxiliaryArtifacts ?? {})
+  ]
     .some((component) => component?.registryCredentialsRequired === true);
 }
 

@@ -4,6 +4,7 @@ import {
   calculateReleaseDigest,
   calculateReleaseBomDigest,
   calculateLegacyReleaseDigest,
+  AUXILIARY_ARTIFACTS,
   BASE_RUNTIME_COMPONENTS,
   COMPONENTS,
   LEGACY_BASE_RUNTIME_COMPONENTS,
@@ -141,6 +142,7 @@ test('canonical baseline contains the complete Supabase/Gitea release repositori
     'opensphere-console-gitea-postgres',
     'opensphere-console-recovery'
   ]);
+  assert.deepEqual(AUXILIARY_ARTIFACTS, { cliArtifacts: 'opensphere-os-cli' });
 });
 
 test('base runtime requires OAA Core as native Main Shell runtime', () => {
@@ -745,15 +747,129 @@ test('localhost edge resolves one target platform through immutable local tags w
   assert.equal(resolved.trust, LOCAL_EDGE_TRUST);
   assert.equal(resolved.releaseBom, undefined);
   assert.equal(resolved.sourceRevision, REVISION);
+  assert.deepEqual(resolved.auxiliaryArtifacts.cliArtifacts, {
+    repository: 'opensphere-os-cli',
+    image: `ghcr.io/opensphere-platform/opensphere-os-cli@${DIGEST}`,
+    sourceRevision: REVISION,
+    registryCredentialsRequired: false
+  });
   assert.deepEqual(calls[0], {
     repository: COMPONENTS.console,
     reference: 'edge',
     platforms: ['linux/amd64']
   });
-  assert.equal(calls.length, Object.keys(COMPONENTS).length + 1);
+  assert.equal(calls.length, Object.keys(COMPONENTS).length + Object.keys(AUXILIARY_ARTIFACTS).length + 1);
   assert.equal(calls.slice(1).every(({ reference }) => reference === `local-${REVISION.slice(0, 12)}`), true);
   assert.equal(calls.every(({ platforms }) => platforms.length === 1 && platforms[0] === 'linux/amd64'), true);
   assert.doesNotThrow(() => validateLock(resolved));
+});
+
+test('localhost edge rejects an auxiliary CLI artifact from another source revision', async () => {
+  const labels = {
+    'io.opensphere.channel': 'edge',
+    'io.opensphere.release-tag': '202607241141',
+    'io.opensphere.source-revision': REVISION,
+    'opensphere.io/build-authority': 'localhost',
+    'opensphere.io/release-class': 'pre-ga',
+    'opensphere.io/ga-eligible': 'false'
+  };
+  await assert.rejects(resolveChannel('edge', {
+    requiredPlatforms: ['linux/amd64'],
+    async resolveImageFn(repository) {
+      const sourceRevision = repository === AUXILIARY_ARTIFACTS.cliArtifacts
+        ? '2'.repeat(40)
+        : REVISION;
+      return {
+        image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
+        sourceRevision,
+        labels: {
+          ...labels,
+          'io.opensphere.source-revision': sourceRevision
+        },
+        registryCredentialsRequired: false
+      };
+    }
+  }), /opensphere-os-cli source revision differs from the Console anchor/u);
+});
+
+test('auxiliary CLI artifact is digest-bound and cannot be added outside localhost edge trust', () => {
+  const lock = validLock();
+  lock.auxiliaryArtifacts = {
+    cliArtifacts: {
+      repository: AUXILIARY_ARTIFACTS.cliArtifacts,
+      image: `ghcr.io/opensphere-platform/opensphere-os-cli@${DIGEST}`,
+      sourceRevision: REVISION
+    }
+  };
+  lock.releaseDigest = calculateReleaseDigest(
+    lock.channel,
+    lock.components,
+    lock.trust,
+    undefined,
+    { auxiliaryArtifacts: lock.auxiliaryArtifacts }
+  );
+  assert.throws(() => validateLock(lock), /require localhost edge trust/u);
+
+  lock.trust = LOCAL_EDGE_TRUST;
+  lock.releaseDigest = calculateReleaseDigest(
+    lock.channel,
+    lock.components,
+    lock.trust,
+    undefined,
+    { auxiliaryArtifacts: lock.auxiliaryArtifacts }
+  );
+  assert.equal(validateLock(lock), lock);
+  lock.auxiliaryArtifacts.cliArtifacts.image = 'ghcr.io/opensphere-platform/opensphere-os-cli:edge';
+  assert.throws(() => validateLock(lock), /not digest-pinned/u);
+});
+
+test('component release preserves the independently versioned CLI artifact byte-for-byte', () => {
+  const { base, target } = validComponentTransition(['backend']);
+  base.auxiliaryArtifacts = {
+    cliArtifacts: {
+      repository: AUXILIARY_ARTIFACTS.cliArtifacts,
+      image: `ghcr.io/opensphere-platform/opensphere-os-cli@${DIGEST}`,
+      sourceRevision: REVISION,
+      registryCredentialsRequired: false
+    }
+  };
+  base.releaseDigest = calculateReleaseDigest(
+    base.channel,
+    base.components,
+    base.trust,
+    undefined,
+    { auxiliaryArtifacts: base.auxiliaryArtifacts }
+  );
+  target.baseReleaseDigest = base.releaseDigest;
+  target.auxiliaryArtifacts = structuredClone(base.auxiliaryArtifacts);
+  target.releaseDigest = calculateReleaseDigest(
+    target.channel,
+    target.components,
+    target.trust,
+    undefined,
+    {
+      releaseScope: target.releaseScope,
+      baseReleaseDigest: target.baseReleaseDigest,
+      changedComponents: target.changedComponents,
+      auxiliaryArtifacts: target.auxiliaryArtifacts
+    }
+  );
+  assert.equal(validateReleaseTransition(base, target), target);
+  target.auxiliaryArtifacts.cliArtifacts.image =
+    `ghcr.io/opensphere-platform/opensphere-os-cli@sha256:${'d'.repeat(64)}`;
+  target.releaseDigest = calculateReleaseDigest(
+    target.channel,
+    target.components,
+    target.trust,
+    undefined,
+    {
+      releaseScope: target.releaseScope,
+      baseReleaseDigest: target.baseReleaseDigest,
+      changedComponents: target.changedComponents,
+      auxiliaryArtifacts: target.auxiliaryArtifacts
+    }
+  );
+  assert.throws(() => validateReleaseTransition(base, target), /cannot change auxiliary runtime artifacts/u);
 });
 
 test('localhost edge fails closed when any image lacks its development trust labels', async () => {

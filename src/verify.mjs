@@ -65,6 +65,9 @@ const REQUIRED_SERVICES = Object.freeze([
   ['opensphere-console', 'oaa-governed-adapter'],
   ['opensphere-console', 'opensphere-console-ext']
 ]);
+const AUXILIARY_SERVICES = Object.freeze([
+  ['opensphere-console', 'os-cli']
+]);
 
 const WORKLOADS = Object.freeze([
   { component: 'supabasePostgres', namespace: 'opensphere-console-data', kind: 'statefulset', name: 'opensphere-supabase-postgres', container: 'postgres' },
@@ -81,6 +84,7 @@ const WORKLOADS = Object.freeze([
   { component: 'notificationDispatcher', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-external-channel-executor', container: 'executor' },
   { component: 'oaaGateway', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-oaa-gateway', container: 'gateway' },
   { component: 'oaaGovernedAdapter', namespace: 'opensphere-console', kind: 'deployment', name: 'oaa-governed-adapter', container: 'reconciler' },
+  { artifact: 'cliArtifacts', namespace: 'opensphere-console', kind: 'deployment', name: 'os-cli', container: 'serve' },
   { component: 'console', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console', container: 'shell' }
 ]);
 
@@ -178,13 +182,16 @@ function verifyPersistentStorage(expectedStorageClass) {
   return REQUIRED_PVCS.length;
 }
 
-export function verifyRequiredServiceEndpoints(services, endpointSlices) {
+export function verifyRequiredServiceEndpoints(services, endpointSlices, { includeCliArtifacts = false } = {}) {
   const serviceByReference = new Map(services.map((service) => [
     `${service.metadata.namespace}/${service.metadata.name}`,
     service
   ]));
   const evidence = [];
-  for (const [namespace, name] of REQUIRED_SERVICES) {
+  const required = includeCliArtifacts
+    ? [...REQUIRED_SERVICES, ...AUXILIARY_SERVICES]
+    : REQUIRED_SERVICES;
+  for (const [namespace, name] of required) {
     const reference = `${namespace}/${name}`;
     if (!serviceByReference.has(reference)) throw new Error(`Required Service is missing: ${reference}`);
     const slices = endpointSlices.filter((slice) =>
@@ -199,10 +206,12 @@ export function verifyRequiredServiceEndpoints(services, endpointSlices) {
   return evidence;
 }
 
-function verifyServiceEndpoints() {
+function verifyServiceEndpoints(lock) {
   const services = getJson(['get', 'services', '-A']).items ?? [];
   const endpointSlices = getJson(['get', 'endpointslices.discovery.k8s.io', '-A']).items ?? [];
-  return verifyRequiredServiceEndpoints(services, endpointSlices);
+  return verifyRequiredServiceEndpoints(services, endpointSlices, {
+    includeCliArtifacts: Boolean(lock.auxiliaryArtifacts?.cliArtifacts)
+  });
 }
 
 export function isRuntimeServicePod(pod) {
@@ -223,13 +232,16 @@ function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null 
   const resources = [];
   const selectedWorkloads = [];
   for (const spec of WORKLOADS) {
+    if (spec.artifact && !lock.auxiliaryArtifacts?.[spec.artifact]) continue;
     const resource = getJson(['-n', spec.namespace, 'get', spec.kind, spec.name]);
     const podSpec = spec.kind === 'cronjob'
       ? resource.spec?.jobTemplate?.spec?.template?.spec
       : resource.spec?.template?.spec;
     const container = (podSpec?.containers ?? []).find(({ name }) => name === spec.container);
     if (!container) throw new Error(`Workload container is missing: ${spec.namespace}/${spec.name}/${spec.container}`);
-    const expectedImage = lock.components?.[spec.component]?.image;
+    const expectedImage = spec.artifact
+      ? lock.auxiliaryArtifacts?.[spec.artifact]?.image
+      : lock.components?.[spec.component]?.image;
     if (!expectedImage || container.image !== expectedImage) {
       throw new Error(`Runtime image differs from release lock: ${spec.namespace}/${spec.name} (${container.image} != ${expectedImage})`);
     }
@@ -246,7 +258,10 @@ function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null 
       selectedWorkloads.push({ spec, resource, expectedImage });
     }
   }
-  const lockedImages = new Set(Object.values(lock.components).map(({ image }) => image));
+  const lockedImages = new Set([
+    ...Object.values(lock.components).map(({ image }) => image),
+    ...Object.values(lock.auxiliaryArtifacts ?? {}).map(({ image }) => image)
+  ]);
   const missing = [...lockedImages].filter((image) => !expected.has(image));
   if (missing.length) throw new Error(`Release components are not represented by base workloads: ${missing.join(', ')}`);
 
@@ -544,7 +559,7 @@ export async function verifyInstallation(lock, {
   const secretCount = verifySecrets();
   const registryPull = verifyRegistryPullPath(lock);
   const pvcCount = verifyPersistentStorage(config.storageClass);
-  const serviceEndpoints = await eventuallyReady(async () => verifyServiceEndpoints());
+  const serviceEndpoints = await eventuallyReady(async () => verifyServiceEndpoints(lock));
   const runtime = await eventuallyReady(async () => verifyWorkloads(lock, {
     requireZeroRestarts,
     componentSelection
