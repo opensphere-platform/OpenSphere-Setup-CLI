@@ -13,8 +13,8 @@ const required = [
   ['opensphere-console', 'opensphere-console-dupa-controller'],
   ['opensphere-console', 'opensphere-notification-dispatcher'],
   ['opensphere-console', 'opensphere-external-channel-executor'],
-  ['opensphere-console', 'opensphere-console-oaa-gateway'],
-  ['opensphere-console', 'oaa-governed-adapter'],
+  ['opensphere-console', 'opensphere-console-osaa-gateway'],
+  ['opensphere-console', 'osaa-governed-adapter'],
   ['opensphere-console', 'opensphere-console-ext']
 ];
 

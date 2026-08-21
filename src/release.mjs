@@ -1,6 +1,13 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fetchWithRetry } from './http.mjs';
+import {
+  CANONICAL_AGENT_COMPONENTS,
+  canonicalNameForInstalledComponent,
+  installedNameForCanonicalComponent,
+  isAgentIdentityCutover,
+  legacyInstalledComponentMap
+} from './release-agent-identity-cutover.mjs';
 
 export const RELEASE_API_VERSION = 'release.opensphere.io/v1alpha1';
 export const RELEASE_BOM_PREDICATE = 'https://opensphere.io/attestations/release-bom/v1';
@@ -72,8 +79,8 @@ export const COMPONENTS = Object.freeze({
   console: 'opensphere-console',
   backend: 'opensphere-console-backend',
   dupaController: 'opensphere-console-dupa-controller',
-  oaaGateway: 'opensphere-console-oaa-gateway',
-  oaaGovernedAdapter: 'opensphere-oaa-governed-adapter',
+  osaaGateway: 'opensphere-console-osaa-gateway',
+  osaaGovernedAdapter: 'opensphere-osaa-governed-adapter',
   notificationDispatcher: 'opensphere-console-notification-dispatcher',
   gitea: 'opensphere-console-gitea',
   supabasePostgres: 'opensphere-console-supabase-postgres',
@@ -84,6 +91,8 @@ export const COMPONENTS = Object.freeze({
   recovery: 'opensphere-console-recovery'
 });
 
+const LEGACY_INSTALLED_COMPONENTS = legacyInstalledComponentMap(COMPONENTS);
+
 // Runtime-distributed artifacts are independently published and deployed but
 // are not part of the canonical 13-component Platform Release lifecycle. They
 // remain digest-pinned in the installation lock so a mutable auxiliary tag can
@@ -92,7 +101,7 @@ export const AUXILIARY_ARTIFACTS = Object.freeze({
   cliArtifacts: 'opensphere-os-cli'
 });
 
-// Per CONSTITUTION-0004 v1.3.0, OAA Core is Main Shell native required
+// Per CONSTITUTION-0004 v1.3.0, OSAA Core is Main Shell native required
 // runtime, not an optional AI subShell staging package. It is part of the
 // base Console runtime lifecycle (clean bootstrap, upgrade, rollback,
 // uninstall) alongside every other governed component.
@@ -100,8 +109,8 @@ export const BASE_RUNTIME_COMPONENTS = Object.freeze([
   'console',
   'backend',
   'dupaController',
-  'oaaGateway',
-  'oaaGovernedAdapter',
+  'osaaGateway',
+  'osaaGovernedAdapter',
   'notificationDispatcher',
   'gitea',
   'supabasePostgres',
@@ -474,6 +483,28 @@ function canonicalComponentNames(components, { allowLegacyComponentSet = false }
   ) ?? null;
 }
 
+function installedComponentProfile(components, {
+  allowLegacyComponentSet = false,
+  allowInstalledAgentIdentityCutover = false
+} = {}) {
+  const canonicalNames = canonicalComponentNames(components, { allowLegacyComponentSet });
+  if (canonicalNames) {
+    return { names: canonicalNames, repositories: COMPONENTS, agentIdentity: 'canonical' };
+  }
+  const names = Object.keys(components ?? {});
+  const legacyNames = Object.keys(LEGACY_INSTALLED_COMPONENTS);
+  if (allowInstalledAgentIdentityCutover
+      && names.length === legacyNames.length
+      && legacyNames.every((name) => names.includes(name))) {
+    return {
+      names: legacyNames,
+      repositories: LEGACY_INSTALLED_COMPONENTS,
+      agentIdentity: 'installed-pre-osaa'
+    };
+  }
+  return null;
+}
+
 export function validateReleaseBom(bom, {
   channel,
   subject,
@@ -669,9 +700,10 @@ async function verifyLocalEdgeLock(lock, {
   inspectImageFn = inspectImageReference,
   registryCredentials,
   requiredPlatforms = defaultEdgePlatforms(),
-  onProgress
+  onProgress,
+  allowInstalledAgentIdentityCutover = false
 } = {}) {
-  const validated = validateLock(lock);
+  const validated = validateLock(lock, { allowInstalledAgentIdentityCutover });
   if (canonicalTrust(validated.trust) !== LOCAL_EDGE_TRUST || validated.channel !== 'edge') {
     throw new Error('Only a localhost edge lock may use local image verification');
   }
@@ -714,9 +746,13 @@ export async function verifyReleaseProvenance(lock, {
   verifySbom = verifyImageSbom,
   registryCredentials,
   onProgress,
-  allowLegacyComponentSet = false
+  allowLegacyComponentSet = false,
+  allowInstalledAgentIdentityCutover = false
 } = {}) {
-  const validated = validateLock(lock, { allowLegacyComponentSet });
+  const validated = validateLock(lock, {
+    allowLegacyComponentSet,
+    allowInstalledAgentIdentityCutover
+  });
   if (canonicalTrust(validated.trust) !== RELEASE_TRUST) {
     throw new Error('Legacy attestation trust cannot satisfy the signed SBOM release gate');
   }
@@ -742,10 +778,14 @@ export async function verifyReleaseLock(lock, {
   requiredPlatforms,
   onProgress,
   allowLegacyComponentSet = false,
+  allowInstalledAgentIdentityCutover = false,
   allowLegacyReleaseArtifacts = false,
   allowRetiredEdgeRollback = false
 } = {}) {
-  const validated = validateLock(lock, { allowLegacyComponentSet });
+  const validated = validateLock(lock, {
+    allowLegacyComponentSet,
+    allowInstalledAgentIdentityCutover
+  });
   if (isRetiredEdgeAttestationLock(validated)) {
     if (!allowRetiredEdgeRollback) {
       throw new Error('Retired GitHub Actions edge trust is accepted only as an installed rollback baseline');
@@ -760,7 +800,8 @@ export async function verifyReleaseLock(lock, {
       inspectImageFn,
       registryCredentials,
       requiredPlatforms,
-      onProgress
+      onProgress,
+      allowInstalledAgentIdentityCutover
     });
   }
   const pointer = assertSignedReleaseBom(validated);
@@ -803,7 +844,8 @@ export async function verifyReleaseLock(lock, {
     verifySbom,
     registryCredentials,
     onProgress,
-    allowLegacyComponentSet
+    allowLegacyComponentSet,
+    allowInstalledAgentIdentityCutover
   });
 }
 
@@ -826,7 +868,10 @@ export function migrateLegacyReleaseLock(lock) {
   return validateLock(migrated);
 }
 
-export function validateLock(lock, { allowLegacyComponentSet = false } = {}) {
+export function validateLock(lock, {
+  allowLegacyComponentSet = false,
+  allowInstalledAgentIdentityCutover = false
+} = {}) {
   if (lock?.apiVersion !== RELEASE_API_VERSION || lock?.kind !== 'OpenSphereReleaseLock') {
     throw new Error('Invalid OpenSphere release lock');
   }
@@ -878,12 +923,16 @@ export function validateLock(lock, { allowLegacyComponentSet = false } = {}) {
       throw new Error('Component release locks cannot claim a signed Release BOM');
     }
   }
-  const expectedNames = canonicalComponentNames(lock.components, { allowLegacyComponentSet });
-  if (!expectedNames) {
+  const componentProfile = installedComponentProfile(lock.components, {
+    allowLegacyComponentSet,
+    allowInstalledAgentIdentityCutover
+  });
+  if (!componentProfile) {
     throw new Error('Release lock component set is not canonical');
   }
+  const { names: expectedNames, repositories } = componentProfile;
   for (const name of expectedNames) {
-    const repository = COMPONENTS[name];
+    const repository = repositories[name];
     const component = lock.components[name];
     const image = component?.image;
     if (component?.repository !== repository) {
@@ -976,7 +1025,10 @@ function sameComponent(left, right) {
 // every other digest and provenance field was inherited byte-for-byte from the
 // installed base lock. It is deliberately upgrade-only.
 export function validateReleaseTransition(baseLock, targetLock) {
-  const base = validateLock(baseLock, { allowLegacyComponentSet: true });
+  const base = validateLock(baseLock, {
+    allowLegacyComponentSet: true,
+    allowInstalledAgentIdentityCutover: true
+  });
   const target = validateLock(targetLock);
   if ((target.releaseScope ?? RELEASE_SCOPE_INTEGRATED) !== RELEASE_SCOPE_COMPONENT) {
     return target;
@@ -993,14 +1045,24 @@ export function validateReleaseTransition(baseLock, targetLock) {
   if (!sameComponent(base.auxiliaryArtifacts, target.auxiliaryArtifacts)) {
     throw new Error('Component release cannot change auxiliary runtime artifacts');
   }
-  const baseNames = Object.keys(base.components ?? {}).sort();
+  const cutover = isAgentIdentityCutover(base.components, target.components);
+  if (cutover) {
+    const required = Object.keys(CANONICAL_AGENT_COMPONENTS);
+    if (!required.every((name) => target.changedComponents.includes(name))) {
+      throw new Error('OSAA identity cutover must change both canonical agent components together');
+    }
+  }
+  const baseNames = Object.keys(base.components ?? {})
+    .map((name) => cutover ? canonicalNameForInstalledComponent(name) : name)
+    .sort();
   const targetNames = Object.keys(target.components ?? {}).sort();
   if (JSON.stringify(baseNames) !== JSON.stringify(targetNames)) {
     throw new Error('Component release lock cannot change the installed component set');
   }
   const changed = new Set(target.changedComponents);
   for (const name of targetNames) {
-    const differs = !sameComponent(base.components[name], target.components[name]);
+    const installedName = cutover ? installedNameForCanonicalComponent(name) : name;
+    const differs = !sameComponent(base.components[installedName], target.components[name]);
     if (changed.has(name) && !differs) {
       throw new Error(`Changed component ${name} is identical to the base release`);
     }

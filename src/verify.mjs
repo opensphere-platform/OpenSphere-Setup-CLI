@@ -14,14 +14,14 @@ const NAMESPACES = Object.freeze([
   'opensphere-console-change',
   'opensphere-console-recovery',
   'opensphere-console',
-  'opensphere-oaa-credentials',
+  'opensphere-osaa-credentials',
   'opensphere-foundation',
   'opensphere-system'
 ]);
 
 const REQUIRED_SECRETS = Object.freeze({
   'opensphere-console-data/opensphere-supabase-secrets': [
-    'postgres-password', 'backend-password', 'oaa-gateway-password',
+    'postgres-password', 'backend-password', 'osaa-gateway-password',
     'jwt-secret', 'anon-key', 'service-role-key'
   ],
   'opensphere-console-change/opensphere-gitea-runtime': ['postgres-password', 'db-password'],
@@ -29,7 +29,7 @@ const REQUIRED_SECRETS = Object.freeze({
   'opensphere-console-change/opensphere-gitea-signing': ['gitea-signing-key', 'gitea-signing-key.pub'],
   'opensphere-console/shell-tls': ['tls.crt', 'tls.key'],
   'opensphere-console/opensphere-supabase-runtime': ['jwt-secret', 'service-role-key'],
-  'opensphere-console/opensphere-oaa-runtime': [
+  'opensphere-console/opensphere-osaa-runtime': [
     'pg-password', 'observer-pg-user', 'observer-pg-password',
     'relay-pg-user', 'relay-pg-password',
     'maintenance-pg-user', 'maintenance-pg-password'
@@ -61,8 +61,8 @@ const REQUIRED_SERVICES = Object.freeze([
   ['opensphere-console', 'opensphere-console-dupa-controller'],
   ['opensphere-console', 'opensphere-notification-dispatcher'],
   ['opensphere-console', 'opensphere-external-channel-executor'],
-  ['opensphere-console', 'opensphere-console-oaa-gateway'],
-  ['opensphere-console', 'oaa-governed-adapter'],
+  ['opensphere-console', 'opensphere-console-osaa-gateway'],
+  ['opensphere-console', 'osaa-governed-adapter'],
   ['opensphere-console', 'opensphere-console-ext']
 ]);
 const AUXILIARY_SERVICES = Object.freeze([
@@ -82,8 +82,8 @@ const WORKLOADS = Object.freeze([
   { component: 'dupaController', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-dupa-controller', container: 'controller' },
   { component: 'notificationDispatcher', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-notification-dispatcher', container: 'dispatcher' },
   { component: 'notificationDispatcher', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-external-channel-executor', container: 'executor' },
-  { component: 'oaaGateway', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-oaa-gateway', container: 'gateway' },
-  { component: 'oaaGovernedAdapter', namespace: 'opensphere-console', kind: 'deployment', name: 'oaa-governed-adapter', container: 'reconciler' },
+  { component: 'osaaGateway', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-osaa-gateway', container: 'gateway' },
+  { component: 'osaaGovernedAdapter', namespace: 'opensphere-console', kind: 'deployment', name: 'osaa-governed-adapter', container: 'reconciler' },
   { artifact: 'cliArtifacts', namespace: 'opensphere-console', kind: 'deployment', name: 'os-cli', container: 'serve' },
   { component: 'console', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console', container: 'shell' }
 ]);
@@ -320,12 +320,12 @@ function postgresScalar(sql) {
 }
 
 function verifySupabaseDatabase() {
-  const schemas = postgresScalar("SELECT string_agg(schema_name, ',' ORDER BY schema_name) FROM information_schema.schemata WHERE schema_name IN ('auth','storage','console','audit','oaa');");
-  for (const name of ['auth', 'storage', 'console', 'audit', 'oaa']) {
+  const schemas = postgresScalar("SELECT string_agg(schema_name, ',' ORDER BY schema_name) FROM information_schema.schemata WHERE schema_name IN ('auth','storage','console','audit','osaa');");
+  for (const name of ['auth', 'storage', 'console', 'audit', 'osaa']) {
     if (!schemas.split(',').includes(name)) throw new Error(`Supabase schema is missing: ${name}`);
   }
-  const roles = postgresScalar("SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname IN ('authenticator','supabase_auth_admin','supabase_storage_admin','opensphere_console_backend','opensphere_oaa_gateway');");
-  for (const name of ['authenticator', 'supabase_auth_admin', 'supabase_storage_admin', 'opensphere_console_backend', 'opensphere_oaa_gateway']) {
+  const roles = postgresScalar("SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname IN ('authenticator','supabase_auth_admin','supabase_storage_admin','opensphere_console_backend','opensphere_osaa_gateway');");
+  for (const name of ['authenticator', 'supabase_auth_admin', 'supabase_storage_admin', 'opensphere_console_backend', 'opensphere_osaa_gateway']) {
     if (!roles.split(',').includes(name)) throw new Error(`Supabase runtime role is missing: ${name}`);
   }
   if (postgresScalar("SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='audit' AND c.relname='event';") !== '1') {

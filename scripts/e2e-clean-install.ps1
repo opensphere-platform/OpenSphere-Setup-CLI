@@ -20,7 +20,7 @@ $Namespaces = @(
   'opensphere-console-data',
   'opensphere-console-change',
   'opensphere-console',
-  'opensphere-oaa-credentials',
+  'opensphere-osaa-credentials',
   'opensphere-foundation',
   'opensphere-system'
 )
@@ -34,7 +34,7 @@ $ClusterRoles = @(
   'dupa-console-evidence-reader',
   'dupa-clidownload-reader',
   'opensphere-console-backend',
-  'opensphere-console-oaa-gateway-environment-reader',
+  'opensphere-console-osaa-gateway-environment-reader',
   'opensphere-module-cluster-observer-v1',
   'opensphere-module-cluster-his-manager-v1',
   'opensphere-module-cluster-infrastructure-manager-v1'
@@ -44,7 +44,7 @@ $ClusterRoleBindings = @(
   'dupa-console-evidence-reader',
   'dupa-clidownload-reader',
   'opensphere-console-backend',
-  'opensphere-console-oaa-gateway-environment-reader'
+  'opensphere-console-osaa-gateway-environment-reader'
 )
 $ManagedSecrets = @(
   'opensphere-console-data/opensphere-supabase-secrets',
@@ -53,7 +53,7 @@ $ManagedSecrets = @(
   'opensphere-console-change/opensphere-gitea-signing',
   'opensphere-console/shell-tls',
   'opensphere-console/opensphere-supabase-runtime',
-  'opensphere-console/opensphere-oaa-runtime',
+  'opensphere-console/opensphere-osaa-runtime',
   'opensphere-console/opensphere-gitea-control-plane',
   'opensphere-console/opensphere-console-cli-runtime',
   'opensphere-console/opensphere-notification-runtime',

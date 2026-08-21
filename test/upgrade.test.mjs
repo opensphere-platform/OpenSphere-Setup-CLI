@@ -22,6 +22,11 @@ import {
   releaseBomPointer,
   SOURCE
 } from '../src/release.mjs';
+import {
+  CANONICAL_AGENT_NAMESPACE,
+  LEGACY_INSTALLED_AGENT_COMPONENTS,
+  LEGACY_INSTALLED_AGENT_NAMESPACE
+} from '../src/release-agent-identity-cutover.mjs';
 
 const MIGRATION_MANIFEST = Object.freeze({
   path: 'backend/supabase/migrations/manifest.json',
@@ -114,7 +119,49 @@ function componentTarget(previous, revision, changedComponents = ['backend']) {
   return target;
 }
 
-function runtime(previous, events, { failTarget = false, recordedInventory = null } = {}) {
+function agentIdentityCutoverLocks() {
+  const previous = lock('1'.repeat(40), 'a');
+  previous.trust = LOCAL_EDGE_TRUST;
+  delete previous.releaseBom;
+  delete previous.components.osaaGateway;
+  delete previous.components.osaaGovernedAdapter;
+  for (const [name, repository] of Object.entries(LEGACY_INSTALLED_AGENT_COMPONENTS)) {
+    previous.components[name] = {
+      repository,
+      image: `ghcr.io/opensphere-platform/${repository}@sha256:${'a'.repeat(64)}`,
+      sourceRevision: previous.sourceRevision
+    };
+  }
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, previous.trust);
+
+  const canonicalBase = lock(previous.sourceRevision, 'a');
+  canonicalBase.trust = LOCAL_EDGE_TRUST;
+  delete canonicalBase.releaseBom;
+  canonicalBase.releaseDigest = calculateReleaseDigest('edge', canonicalBase.components, canonicalBase.trust);
+  const target = componentTarget(canonicalBase, '2'.repeat(40), [
+    'osaaGateway',
+    'osaaGovernedAdapter'
+  ]);
+  target.baseReleaseDigest = previous.releaseDigest;
+  target.releaseDigest = calculateReleaseDigest(
+    target.channel,
+    target.components,
+    target.trust,
+    undefined,
+    {
+      releaseScope: target.releaseScope,
+      baseReleaseDigest: target.baseReleaseDigest,
+      changedComponents: target.changedComponents
+    }
+  );
+  return { previous, target };
+}
+
+function runtime(previous, events, {
+  failTarget = false,
+  failMigration = false,
+  recordedInventory = null
+} = {}) {
   return {
     verifyReleaseLock: async (release, options) =>
       events.push(`supply:${release.sourceRevision}:${options?.allowLegacyComponentSet === true}`),
@@ -163,6 +210,10 @@ function runtime(previous, events, { failTarget = false, recordedInventory = nul
       events.push(`install:${label}:${prepared.all[0].yaml}`),
     installPreparedComponentRelease: (release, prepared, storageClass, consoleUrl, label, changed, _progress, options = {}) =>
       events.push(`install-component:${label}:${release.sourceRevision}:${changed.join(',')}:migrations=${options.applyMigrations !== false}`),
+    runComponentMigrations: () => {
+      events.push('migrate-agent-identity');
+      if (failMigration) throw new Error('identity migration failed');
+    },
     releaseResourceInventory: (release) => [{
       apiVersion: 'v1',
       kind: 'ConfigMap',
@@ -172,6 +223,7 @@ function runtime(previous, events, { failTarget = false, recordedInventory = nul
     readReleaseInventory: () => recordedInventory,
     recordReleaseInventory: (release) => events.push(`inventory:${release.sourceRevision}`),
     pruneReleaseResources: (from, to) => events.push(`prune:${from[0].name}->${to[0].name}`),
+    deleteAgentIdentityNamespace: (namespace) => events.push(`delete-namespace:${namespace}`),
     recordInstallationState: (release) => events.push(`record:${release.sourceRevision}`),
     waitForCoreRollouts: () => events.push('wait'),
     waitForComponentRollouts: (changed) => events.push(`wait-component:${changed.join(',')}`),
@@ -231,6 +283,61 @@ test('component release is upgrade-only and keeps a complete rollback lock', asy
     bootstrap(target, { progress: undefined }),
     /Component release locks are upgrade-only/
   );
+});
+
+test('OSAA identity cutover stages canonical workloads, commits migration once, and removes only legacy resources', async () => {
+  const { previous, target } = agentIdentityCutoverLocks();
+  const events = [];
+  const result = await upgrade(previous, target, {
+    runtime: runtime(previous, events, { recordedInventory: [{ name: 'complete-release' }] })
+  });
+  assert.equal(result.lock, target);
+  assert.ok(events.includes(
+    `prepare-component:${previous.sourceRevision}:oaaGateway,oaaGovernedAdapter:migrations=false`
+  ));
+  assert.ok(events.includes(
+    `install-component:업그레이드:${target.sourceRevision}:osaaGateway,osaaGovernedAdapter:migrations=false`
+  ));
+  assert.equal(events.filter((event) => event === 'migrate-agent-identity').length, 1);
+  assert.ok(events.includes(`wait-component:osaaGateway,osaaGovernedAdapter`));
+  assert.ok(events.includes(`verify:${target.sourceRevision}:osaaGateway,osaaGovernedAdapter`));
+  assert.ok(events.includes(`delete-namespace:${LEGACY_INSTALLED_AGENT_NAMESPACE}`));
+  assert.equal(events.includes(`delete-namespace:${CANONICAL_AGENT_NAMESPACE}`), false);
+  assert.equal(events.some((event) => event.includes('install-component:롤백')), false);
+});
+
+test('OSAA identity cutover failure before migration keeps the installed lock and removes staged canonical resources', async () => {
+  const { previous, target } = agentIdentityCutoverLocks();
+  const events = [];
+  await assert.rejects(
+    upgrade(previous, target, {
+      runtime: runtime(previous, events, {
+        failMigration: true,
+        recordedInventory: [{ name: 'complete-release' }]
+      })
+    }),
+    /failed before migration; previous installation retained/u
+  );
+  assert.ok(events.includes(`delete-namespace:${CANONICAL_AGENT_NAMESPACE}`));
+  assert.equal(events.includes(`delete-namespace:${LEGACY_INSTALLED_AGENT_NAMESPACE}`), false);
+  assert.equal(events.some((event) => event === `record:${target.sourceRevision}`), false);
+});
+
+test('OSAA identity cutover never performs a false legacy rollback after the one-way database migration', async () => {
+  const { previous, target } = agentIdentityCutoverLocks();
+  const events = [];
+  await assert.rejects(
+    upgrade(previous, target, {
+      runtime: runtime(previous, events, {
+        failTarget: true,
+        recordedInventory: [{ name: 'complete-release' }]
+      })
+    }),
+    /requires attention after its one-way database migration/u
+  );
+  assert.ok(events.includes(`record:${target.sourceRevision}`));
+  assert.equal(events.some((event) => event.includes('install-component:롤백')), false);
+  assert.equal(events.some((event) => event.startsWith(`verify:${previous.sourceRevision}:`)), false);
 });
 
 test('component release preparation selects only manifests that own changed images', () => {

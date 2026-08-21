@@ -80,8 +80,8 @@ test('Setup consumes the Console digest-bound migration manifest without a handw
   const raw = readFileSync(new URL(SUPABASE_MIGRATION_MANIFEST, CONSOLE_SOURCE), 'utf8');
   const manifest = parseSupabaseMigrationManifest(raw);
   assert.equal(manifest.migrations[0].name, '0001_console_backbone.sql');
-  assert.equal(manifest.latestMigrationId, '0057');
-  assert.equal(manifest.migrations.at(-1).name, '0057_foundation_postgres_durable_plan.sql');
+  assert.equal(manifest.latestMigrationId, '0063');
+  assert.equal(manifest.migrations.at(-1).name, '0063_osaa_canonical_identity_and_conversations.sql');
   assert.equal(new Set(manifest.migrations.map(({ id }) => id)).size, manifest.migrations.length);
   assert.equal(manifest.schemaVersion, 2);
   const legacyV1 = structuredClone(manifest);
@@ -113,7 +113,7 @@ test('Setup consumes the Console digest-bound migration manifest without a handw
     'integrated rollback must use the target digest-bound forward-only migration set');
   assert.match(bootstrapSource, /migrationEvidence: targetLock\.releaseBom\?\.migrationManifest/,
     'integrated rollback must verify the target migration set against target Release BOM evidence');
-  assert.match(bootstrapSource, /\{ changedComponents, includeMigrations: false \}/,
+  assert.match(bootstrapSource, /\{ changedComponents: rollbackChangedComponents, includeMigrations: false \}/,
     'component rollback must not prepare or reverse schema migrations');
   const migrationCall = bootstrapSource.indexOf('runComponentMigrations(prepared.foundation');
   const workloadApply = bootstrapSource.indexOf('applyRelease(release, label, progress)', migrationCall);
@@ -121,7 +121,7 @@ test('Setup consumes the Console digest-bound migration manifest without a handw
     'component migrations must complete before changed workload manifests are applied');
 });
 
-test('base Main Shell includes Backend, DUPA, notification, OAA, governed adapter and production guardrails', () => {
+test('base Main Shell includes Backend, DUPA, notification, OSAA, governed adapter and production guardrails', () => {
   const paths = BASE_MANIFESTS.map(({ path }) => path);
   for (const path of [
     'backend/opensphere-console-backend/deploy.yaml',
@@ -129,8 +129,8 @@ test('base Main Shell includes Backend, DUPA, notification, OAA, governed adapte
     'backend/dupa-control/opensphere-console-dupa-controller.yaml',
     'backend/notification-dispatcher/deploy.yaml',
     'backend/recovery/recovery-jobs.yaml',
-    'backend/opensphere-console-oaa-gateway/deploy.yaml',
-    'backend/oaa-governed-adapter/deploy.yaml',
+    'backend/opensphere-console-osaa-gateway/deploy.yaml',
+    'backend/osaa-governed-adapter/deploy.yaml',
     'deploy/production-hardening.yaml',
     'deploy/manual-ui-admission-policy.yaml',
     'deploy/console-image-admission-policy.yaml',
@@ -147,18 +147,18 @@ test('rollout order establishes Supabase, Gitea and the CLI artifact before Main
   const gitea = index('opensphere-console-change', 'deployment/opensphere-gitea');
   const backend = index('opensphere-console', 'deployment/opensphere-console-backend');
   const foundationBootstrap = index('opensphere-console', 'deployment/foundation-bootstrap-reconciler');
-  const oaa = index('opensphere-console', 'deployment/opensphere-console-oaa-gateway');
+  const osaa = index('opensphere-console', 'deployment/opensphere-console-osaa-gateway');
   const cliArtifact = index('opensphere-console', 'deployment/os-cli');
   const shell = index('opensphere-console', 'deployment/opensphere-console');
   assert.ok(supabase >= 0 && gitea >= 0 && backend >= 0 && foundationBootstrap >= 0
-    && oaa >= 0 && cliArtifact >= 0 && shell >= 0);
+    && osaa >= 0 && cliArtifact >= 0 && shell >= 0);
   assert.ok(supabase < backend);
   assert.ok(gitea < backend);
   assert.ok(backend < foundationBootstrap);
-  assert.ok(foundationBootstrap < oaa);
-  assert.ok(backend < oaa);
+  assert.ok(foundationBootstrap < osaa);
+  assert.ok(backend < osaa);
   assert.ok(cliArtifact < shell);
-  assert.ok(oaa < shell);
+  assert.ok(osaa < shell);
 });
 
 test('fresh install downloads os only after the lock-bound CLI artifact and Console are Ready', () => {
@@ -181,8 +181,8 @@ test('every release base workload references the Setup-managed GHCR pull Secret'
     'backend/dupa-control/opensphere-console-dupa-controller.yaml',
     'backend/notification-dispatcher/deploy.yaml',
     'backend/recovery/recovery-jobs.yaml',
-    'backend/opensphere-console-oaa-gateway/deploy.yaml',
-    'backend/oaa-governed-adapter/deploy.yaml',
+    'backend/opensphere-console-osaa-gateway/deploy.yaml',
+    'backend/osaa-governed-adapter/deploy.yaml',
     'deploy/opensphere-console.yaml'
   ];
   for (const file of files) {
@@ -206,7 +206,7 @@ test('production guardrails are released with PDBs and stateless control-plane t
   for (const file of [
     'deploy/opensphere-console.yaml',
     'backend/opensphere-console-backend/deploy.yaml',
-    'backend/opensphere-console-oaa-gateway/deploy.yaml'
+    'backend/opensphere-console-osaa-gateway/deploy.yaml'
   ]) {
     const source = readFileSync(new URL(file, CONSOLE_SOURCE), 'utf8');
     assert.match(source, /topologySpreadConstraints:[\s\S]+topologyKey: kubernetes\.io\/hostname[\s\S]+whenUnsatisfiable: DoNotSchedule/);
