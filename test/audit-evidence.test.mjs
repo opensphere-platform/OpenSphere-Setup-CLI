@@ -5,12 +5,11 @@ import { readFileSync } from 'node:fs';
 const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const collector = readFileSync(new URL('../scripts/collect-audit-evidence.sh', import.meta.url), 'utf8');
 
-test('clean-cluster CI preserves redacted, post-run audit evidence for one review window', () => {
-  assert.match(workflow, /Collect redacted audit evidence[\s\S]*?if: always\(\)/);
-  assert.match(workflow, /name: audit-evidence-supabase/);
-  assert.match(workflow, /Upload redacted audit evidence[\s\S]*?continue-on-error: true[\s\S]*?actions\/upload-artifact@v4/);
-  assert.match(workflow, /retention-days: 7/);
-  assert.doesNotMatch(workflow, /retention-days: (?:[89]\d|\d{3,})/);
+test('edge audit evidence remains a local-run responsibility instead of a GitHub artifact', () => {
+  assert.doesNotMatch(workflow, /Collect redacted audit evidence/);
+  assert.doesNotMatch(workflow, /audit-evidence-supabase/);
+  assert.doesNotMatch(workflow, /actions\/upload-artifact/);
+  assert.doesNotMatch(workflow, /retention-days:/);
 });
 
 test('evidence collector records runtime facts but never reads Secret objects or data', () => {
