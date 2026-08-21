@@ -43,6 +43,15 @@ import {
 } from './recovery-target.mjs';
 import { reportReleaseProgress } from './progress.mjs';
 import { materializeRuntimeAsset } from './runtime-assets.mjs';
+import {
+  CANONICAL_AGENT_NAMESPACE,
+  hasLegacyInstalledAgentIdentity,
+  installedNameForCanonicalComponent,
+  isAgentIdentityCutover,
+  LEGACY_INSTALLED_AGENT_MANIFESTS,
+  LEGACY_INSTALLED_AGENT_NAMESPACE,
+  LEGACY_INSTALLED_AGENT_ROLLOUTS
+} from './release-agent-identity-cutover.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const RAW_ROOT = 'https://raw.githubusercontent.com/opensphere-platform/OpenSphere-console';
@@ -58,7 +67,7 @@ const PLATFORM_RELEASE_CONSUMER_MIGRATION = 'backend/supabase/migrations/0033_pl
 const MODULE_OPERATION_LEDGER_MIGRATION = 'backend/supabase/migrations/0035_module_operation_ledger.sql';
 const PLATFORM_SUPPORT_OBSERVABILITY_MIGRATION = 'backend/supabase/migrations/0036_platform_support_observability_permissions.sql';
 const BROWSER_SESSION_EXPIRY_MIGRATION = 'backend/supabase/migrations/0037_browser_session_expiry_evidence.sql';
-const OAA_WATCH_CURSOR_STATUS_MIGRATION = 'backend/supabase/migrations/0038_oaa_watch_cursor_status_vocabulary.sql';
+const LEGACY_AGENT_WATCH_CURSOR_STATUS_MIGRATION = 'backend/supabase/migrations/0038_oaa_watch_cursor_status_vocabulary.sql';
 const AUDIT_LEDGER_INTEGRITY_MIGRATION = 'backend/supabase/migrations/0039_audit_ledger_integrity.sql';
 const APPROVAL_OUTCOME_LEDGER_MIGRATION = 'backend/supabase/migrations/0040_approval_outcome_ledger.sql';
 const AGENT_ACTION_LEDGER_MIGRATION = 'backend/supabase/migrations/0041_agent_action_ledger.sql';
@@ -80,7 +89,7 @@ const LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS = new Set([
   MODULE_OPERATION_LEDGER_MIGRATION,
   PLATFORM_SUPPORT_OBSERVABILITY_MIGRATION,
   BROWSER_SESSION_EXPIRY_MIGRATION,
-  OAA_WATCH_CURSOR_STATUS_MIGRATION,
+  LEGACY_AGENT_WATCH_CURSOR_STATUS_MIGRATION,
   EXTERNAL_BACKUP_S3_PROFILES_MIGRATION,
   EXTERNAL_BACKUP_TLS_TRUST_MIGRATION
 ]);
@@ -100,7 +109,7 @@ export const MANAGED_NAMESPACES = Object.freeze([
   'opensphere-console-change',
   'opensphere-console-recovery',
   'opensphere-console',
-  'opensphere-oaa-credentials',
+  'opensphere-osaa-credentials',
   'opensphere-foundation',
   'opensphere-system'
 ]);
@@ -122,7 +131,7 @@ export const MANAGED_CLUSTER_RBAC = Object.freeze([
   'clusterrolebinding/dupa-console-evidence-reader',
   'clusterrolebinding/dupa-clidownload-reader',
   'clusterrolebinding/opensphere-console-backend',
-  'clusterrolebinding/opensphere-console-oaa-gateway-environment-reader',
+  'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
   'clusterrolebinding/foundation-bootstrap-reconciler',
   'clusterrolebinding/foundation-control-plane-identity-directory',
   'clusterrolebinding/foundation-control-plane-core',
@@ -133,7 +142,7 @@ export const MANAGED_CLUSTER_RBAC = Object.freeze([
   'clusterrole/dupa-console-evidence-reader',
   'clusterrole/dupa-clidownload-reader',
   'clusterrole/opensphere-console-backend',
-  'clusterrole/opensphere-console-oaa-gateway-environment-reader',
+  'clusterrole/opensphere-console-osaa-gateway-environment-reader',
   'clusterrole/foundation-bootstrap-reconciler',
   'clusterrole/foundation-control-plane-identity-directory',
   'clusterrole/foundation-control-plane-core'
@@ -198,17 +207,17 @@ export const BASE_MANIFESTS = Object.freeze([
     ]]
   },
   {
-    path: 'backend/opensphere-console-oaa-gateway/deploy.yaml',
+    path: 'backend/opensphere-console-osaa-gateway/deploy.yaml',
     replacements: [[
-      '(?:ghcr\\.io/opensphere-platform/)?opensphere-console-oaa-gateway(?:@sha256:[A-Za-z0-9_]+|:[A-Za-z0-9][A-Za-z0-9._-]*)',
-      'oaaGateway'
+      '(?:ghcr\\.io/opensphere-platform/)?opensphere-console-osaa-gateway(?:@sha256:[A-Za-z0-9_]+|:[A-Za-z0-9][A-Za-z0-9._-]*)',
+      'osaaGateway'
     ]]
   },
   {
-    path: 'backend/oaa-governed-adapter/deploy.yaml',
+    path: 'backend/osaa-governed-adapter/deploy.yaml',
     replacements: [[
-      '(?:ghcr\\.io/opensphere-platform/)?opensphere-oaa-governed-adapter(?:@sha256:[A-Za-z0-9_]+|:[A-Za-z0-9][A-Za-z0-9._-]*)',
-      'oaaGovernedAdapter'
+      '(?:ghcr\\.io/opensphere-platform/)?opensphere-osaa-governed-adapter(?:@sha256:[A-Za-z0-9_]+|:[A-Za-z0-9][A-Za-z0-9._-]*)',
+      'osaaGovernedAdapter'
     ]]
   },
   // This is part of the released install set, rather than an operator-side
@@ -228,7 +237,7 @@ export const BASE_MANIFESTS = Object.freeze([
 ]);
 
 export const SUPABASE_MIGRATION_MANIFEST = 'backend/supabase/migrations/manifest.json';
-const MIGRATION_OWNER_COMPONENTS = Object.freeze(['console', 'backend', 'oaaGateway']);
+const MIGRATION_OWNER_COMPONENTS = Object.freeze(['console', 'backend', 'osaaGateway']);
 
 function sha256Text(value) {
   return createHash('sha256').update(String(value).replace(/\r\n/gu, '\n'), 'utf8').digest('hex');
@@ -316,9 +325,15 @@ function foundationArtifactPaths(lock) {
 }
 
 function baseManifestSpecs(lock) {
-  const specs = isPreRecoveryRelease(lock)
+  let specs = isPreRecoveryRelease(lock)
     ? BASE_MANIFESTS.filter(({ path }) => !LEGACY_RECOVERY_MANIFESTS.has(path))
     : BASE_MANIFESTS;
+  if (hasLegacyInstalledAgentIdentity(lock?.components)) {
+    specs = specs
+      .filter((spec) => ![...manifestSpecComponents(spec)].some((component) =>
+        component === 'osaaGateway' || component === 'osaaGovernedAdapter'))
+      .concat(LEGACY_INSTALLED_AGENT_MANIFESTS);
+  }
   return specs.filter(({ requiresAuxiliaryArtifact }) =>
     !requiresAuxiliaryArtifact || Boolean(lock.auxiliaryArtifacts?.[requiresAuxiliaryArtifact]));
 }
@@ -384,8 +399,8 @@ export const CORE_ROLLOUTS = Object.freeze([
   ['opensphere-console', 'deployment/platform-release-reconciler', '600s'],
   ['opensphere-console', 'deployment/opensphere-notification-dispatcher', '600s'],
   ['opensphere-console', 'deployment/opensphere-external-channel-executor', '600s'],
-  ['opensphere-console', 'deployment/opensphere-console-oaa-gateway', '600s'],
-  ['opensphere-console', 'deployment/oaa-governed-adapter', '600s'],
+  ['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s'],
+  ['opensphere-console', 'deployment/osaa-governed-adapter', '600s'],
   ['opensphere-console', 'deployment/os-cli', '600s'],
   ['opensphere-console', 'deployment/opensphere-console', '600s']
 ]);
@@ -398,8 +413,8 @@ export const COMPONENT_ROLLOUTS = Object.freeze({
     ['opensphere-console', 'deployment/platform-release-reconciler', '600s']
   ],
   dupaController: [['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s']],
-  oaaGateway: [['opensphere-console', 'deployment/opensphere-console-oaa-gateway', '600s']],
-  oaaGovernedAdapter: [['opensphere-console', 'deployment/oaa-governed-adapter', '600s']],
+  osaaGateway: [['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']],
+  osaaGovernedAdapter: [['opensphere-console', 'deployment/osaa-governed-adapter', '600s']],
   notificationDispatcher: [
     ['opensphere-console', 'deployment/opensphere-notification-dispatcher', '600s'],
     ['opensphere-console', 'deployment/opensphere-external-channel-executor', '600s']
@@ -942,6 +957,17 @@ function inventoryKey(resource) {
   return [resource.apiVersion, resource.kind, resource.namespace ?? '', resource.name].join('|');
 }
 
+export function replaceComponentInventory(baseInventory, previousComponentInventory, targetComponentInventory) {
+  const previous = new Set((previousComponentInventory ?? []).map(inventoryKey));
+  const merged = new Map(
+    (baseInventory ?? [])
+      .filter((resource) => !previous.has(inventoryKey(resource)))
+      .map((resource) => [inventoryKey(resource), resource])
+  );
+  for (const resource of targetComponentInventory ?? []) merged.set(inventoryKey(resource), resource);
+  return [...merged.values()].sort((left, right) => inventoryKey(left).localeCompare(inventoryKey(right)));
+}
+
 export function releaseResourceInventory(release, kubectlFn = kubectl) {
   const inventory = new Map();
   for (const manifest of release) {
@@ -1089,7 +1115,7 @@ function waitForCoreRollouts(lock, progress) {
 export function waitForComponentRollouts(changedComponents, progress) {
   const unique = new Map();
   for (const component of changedComponents) {
-    const rollouts = COMPONENT_ROLLOUTS[component];
+    const rollouts = COMPONENT_ROLLOUTS[component] ?? LEGACY_INSTALLED_AGENT_ROLLOUTS[component];
     if (!rollouts) throw new Error(`Component rollout contract is missing for ${component}`);
     for (const rollout of rollouts) unique.set(`${rollout[0]}|${rollout[1]}`, rollout);
   }
@@ -1204,7 +1230,10 @@ function readStoredInstallationLock() {
 
 export function readInstallationLock() {
   const lock = readStoredInstallationLock();
-  return lock ? validateLock(lock, { allowLegacyComponentSet: true }) : null;
+  return lock ? validateLock(lock, {
+    allowLegacyComponentSet: true,
+    allowInstalledAgentIdentityCutover: true
+  }) : null;
 }
 
 // The retired Kanidm/PostgreSQL/RustFS release shape is not migratable by a
@@ -1214,7 +1243,7 @@ export async function migrateLegacyInstallationLock() {
   const lock = readStoredInstallationLock();
   if (!lock || lock.releaseBom) return null;
   if (isLocalEdgeLock(lock)) {
-    validateLock(lock);
+    validateLock(lock, { allowInstalledAgentIdentityCutover: true });
     return null;
   }
   throw new Error('Legacy Kanidm/PostgreSQL/RustFS installation lock detected; fresh Supabase bootstrap refuses in-place trust migration');
@@ -1628,7 +1657,7 @@ export async function bootstrap(lock, {
     );
     recordInitialAdmin(initialAdmin, 'required');
     progress?.done('Kubernetes API 적용 완료');
-    progress?.step('Supabase·Gitea·OAA·CLI artifact·Main Shell rollout 대기');
+    progress?.step('Supabase·Gitea·OSAA·CLI artifact·Main Shell rollout 대기');
     waitForCoreRollouts(lock, progress);
     progress?.done('핵심 workload Ready');
 
@@ -1665,7 +1694,10 @@ export async function upgrade(
   targetLock,
   { storageClass, consoleUrl, registryCredentials, requiredPlatforms, runtime = {} } = {}
 ) {
-  validateLock(previousLock, { allowLegacyComponentSet: true });
+  validateLock(previousLock, {
+    allowLegacyComponentSet: true,
+    allowInstalledAgentIdentityCutover: true
+  });
   validateLock(targetLock);
   validateReleaseTransition(previousLock, targetLock);
   promotionBlocked(targetLock.channel);
@@ -1679,6 +1711,7 @@ export async function upgrade(
     prepareComponentRelease,
     installPreparedRelease,
     installPreparedComponentRelease,
+    runComponentMigrations,
     waitForCoreRollouts,
     waitForComponentRollouts,
     verifyInstallation,
@@ -1687,6 +1720,8 @@ export async function upgrade(
     releaseResourceInventory,
     pruneReleaseResources,
     recordReleaseInventory,
+    deleteAgentIdentityNamespace: (namespace) =>
+      kubectl(['delete', 'namespace', namespace, '--ignore-not-found', '--wait=true']),
     ensureManagedNamespaces: () => {
       for (const namespace of MANAGED_NAMESPACES) ensureNamespace(namespace);
     },
@@ -1697,6 +1732,7 @@ export async function upgrade(
       registryCredentials,
       requiredPlatforms,
       allowLegacyComponentSet: true,
+      allowInstalledAgentIdentityCutover: true,
       allowRetiredEdgeRollback: true
     }),
     operations.verifyReleaseLock(targetLock, { registryCredentials, requiredPlatforms })
@@ -1730,6 +1766,11 @@ export async function upgrade(
   const initialAdmin = config.initialAdmin;
   const componentTransition = targetLock.releaseScope === RELEASE_SCOPE_COMPONENT;
   const changedComponents = componentTransition ? targetLock.changedComponents : [];
+  const agentIdentityCutover = componentTransition
+    && isAgentIdentityCutover(previousLock.components, targetLock.components);
+  const rollbackChangedComponents = agentIdentityCutover
+    ? changedComponents.map(installedNameForCanonicalComponent)
+    : changedComponents;
   const targetWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-target-'));
   const rollbackWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-rollback-'));
   try {
@@ -1750,7 +1791,7 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           config.authEnvironment,
-          { changedComponents, includeMigrations: false }
+          { changedComponents: rollbackChangedComponents, includeMigrations: false }
         )
       ])
       : await Promise.all([
@@ -1776,9 +1817,18 @@ export async function upgrade(
     }
     const previousInventory = recordedInventory
       ?? operations.releaseResourceInventory(rollback.all);
-    const targetInventory = componentTransition
-      ? previousInventory
-      : operations.releaseResourceInventory(target.all);
+    const previousComponentInventory = agentIdentityCutover
+      ? operations.releaseResourceInventory(rollback.all)
+      : null;
+    const targetComponentInventory = agentIdentityCutover
+      ? operations.releaseResourceInventory(target.all)
+      : null;
+    const targetInventory = agentIdentityCutover
+      ? replaceComponentInventory(previousInventory, previousComponentInventory, targetComponentInventory)
+      : componentTransition
+        ? previousInventory
+        : operations.releaseResourceInventory(target.all);
+    let agentIdentityMigrationCommitted = false;
     try {
       if (componentTransition) {
         operations.installPreparedComponentRelease(
@@ -1787,8 +1837,17 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           '업그레이드',
-          changedComponents
+          changedComponents,
+          undefined,
+          { applyMigrations: !agentIdentityCutover }
         );
+        if (agentIdentityCutover) {
+          // The canonical workloads are staged first while the old DB identity
+          // is still intact. Migration 0063 is transactional but intentionally
+          // one-way; once it commits, a false rollback to pre-cutover binaries would be unsafe.
+          operations.runComponentMigrations(target.foundation);
+          agentIdentityMigrationCommitted = true;
+        }
       } else {
         operations.installPreparedRelease(
           targetLock, target, config.storageClass, effectiveConsoleUrl, '업그레이드'
@@ -1809,8 +1868,11 @@ export async function upgrade(
         requireZeroRestarts: false,
         componentSelection: componentTransition ? changedComponents : null
       });
-      if (!componentTransition) {
-        operations.pruneReleaseResources(previousInventory, targetInventory);
+      if (agentIdentityCutover) {
+        operations.pruneReleaseResources(previousComponentInventory, targetComponentInventory);
+        operations.deleteAgentIdentityNamespace(LEGACY_INSTALLED_AGENT_NAMESPACE);
+      } else {
+        if (!componentTransition) operations.pruneReleaseResources(previousInventory, targetInventory);
       }
       operations.recordReleaseInventory(targetLock, targetInventory);
       return {
@@ -1821,6 +1883,33 @@ export async function upgrade(
       };
     } catch (upgradeError) {
       console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
+      if (agentIdentityCutover) {
+        if (agentIdentityMigrationCommitted) {
+          // The DB schema, roles and policies now have OSAA identity. Preserve
+          // the canonical lock and workloads for deterministic resume instead
+          // of pretending that old binaries can be restored against new data.
+          operations.recordInstallationState(
+            targetLock,
+            config.storageClass,
+            initialAdmin,
+            effectiveConsoleUrl,
+            config.authEnvironment,
+            config.shellTlsSecret
+          );
+          operations.recordReleaseInventory(targetLock, targetInventory);
+          throw new Error(
+            `OSAA identity cutover requires attention after its one-way database migration; `
+            + `the canonical target was preserved for resume: ${upgradeError.message}`
+          );
+        }
+        // Before migration commit, the installed identity remains untouched.
+        // Remove only newly staged OSAA resources and leave the old installation
+        // lock/inventory as the exact recovery point.
+        operations.pruneReleaseResources(targetComponentInventory, previousComponentInventory);
+        operations.deleteAgentIdentityNamespace(CANONICAL_AGENT_NAMESPACE);
+        operations.recordReleaseInventory(previousLock, previousInventory);
+        throw new Error(`OSAA identity cutover failed before migration; previous installation retained: ${upgradeError.message}`);
+      }
       try {
         if (componentTransition) {
           operations.installPreparedComponentRelease(
@@ -1829,7 +1918,7 @@ export async function upgrade(
             config.storageClass,
             effectiveConsoleUrl,
             '롤백',
-            changedComponents,
+            rollbackChangedComponents,
             undefined,
             { applyMigrations: false }
           );
@@ -1846,13 +1935,13 @@ export async function upgrade(
           config.authEnvironment,
           config.shellTlsSecret
         );
-        if (componentTransition) operations.waitForComponentRollouts(changedComponents);
+        if (componentTransition) operations.waitForComponentRollouts(rollbackChangedComponents);
         else operations.waitForCoreRollouts(previousLock);
         await operations.verifyInstallation(previousLock, {
           consoleUrl: effectiveConsoleUrl,
           requireZeroRestarts: false,
           mode: 'rollback',
-          componentSelection: componentTransition ? changedComponents : null
+          componentSelection: componentTransition ? rollbackChangedComponents : null
         });
         if (!componentTransition) {
           operations.pruneReleaseResources(targetInventory, previousInventory);

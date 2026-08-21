@@ -28,7 +28,7 @@ capture namespaces.yaml kubectl --context "$context" get namespace \
   opensphere-console-data \
   opensphere-console-change \
   opensphere-console \
-  opensphere-oaa-credentials \
+  opensphere-osaa-credentials \
   opensphere-foundation \
   opensphere-system \
   -o yaml
@@ -46,7 +46,7 @@ capture opensphere-cluster-rbac.yaml kubectl --context "$context" get \
   clusterrole/dupa-console-evidence-reader \
   clusterrole/dupa-clidownload-reader \
   clusterrole/opensphere-console-backend \
-  clusterrole/opensphere-console-oaa-gateway-environment-reader \
+  clusterrole/opensphere-console-osaa-gateway-environment-reader \
   clusterrole/opensphere-module-cluster-observer-v1 \
   clusterrole/opensphere-module-cluster-his-manager-v1 \
   clusterrole/opensphere-module-cluster-infrastructure-manager-v1 \
@@ -54,8 +54,8 @@ capture opensphere-cluster-rbac.yaml kubectl --context "$context" get \
   clusterrolebinding/dupa-console-evidence-reader \
   clusterrolebinding/dupa-clidownload-reader \
   clusterrolebinding/opensphere-console-backend \
-  clusterrolebinding/opensphere-console-oaa-gateway-environment-reader \
+  clusterrolebinding/opensphere-console-osaa-gateway-environment-reader \
   -o yaml
 capture recent-events.txt kubectl --context "$context" get events -A --sort-by=.lastTimestamp
 capture audit-runtime-boundary.txt kubectl --context "$context" -n opensphere-console-data exec statefulset/opensphere-supabase-postgres -- \
-  psql -U supabase_admin -d postgres -Atc "SELECT rolname || '|superuser=' || rolsuper || '|bypassrls=' || rolbypassrls FROM pg_roles WHERE rolname IN ('opensphere_console_backend','opensphere_oaa_gateway','supabase_auth_admin','supabase_storage_admin') ORDER BY rolname; SELECT 'audit_event_rls=' || relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='audit' AND c.relname='event';"
+  psql -U supabase_admin -d postgres -Atc "SELECT rolname || '|superuser=' || rolsuper || '|bypassrls=' || rolbypassrls FROM pg_roles WHERE rolname IN ('opensphere_console_backend','opensphere_osaa_gateway','supabase_auth_admin','supabase_storage_admin') ORDER BY rolname; SELECT 'audit_event_rls=' || relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='audit' AND c.relname='event';"

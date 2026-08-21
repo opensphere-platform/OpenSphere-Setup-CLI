@@ -16,7 +16,7 @@ const expected = {
   contract: 'opensphere-setup-console-source/v1',
   githubRepository: 'opensphere-platform/OpenSphere-console',
   canonicalUrl: 'https://github.com/opensphere-platform/OpenSphere-console.git',
-  revision: '4d7a08e4a9dcfa805b35428de782851b01045d2d',
+  revision: '7d27e2e573f3b58de300f86ecf53ec94b885d6b3',
 };
 
 test('Console source lock is a closed canonical commit authority', () => {

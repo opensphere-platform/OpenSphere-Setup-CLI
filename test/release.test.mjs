@@ -33,6 +33,7 @@ import {
   resolveChannel,
   requiredPlatformDescriptors
 } from '../src/release.mjs';
+import { LEGACY_INSTALLED_AGENT_COMPONENTS } from '../src/release-agent-identity-cutover.mjs';
 
 const REVISION = '1'.repeat(40);
 const DIGEST = `sha256:${'a'.repeat(64)}`;
@@ -94,6 +95,37 @@ function validComponentTransition(changedComponents = ['backend']) {
   return { base, target };
 }
 
+function validAgentIdentityCutover() {
+  const { base: canonicalBase, target } = validComponentTransition([
+    'osaaGateway',
+    'osaaGovernedAdapter'
+  ]);
+  const base = structuredClone(canonicalBase);
+  delete base.components.osaaGateway;
+  delete base.components.osaaGovernedAdapter;
+  for (const [name, repository] of Object.entries(LEGACY_INSTALLED_AGENT_COMPONENTS)) {
+    base.components[name] = {
+      repository,
+      image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
+      sourceRevision: REVISION
+    };
+  }
+  base.releaseDigest = calculateReleaseDigest(base.channel, base.components, base.trust);
+  target.baseReleaseDigest = base.releaseDigest;
+  target.releaseDigest = calculateReleaseDigest(
+    target.channel,
+    target.components,
+    target.trust,
+    undefined,
+    {
+      releaseScope: target.releaseScope,
+      baseReleaseDigest: target.baseReleaseDigest,
+      changedComponents: target.changedComponents
+    }
+  );
+  return { base, target };
+}
+
 function validBom(channel = 'edge', revision = REVISION, digest = DIGEST) {
   return {
     apiVersion: RELEASE_API_VERSION,
@@ -131,8 +163,8 @@ test('canonical baseline contains the complete Supabase/Gitea release repositori
     'opensphere-console',
     'opensphere-console-backend',
     'opensphere-console-dupa-controller',
-    'opensphere-console-oaa-gateway',
-    'opensphere-oaa-governed-adapter',
+    'opensphere-console-osaa-gateway',
+    'opensphere-osaa-governed-adapter',
     'opensphere-console-notification-dispatcher',
     'opensphere-console-gitea',
     'opensphere-console-supabase-postgres',
@@ -145,14 +177,74 @@ test('canonical baseline contains the complete Supabase/Gitea release repositori
   assert.deepEqual(AUXILIARY_ARTIFACTS, { cliArtifacts: 'opensphere-os-cli' });
 });
 
-test('base runtime requires OAA Core as native Main Shell runtime', () => {
+test('base runtime requires OSAA Core as native Main Shell runtime', () => {
   assert.deepEqual(BASE_RUNTIME_COMPONENTS, [
-    'console', 'backend', 'dupaController', 'oaaGateway', 'oaaGovernedAdapter',
+    'console', 'backend', 'dupaController', 'osaaGateway', 'osaaGovernedAdapter',
     'notificationDispatcher', 'gitea', 'supabasePostgres', 'supabaseAuth',
     'supabaseRest', 'supabaseStorage', 'giteaPostgres', 'recovery'
   ]);
-  assert.equal(BASE_RUNTIME_COMPONENTS.includes('oaaGateway'), true);
+  assert.equal(BASE_RUNTIME_COMPONENTS.includes('osaaGateway'), true);
   assert.deepEqual(LEGACY_BASE_RUNTIME_COMPONENTS, BASE_RUNTIME_COMPONENTS.slice(0, -1));
+});
+
+test('installed pre-OSAA lock is accepted only as the exact base of a complete one-way identity cutover', () => {
+  const { base, target } = validAgentIdentityCutover();
+  assert.throws(() => validateLock(base), /component set is not canonical/u);
+  assert.equal(validateLock(base, { allowInstalledAgentIdentityCutover: true }), base);
+  assert.equal(validateReleaseTransition(base, target), target);
+
+  for (const omitted of ['osaaGateway', 'osaaGovernedAdapter']) {
+    const partial = structuredClone(target);
+    partial.changedComponents = partial.changedComponents.filter((name) => name !== omitted);
+    partial.releaseDigest = calculateReleaseDigest(
+      partial.channel,
+      partial.components,
+      partial.trust,
+      undefined,
+      {
+        releaseScope: partial.releaseScope,
+        baseReleaseDigest: partial.baseReleaseDigest,
+        changedComponents: partial.changedComponents
+      }
+    );
+    assert.throws(
+      () => validateReleaseTransition(base, partial),
+      /must change both canonical agent components together/u
+    );
+  }
+});
+
+test('agent identity cutover rejects malformed legacy repositories and every canonical-to-legacy target', () => {
+  const { base, target } = validAgentIdentityCutover();
+  const wrongRepository = structuredClone(base);
+  wrongRepository.components.oaaGateway.repository = 'opensphere-console-osaa-gateway';
+  wrongRepository.releaseDigest = calculateReleaseDigest(
+    wrongRepository.channel,
+    wrongRepository.components,
+    wrongRepository.trust
+  );
+  assert.throws(
+    () => validateLock(wrongRepository, { allowInstalledAgentIdentityCutover: true }),
+    /repository is not canonical/u
+  );
+
+  const reverse = structuredClone(base);
+  reverse.releaseScope = RELEASE_SCOPE_COMPONENT;
+  reverse.baseReleaseDigest = target.releaseDigest;
+  reverse.changedComponents = ['oaaGateway', 'oaaGovernedAdapter'];
+  reverse.sourceRevision = '3'.repeat(40);
+  reverse.releaseDigest = calculateReleaseDigest(
+    reverse.channel,
+    reverse.components,
+    reverse.trust,
+    undefined,
+    {
+      releaseScope: reverse.releaseScope,
+      baseReleaseDigest: reverse.baseReleaseDigest,
+      changedComponents: reverse.changedComponents
+    }
+  );
+  assert.throws(() => validateReleaseTransition(target, reverse), /changedComponents|component set/u);
 });
 
 test('release baseline requires native manifests for every supported Linux platform', () => {

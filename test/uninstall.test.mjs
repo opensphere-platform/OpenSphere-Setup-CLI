@@ -21,9 +21,9 @@ test('uninstall refuses to reach Kubernetes without the explicit destructive con
   }
 });
 
-test('managed cluster RBAC retains OAA environment-reader lifecycle ownership but drops the obsolete controlled-operator role', () => {
-  assert.equal(MANAGED_CLUSTER_RBAC.includes('clusterrolebinding/opensphere-console-oaa-gateway-environment-reader'), true);
-  assert.equal(MANAGED_CLUSTER_RBAC.includes('clusterrole/opensphere-console-oaa-gateway-environment-reader'), true);
+test('managed cluster RBAC retains OSAA environment-reader lifecycle ownership but drops the obsolete controlled-operator role', () => {
+  assert.equal(MANAGED_CLUSTER_RBAC.includes('clusterrolebinding/opensphere-console-osaa-gateway-environment-reader'), true);
+  assert.equal(MANAGED_CLUSTER_RBAC.includes('clusterrole/opensphere-console-osaa-gateway-environment-reader'), true);
   assert.equal(MANAGED_CLUSTER_RBAC.some((resource) => resource.includes('controlled-operator')), false);
 });
 

@@ -16,13 +16,13 @@ test('opensphere-setup is the canonical installed package command', () => {
   assert.match(installer, /\$expectedVersion = "opensphere-setup \$\(\$package\.version\)"/);
 });
 
-test('operator documentation and clean-cluster CI use the canonical command', () => {
+test('operator documentation and CI smoke test use the canonical command', () => {
   assert.match(readme, /opensphere-setup bootstrap/);
   assert.match(readme, /opensphere-setup verify/);
   assert.match(readme, /opensphere-setup upgrade/);
   assert.doesNotMatch(readme, /node \.?[\\/]+src[\\/]+cli\.mjs/);
   assert.doesNotMatch(readme, /\\opensphere-setup\.cmd/);
   assert.match(ci, /Install-OpenSphereSetup\.ps1/);
-  assert.match(ci, /opensphere-setup bootstrap/);
-  assert.match(ci, /opensphere-setup verify/);
+  assert.match(ci, /opensphere-setup version/);
+  assert.doesNotMatch(ci, /opensphere-setup (?:bootstrap|verify|upgrade)/);
 });
