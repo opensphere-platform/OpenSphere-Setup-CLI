@@ -93,15 +93,8 @@ jobs:
           node --check scripts/e2e-first-admin.mjs
           [void][scriptblock]::Create((Get-Content -Raw src/Install-LocalDevelopmentCa.ps1))
           [void][scriptblock]::Create((Get-Content -Raw scripts/e2e-clean-install.ps1))
-      # candidate/stable must remain unavailable or fail closed until an
-      # explicit promotion publishes a complete dual-architecture release.
-      # Requiring their resolution here would incorrectly turn the current
-      # promotion HOLD into a CI failure of the edge installer.
-      - name: Live edge channel resolution contract
-        shell: pwsh
-        run: |
-          node src/cli.mjs resolve --release edge --lock "$env:RUNNER_TEMP/edge-lock.json"
-          if ($LASTEXITCODE -ne 0) { throw 'edge channel resolution failed' }
+      - name: Edge remains local-only
+        run: node --test test/edge-local-policy.test.mjs
       - name: Certificate generator smoke test
         shell: pwsh
         run: |
@@ -111,80 +104,13 @@ jobs:
           if (-not (Test-Path "$env:RUNNER_TEMP/certs/sig.key")) { throw 'sig.key missing' }
 
   clean-kubernetes-edge:
-    # This is deliberately not docker-desktop. It proves that Setup's embedded
-    # Service port-forward path completes bootstrap, verification and CLI
-    # installation before a public Console ingress/DNS endpoint exists.
+    # Keep the historical required-check name while enforcing the current
+    # policy: edge execution belongs to local Docker Desktop, never Actions.
     runs-on: ubuntu-latest
-    timeout-minutes: 35
-    env:
-      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Install canonical Setup command
-        run: npm install --global . --no-audit --no-fund
-      - uses: helm/kind-action@v1.14.0
-        with:
-          cluster_name: opensphere-e2e
-          kubectl_version: v1.36.1
-      - name: Install disposable dynamic storage
-        run: |
-          kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/v0.0.32/deploy/local-path-storage.yaml
-          kubectl -n local-path-storage wait --for=condition=Available deployment/local-path-provisioner --timeout=180s
-      - name: Resolve, bootstrap and verify a clean edge installation
-        env:
-          OPENSPHERE_OS_INSTALL_DIR: ${{ runner.temp }}/opensphere-bin
-        run: |
-          set -euo pipefail
-          opensphere-setup resolve --release edge --lock "$RUNNER_TEMP/edge-release-lock.json"
-          opensphere-setup bootstrap --release edge --lock "$RUNNER_TEMP/edge-release-lock.json" \
-            --context kind-opensphere-e2e --storage-class local-path \
-            --console https://localhost:18090 \
-            --auth-environment development \
-            --admin-username e2e-admin \
-            --admin-display-name 'OpenSphere E2E Administrator' \
-            --admin-email e2e-admin@opensphere.local \
-            --no-open-browser
-          opensphere-setup verify --context kind-opensphere-e2e --console https://localhost:18090 --require-zero-restarts
-          kubectl --context kind-opensphere-e2e -n opensphere-console port-forward \
-            svc/opensphere-console-ext 18090:https --address 127.0.0.1 \
-            >"$RUNNER_TEMP/console-port-forward.log" 2>&1 &
-          port_forward_pid=$!
-          trap 'kill "$port_forward_pid" 2>/dev/null || true' EXIT
-          for attempt in $(seq 1 60); do
-            if curl --silent --show-error --insecure --fail \
-              https://localhost:18090/api/identity/bootstrap/status >/dev/null; then
-              break
-            fi
-            if ! kill -0 "$port_forward_pid" 2>/dev/null; then
-              cat "$RUNNER_TEMP/console-port-forward.log"
-              exit 1
-            fi
-            if test "$attempt" = 60; then
-              cat "$RUNNER_TEMP/console-port-forward.log"
-              exit 1
-            fi
-            sleep 2
-          done
-          OPENSPHERE_E2E_CONSOLE=https://localhost:18090 node scripts/e2e-first-admin.mjs
-          opensphere-setup verify --context kind-opensphere-e2e --console https://localhost:18090 --require-zero-restarts
-          test -x "$RUNNER_TEMP/opensphere-bin/os"
-          "$RUNNER_TEMP/opensphere-bin/os" --version
-      - name: Collect redacted audit evidence
-        if: always()
-        run: bash scripts/collect-audit-evidence.sh kind-opensphere-e2e "$RUNNER_TEMP/audit-evidence"
-      - name: Upload redacted audit evidence
-        if: always()
-        # Diagnostic retention must not override the substantive install,
-        # identity and CLI verification result when account storage is full.
-        continue-on-error: true
-        uses: actions/upload-artifact@v4
-        with:
-          name: audit-evidence-supabase-${{ github.run_id }}
-          path: ${{ runner.temp }}/audit-evidence
-          if-no-files-found: error
-          # PR evidence is short-lived diagnostic material. Keep one review
-          # window without exhausting the GitHub Free 500 MB storage pool.
-          retention-days: 7
+      - name: Enforce local-only edge execution
+        run: node --test test/edge-local-policy.test.mjs
