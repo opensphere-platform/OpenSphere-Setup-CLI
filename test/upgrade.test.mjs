@@ -239,9 +239,11 @@ test('component release preparation selects only manifests that own changed imag
   const selected = componentReleaseManifestSpecs(target);
   assert.deepEqual(selected.foundation, []);
   assert.deepEqual(selected.base.map(({ path }) => path), [
+    'backend/dupa-control/ui-plugin-crds.yaml',
     'backend/dupa-control/opensphere-console-dupa-controller.yaml'
   ]);
   assert.equal(selected.base[0].artifactSourceRevision, target.sourceRevision);
+  assert.equal(selected.base[1].artifactSourceRevision, target.sourceRevision);
 
   const foundationTarget = componentTarget(previous, '3'.repeat(40), ['gitea', 'supabaseAuth']);
   const foundationSelected = componentReleaseManifestSpecs(foundationTarget);
@@ -372,6 +374,46 @@ test('a single-owner component manifest applies its RBAC and workload atomically
   assert.match(selected[0].yaml, /kind: Role/);
   assert.match(selected[0].yaml, /opensphere-console-backend-installation-lock/);
   assert.match(selected[0].yaml, new RegExp(target.components.backend.image.replaceAll('.', '\\.')));
+});
+
+test('a component release applies its explicitly owned static CRD before the DUPA workload', () => {
+  const previous = lock('1'.repeat(40), 'a');
+  previous.trust = LOCAL_EDGE_TRUST;
+  delete previous.releaseBom;
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
+  const target = componentTarget(previous, '2'.repeat(40), ['dupaController']);
+  const selected = componentReleaseWorkloadManifests(target, {
+    foundation: { release: [] },
+    base: [
+      {
+        path: 'backend/dupa-control/ui-plugin-crds.yaml',
+        yaml: [
+          'apiVersion: apiextensions.k8s.io/v1',
+          'kind: CustomResourceDefinition',
+          'metadata: { name: uipluginpackages.plugins.opensphere.io }'
+        ].join('\n')
+      },
+      {
+        path: 'backend/dupa-control/opensphere-console-dupa-controller.yaml',
+        yaml: [
+          'apiVersion: apps/v1',
+          'kind: Deployment',
+          'metadata: { name: opensphere-console-dupa-controller }',
+          'spec:',
+          '  template:',
+          '    spec:',
+          '      containers:',
+          `        - image: ${target.components.dupaController.image}`
+        ].join('\n')
+      }
+    ]
+  });
+  assert.deepEqual(selected.map(({ path }) => path), [
+    'backend/dupa-control/ui-plugin-crds.yaml#dupaController',
+    'backend/dupa-control/opensphere-console-dupa-controller.yaml#dupaController'
+  ]);
+  assert.match(selected[0].yaml, /kind: CustomResourceDefinition/);
+  assert.match(selected[1].yaml, new RegExp(target.components.dupaController.image.replaceAll('.', '\\.')));
 });
 
 test('failed component verification rolls back only the same changed workloads', async () => {
