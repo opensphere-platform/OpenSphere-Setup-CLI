@@ -142,7 +142,8 @@ function validAgentIdentityCutover() {
     {
       releaseScope: target.releaseScope,
       baseReleaseDigest: target.baseReleaseDigest,
-      changedComponents: target.changedComponents
+      changedComponents: target.changedComponents,
+      componentPublication: target.componentPublication
     }
   );
   return { base, target };
@@ -226,7 +227,8 @@ test('installed pre-OSAA lock is accepted only as the exact base of a complete o
       {
         releaseScope: partial.releaseScope,
         baseReleaseDigest: partial.baseReleaseDigest,
-        changedComponents: partial.changedComponents
+        changedComponents: partial.changedComponents,
+        componentPublication: partial.componentPublication
       }
     );
     assert.throws(
@@ -970,7 +972,8 @@ test('component release preserves the independently versioned CLI artifact byte-
       releaseScope: target.releaseScope,
       baseReleaseDigest: target.baseReleaseDigest,
       changedComponents: target.changedComponents,
-      auxiliaryArtifacts: target.auxiliaryArtifacts
+      auxiliaryArtifacts: target.auxiliaryArtifacts,
+      componentPublication: target.componentPublication
     }
   );
   assert.equal(validateReleaseTransition(base, target), target);
@@ -985,7 +988,8 @@ test('component release preserves the independently versioned CLI artifact byte-
       releaseScope: target.releaseScope,
       baseReleaseDigest: target.baseReleaseDigest,
       changedComponents: target.changedComponents,
-      auxiliaryArtifacts: target.auxiliaryArtifacts
+      auxiliaryArtifacts: target.auxiliaryArtifacts,
+      componentPublication: target.componentPublication
     }
   );
   assert.throws(() => validateReleaseTransition(base, target), /cannot change auxiliary runtime artifacts/u);

@@ -173,7 +173,8 @@ function agentIdentityCutoverLocks() {
     {
       releaseScope: target.releaseScope,
       baseReleaseDigest: target.baseReleaseDigest,
-      changedComponents: target.changedComponents
+      changedComponents: target.changedComponents,
+      componentPublication: target.componentPublication
     }
   );
   return { previous, target };
