@@ -154,7 +154,11 @@ export const MANAGED_CLUSTER_POLICIES = Object.freeze([
 
 export const BASE_MANIFESTS = Object.freeze([
   { path: 'backend/dupa-control/platform-support-profile-crd.yaml' },
-  { path: 'backend/dupa-control/ui-plugin-crds.yaml' },
+  {
+    path: 'backend/dupa-control/ui-plugin-crds.yaml',
+    componentOwners: ['dupaController'],
+    applyWholeForComponentRelease: true
+  },
   { path: 'backend/dupa-control/dupa-trusted-keys.yaml' },
   { path: 'backend/dupa-control/clidownload-rbac.yaml' },
   {
@@ -320,7 +324,10 @@ function baseManifestSpecs(lock) {
 }
 
 function manifestSpecComponents(spec) {
-  return new Set((spec.replacements ?? []).map(([, component]) => component));
+  return new Set([
+    ...(spec.componentOwners ?? []),
+    ...(spec.replacements ?? []).map(([, component]) => component)
+  ]);
 }
 
 export function componentReleaseManifestSpecs(
@@ -880,6 +887,17 @@ export function componentReleaseWorkloadManifests(
     for (const source of sources) {
       const baseSpec = baseManifestSpecs(lock).find(({ path }) => path === source.path);
       const completeOwners = baseSpec ? manifestSpecComponents(baseSpec) : new Set();
+      if (
+        baseSpec?.applyWholeForComponentRelease === true
+        && completeOwners.size === 1
+        && completeOwners.has(component)
+      ) {
+        selected.set(`${source.path}#complete`, {
+          path: `${source.path}#${component}`,
+          yaml: source.yaml.endsWith('\n') ? source.yaml : `${source.yaml}\n`
+        });
+        continue;
+      }
       if (completeOwners.size === 1 && completeOwners.has(component)) {
         if (!imageLine.test(source.yaml)) continue;
         found = true;
