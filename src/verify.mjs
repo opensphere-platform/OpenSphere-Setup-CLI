@@ -238,6 +238,7 @@ function verifyServiceEndpoints(lock) {
 }
 
 export function isRuntimeServicePod(pod) {
+  if (['Succeeded', 'Failed'].includes(pod.status?.phase)) return false;
   return !(pod.metadata?.ownerReferences ?? []).some((owner) => owner.kind === 'Job');
 }
 
@@ -275,7 +276,7 @@ function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null 
     }
     expected.add(expectedImage);
     resources.push(`${spec.namespace}/${spec.kind}/${spec.name}`);
-    if (selectedComponents?.has(spec.component)) {
+    if (!selectedComponents || selectedComponents.has(spec.component)) {
       if (spec.kind !== 'cronjob' && !workloadReady(resource)) {
         throw new Error(`Changed workload is not Ready: ${spec.namespace}/${spec.kind}/${spec.name}`);
       }
@@ -290,31 +291,27 @@ function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null 
   if (missing.length) throw new Error(`Release components are not represented by base workloads: ${missing.join(', ')}`);
 
   const allPods = getJson(['get', 'pods', '-A']).items.filter(isRuntimeServicePod);
-  const pods = selectedComponents
-    ? allPods.filter((pod) => selectedWorkloads.some(({ spec, resource, expectedImage }) => {
-      if (spec.kind === 'cronjob' || pod.metadata?.namespace !== spec.namespace) return false;
-      const labels = resource.spec?.selector?.matchLabels ?? {};
-      return Object.entries(labels).every(([key, value]) => pod.metadata?.labels?.[key] === value)
-        && (pod.spec?.containers ?? []).some(
-          ({ name, image }) => name === spec.container && image === expectedImage
-        );
-    }))
-    : allPods.filter((pod) => NAMESPACES.includes(pod.metadata?.namespace));
-  if (selectedComponents) {
-    for (const { spec, resource, expectedImage } of selectedWorkloads) {
-      if (spec.kind === 'cronjob') continue;
-      const labels = resource.spec?.selector?.matchLabels ?? {};
-      const matching = pods.filter((pod) => (
-        pod.metadata?.namespace === spec.namespace
-        && Object.entries(labels).every(([key, value]) => pod.metadata?.labels?.[key] === value)
-        && (pod.spec?.containers ?? []).some(
-          ({ name, image }) => name === spec.container && image === expectedImage
-        )
-      ));
-      const replicas = Number(resource.spec?.replicas ?? 1);
-      if (matching.length < replicas) {
-        throw new Error(`Changed workload has no complete target Pod set: ${spec.namespace}/${spec.kind}/${spec.name}`);
-      }
+  const pods = allPods.filter((pod) => selectedWorkloads.some(({ spec, resource, expectedImage }) => {
+    if (spec.kind === 'cronjob' || pod.metadata?.namespace !== spec.namespace) return false;
+    const labels = resource.spec?.selector?.matchLabels ?? {};
+    return Object.entries(labels).every(([key, value]) => pod.metadata?.labels?.[key] === value)
+      && (pod.spec?.containers ?? []).some(
+        ({ name, image }) => name === spec.container && image === expectedImage
+      );
+  }));
+  for (const { spec, resource, expectedImage } of selectedWorkloads) {
+    if (spec.kind === 'cronjob') continue;
+    const labels = resource.spec?.selector?.matchLabels ?? {};
+    const matching = pods.filter((pod) => (
+      pod.metadata?.namespace === spec.namespace
+      && Object.entries(labels).every(([key, value]) => pod.metadata?.labels?.[key] === value)
+      && (pod.spec?.containers ?? []).some(
+        ({ name, image }) => name === spec.container && image === expectedImage
+      )
+    ));
+    const replicas = Number(resource.spec?.replicas ?? 1);
+    if (matching.length < replicas) {
+      throw new Error(`Changed workload has no complete target Pod set: ${spec.namespace}/${spec.kind}/${spec.name}`);
     }
   }
   const nonRunning = pods.filter((pod) => pod.status?.phase !== 'Running');

@@ -11,7 +11,17 @@ test('installation readiness ignores completed and failed Job history pods', () 
     metadata: { ownerReferences: [{ apiVersion: 'batch/v1', kind: 'Job', controller: true }] },
     status: { phase: 'Failed' }
   };
+  const completedInspectionPod = {
+    metadata: { ownerReferences: [] },
+    status: { phase: 'Succeeded' }
+  };
+  const replacedFailedServicePod = {
+    metadata: { ownerReferences: [{ apiVersion: 'apps/v1', kind: 'ReplicaSet', controller: true }] },
+    status: { phase: 'Failed' }
+  };
 
   assert.equal(isRuntimeServicePod(deploymentPod), true);
   assert.equal(isRuntimeServicePod(failedReleaseJobPod), false);
+  assert.equal(isRuntimeServicePod(completedInspectionPod), false);
+  assert.equal(isRuntimeServicePod(replacedFailedServicePod), false);
 });
