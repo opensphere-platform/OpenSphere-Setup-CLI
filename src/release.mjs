@@ -708,9 +708,13 @@ async function verifyLocalEdgeLock(lock, {
   registryCredentials,
   requiredPlatforms = defaultEdgePlatforms(),
   onProgress,
+  allowLegacyComponentSet = false,
   allowInstalledAgentIdentityCutover = false
 } = {}) {
-  const validated = validateLock(lock, { allowInstalledAgentIdentityCutover });
+  const validated = validateLock(lock, {
+    allowLegacyComponentSet,
+    allowInstalledAgentIdentityCutover
+  });
   if (canonicalTrust(validated.trust) !== LOCAL_EDGE_TRUST || validated.channel !== 'edge') {
     throw new Error('Only a localhost edge lock may use local image verification');
   }
@@ -808,6 +812,7 @@ export async function verifyReleaseLock(lock, {
       registryCredentials,
       requiredPlatforms,
       onProgress,
+      allowLegacyComponentSet,
       allowInstalledAgentIdentityCutover
     });
   }

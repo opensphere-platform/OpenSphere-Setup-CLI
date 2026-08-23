@@ -410,6 +410,35 @@ test('localhost edge lock revalidation inspects immutable images without demandi
   assert.match(verified.localVerifiedAt, /^\d{4}-\d{2}-\d{2}T/);
 });
 
+test('localhost edge revalidation accepts a pre-OSDST lock only as an explicit legacy baseline', async () => {
+  const edge = validLock('edge');
+  delete edge.components.osdst;
+  edge.trust = LOCAL_EDGE_TRUST;
+  edge.releaseDigest = calculateReleaseDigest('edge', edge.components, LOCAL_EDGE_TRUST);
+  const labels = {
+    'io.opensphere.channel': 'edge',
+    'io.opensphere.release-tag': '202608232239',
+    'io.opensphere.source-revision': REVISION,
+    'opensphere.io/build-authority': 'localhost',
+    'opensphere.io/release-class': 'pre-ga',
+    'opensphere.io/ga-eligible': 'false'
+  };
+
+  await assert.rejects(
+    verifyReleaseLock(edge, { async inspectImageFn() { throw new Error('must not inspect'); } }),
+    /component set is not canonical/
+  );
+  const verified = await verifyReleaseLock(edge, {
+    allowLegacyComponentSet: true,
+    requiredPlatforms: ['linux/amd64'],
+    async inspectImageFn(repository, image) {
+      return { image, sourceRevision: REVISION, labels, registryCredentialsRequired: false };
+    }
+  });
+  assert.equal(Object.hasOwn(verified.components, 'osdst'), false);
+  assert.match(verified.localVerifiedAt, /^\d{4}-\d{2}-\d{2}T/);
+});
+
 test('release lock rejects tag-only references', () => {
   const lock = validLock();
   lock.components.console.image = 'ghcr.io/opensphere-platform/opensphere-console:edge';
