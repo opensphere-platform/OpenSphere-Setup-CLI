@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import {
   BASE_MANIFESTS,
   baseManifestSpecs,
+  coreRolloutsForLock,
   CORE_ROLLOUTS,
   FOUNDATION_ARTIFACT_PATHS,
   GITEA_MANIFEST,
@@ -155,6 +156,25 @@ test('pre-OSDST rollback materializes only manifests present in its release lock
   assert.equal(
     baseManifestSpecs(preOsdstLock).some(({ path }) => path === 'backend/opensphere-osdst/deploy.yaml'),
     false
+  );
+});
+
+test('pre-OSDST rollback waits only for workloads present in its release lock', () => {
+  const currentLock = localReleaseLock();
+  assert.equal(
+    coreRolloutsForLock(currentLock).some(([, resource]) => resource === 'deployment/opensphere-osdst'),
+    true
+  );
+
+  const preOsdstLock = structuredClone(currentLock);
+  delete preOsdstLock.components.osdst;
+  assert.equal(
+    coreRolloutsForLock(preOsdstLock).some(([, resource]) => resource === 'deployment/opensphere-osdst'),
+    false
+  );
+  assert.equal(
+    coreRolloutsForLock(preOsdstLock).some(([, resource]) => resource === 'deployment/os-cli'),
+    true
   );
 });
 

@@ -1118,11 +1118,15 @@ function waitForRollouts(rollouts, progress) {
   }
 }
 
+export function coreRolloutsForLock(lock) {
+  return CORE_ROLLOUTS.filter(([, resource]) => (
+    (resource !== 'deployment/os-cli' || Boolean(lock?.auxiliaryArtifacts?.cliArtifacts))
+    && (resource !== 'deployment/opensphere-osdst' || Boolean(lock?.components?.osdst))
+  ));
+}
+
 function waitForCoreRollouts(lock, progress) {
-  const rollouts = lock?.auxiliaryArtifacts?.cliArtifacts
-    ? CORE_ROLLOUTS
-    : CORE_ROLLOUTS.filter(([, resource]) => resource !== 'deployment/os-cli');
-  waitForRollouts(rollouts, progress);
+  waitForRollouts(coreRolloutsForLock(lock), progress);
 }
 
 export function waitForComponentRollouts(changedComponents, progress) {

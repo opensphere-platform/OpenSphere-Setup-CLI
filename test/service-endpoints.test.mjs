@@ -61,3 +61,16 @@ test('a lock-bound CLI artifact requires its independent Service endpoint', () =
     required.length + 1
   );
 });
+
+test('pre-OSDST rollback does not require an OSDST Service endpoint', () => {
+  const { services, slices } = fixture();
+  const withoutOsdst = (item) => item.metadata?.name !== 'opensphere-osdst';
+  assert.equal(
+    verifyRequiredServiceEndpoints(
+      services.filter(withoutOsdst),
+      slices.filter(withoutOsdst),
+      { includeOsdst: false }
+    ).length,
+    required.length - 1
+  );
+});

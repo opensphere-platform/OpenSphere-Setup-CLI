@@ -31,8 +31,7 @@ const REQUIRED_SECRETS = Object.freeze({
   'opensphere-console/opensphere-supabase-runtime': ['jwt-secret', 'service-role-key'],
   'opensphere-console/opensphere-osaa-runtime': [
     'pg-password', 'observer-pg-user', 'observer-pg-password',
-    'relay-pg-user', 'relay-pg-password',
-    'maintenance-pg-user', 'maintenance-pg-password'
+    'relay-pg-user', 'relay-pg-password'
   ],
   'opensphere-console/opensphere-gitea-control-plane': [
     'token', 'review-token', 'webhook-secret', 'reconciler-token'
@@ -40,6 +39,13 @@ const REQUIRED_SECRETS = Object.freeze({
   'opensphere-console/opensphere-console-cli-runtime': ['jwt-secret'],
   'opensphere-console/opensphere-notification-runtime': [
     'encryption-key', 'internal-token', 'event-token'
+  ]
+});
+
+const OSDST_REQUIRED_SECRETS = Object.freeze({
+  'opensphere-console/opensphere-osaa-maintenance-runtime': [
+    'operational-pg-user', 'operational-pg-password',
+    'dialogue-pg-user', 'dialogue-pg-password'
   ]
 });
 
@@ -143,15 +149,22 @@ function verifyInstallationLock(lock, { allowLegacyComponentSet = false } = {}) 
   return config;
 }
 
-function verifySecrets() {
-  for (const [reference, keys] of Object.entries(REQUIRED_SECRETS)) {
+export function requiredSecretsForLock(lock) {
+  return lock?.components?.osdst
+    ? { ...REQUIRED_SECRETS, ...OSDST_REQUIRED_SECRETS }
+    : { ...REQUIRED_SECRETS };
+}
+
+function verifySecrets(lock) {
+  const requiredSecrets = requiredSecretsForLock(lock);
+  for (const [reference, keys] of Object.entries(requiredSecrets)) {
     const [namespace, name] = reference.split('/');
     const secret = getJson(['-n', namespace, 'get', 'secret', name]);
     for (const key of keys) {
       if (!secret.data?.[key]) throw new Error(`Required Secret key is missing: ${reference}/${key}`);
     }
   }
-  return Object.keys(REQUIRED_SECRETS).length;
+  return Object.keys(requiredSecrets).length;
 }
 
 function verifyRegistryPullPath(lock) {
@@ -184,15 +197,22 @@ function verifyPersistentStorage(expectedStorageClass) {
   return REQUIRED_PVCS.length;
 }
 
-export function verifyRequiredServiceEndpoints(services, endpointSlices, { includeCliArtifacts = false } = {}) {
+export function verifyRequiredServiceEndpoints(
+  services,
+  endpointSlices,
+  { includeCliArtifacts = false, includeOsdst = true } = {}
+) {
   const serviceByReference = new Map(services.map((service) => [
     `${service.metadata.namespace}/${service.metadata.name}`,
     service
   ]));
   const evidence = [];
+  const baseRequired = includeOsdst
+    ? REQUIRED_SERVICES
+    : REQUIRED_SERVICES.filter(([, name]) => name !== 'opensphere-osdst');
   const required = includeCliArtifacts
-    ? [...REQUIRED_SERVICES, ...AUXILIARY_SERVICES]
-    : REQUIRED_SERVICES;
+    ? [...baseRequired, ...AUXILIARY_SERVICES]
+    : baseRequired;
   for (const [namespace, name] of required) {
     const reference = `${namespace}/${name}`;
     if (!serviceByReference.has(reference)) throw new Error(`Required Service is missing: ${reference}`);
@@ -212,7 +232,8 @@ function verifyServiceEndpoints(lock) {
   const services = getJson(['get', 'services', '-A']).items ?? [];
   const endpointSlices = getJson(['get', 'endpointslices.discovery.k8s.io', '-A']).items ?? [];
   return verifyRequiredServiceEndpoints(services, endpointSlices, {
-    includeCliArtifacts: Boolean(lock.auxiliaryArtifacts?.cliArtifacts)
+    includeCliArtifacts: Boolean(lock.auxiliaryArtifacts?.cliArtifacts),
+    includeOsdst: Boolean(lock.components?.osdst)
   });
 }
 
@@ -235,6 +256,7 @@ function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null 
   const selectedWorkloads = [];
   for (const spec of WORKLOADS) {
     if (spec.artifact && !lock.auxiliaryArtifacts?.[spec.artifact]) continue;
+    if (spec.component && !lock.components?.[spec.component]) continue;
     const resource = getJson(['-n', spec.namespace, 'get', spec.kind, spec.name]);
     const podSpec = spec.kind === 'cronjob'
       ? resource.spec?.jobTemplate?.spec?.template?.spec
@@ -558,7 +580,7 @@ export async function verifyInstallation(lock, {
     throw new Error('Supabase/Gitea off-backbone integrated recovery drill is not implemented; promotion verification fails closed');
   }
   const config = verifyInstallationLock(lock, { allowLegacyComponentSet });
-  const secretCount = verifySecrets();
+  const secretCount = verifySecrets(lock);
   const registryPull = verifyRegistryPullPath(lock);
   const pvcCount = verifyPersistentStorage(config.storageClass);
   const serviceEndpoints = await eventuallyReady(async () => verifyServiceEndpoints(lock));
