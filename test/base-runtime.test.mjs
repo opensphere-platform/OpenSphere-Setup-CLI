@@ -110,6 +110,8 @@ test('Setup consumes the Console digest-bound migration manifest without a handw
   assert.doesNotMatch(bootstrapSource, /0034_agent_action_ledger\.sql/);
   assert.equal(FOUNDATION_ARTIFACT_PATHS.includes('backend/supabase/migrate-only.ps1'), false,
     'integrated rollback must not require a component-only runner from an older source revision');
+  assert.equal(FOUNDATION_ARTIFACT_PATHS.includes('backend/supabase/migration-transaction.ps1'), true,
+    'the Supabase installer must materialize its dot-sourced transaction helper');
   assert.match(bootstrapSource, /migrationSourceRevision: targetLock\.sourceRevision/,
     'integrated rollback must use the target digest-bound forward-only migration set');
   assert.match(bootstrapSource, /migrationEvidence: targetLock\.releaseBom\?\.migrationManifest/,

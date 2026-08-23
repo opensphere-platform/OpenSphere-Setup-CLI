@@ -310,6 +310,7 @@ export const GITEA_MANIFEST = Object.freeze({
 
 export const FOUNDATION_ARTIFACT_PATHS = Object.freeze([
   'backend/supabase/install.ps1',
+  'backend/supabase/migration-transaction.ps1',
   'backend/gitea/bootstrap/install.ps1',
   'backend/gitea/bootstrap/configure-signing.ps1',
   'backend/gitea/bootstrap/control-plane-bootstrap.ps1'
