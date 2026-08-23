@@ -331,10 +331,13 @@ function foundationArtifactPaths(lock) {
   return FOUNDATION_ARTIFACT_PATHS;
 }
 
-function baseManifestSpecs(lock) {
+export function baseManifestSpecs(lock) {
   let specs = isPreRecoveryRelease(lock)
     ? BASE_MANIFESTS.filter(({ path }) => !LEGACY_RECOVERY_MANIFESTS.has(path))
     : BASE_MANIFESTS;
+  if (!lock?.components?.osdst) {
+    specs = specs.filter(({ path }) => path !== 'backend/opensphere-osdst/deploy.yaml');
+  }
   if (hasLegacyInstalledAgentIdentity(lock?.components)) {
     specs = specs
       .filter((spec) => ![...manifestSpecComponents(spec)].some((component) =>

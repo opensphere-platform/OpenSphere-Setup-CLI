@@ -11,7 +11,7 @@ test('artifact preflight materializes the complete release and always removes it
   const result = await preflightReleaseArtifacts(
     {
       sourceRevision: 'a'.repeat(40),
-      components: { recovery: {} },
+      components: { recovery: {}, osdst: {} },
       auxiliaryArtifacts: { cliArtifacts: { image: `ghcr.io/example@sha256:${'b'.repeat(64)}` } }
     },
     {

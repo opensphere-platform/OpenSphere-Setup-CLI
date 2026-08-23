@@ -5,6 +5,7 @@ import { resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   BASE_MANIFESTS,
+  baseManifestSpecs,
   CORE_ROLLOUTS,
   FOUNDATION_ARTIFACT_PATHS,
   GITEA_MANIFEST,
@@ -138,6 +139,21 @@ test('base Main Shell includes Backend, DUPA, notification, OSAA, governed adapt
     'deploy/opensphere-console.yaml'
   ]) assert.equal(paths.includes(path), true, path);
   assert.equal(paths.some((path) => /kanidm|backbone/.test(path)), false);
+});
+
+test('pre-OSDST rollback materializes only manifests present in its release lock', () => {
+  const currentLock = localReleaseLock();
+  assert.equal(
+    baseManifestSpecs(currentLock).some(({ path }) => path === 'backend/opensphere-osdst/deploy.yaml'),
+    true
+  );
+
+  const preOsdstLock = structuredClone(currentLock);
+  delete preOsdstLock.components.osdst;
+  assert.equal(
+    baseManifestSpecs(preOsdstLock).some(({ path }) => path === 'backend/opensphere-osdst/deploy.yaml'),
+    false
+  );
 });
 
 test('rollout order establishes Supabase, Gitea and the CLI artifact before Main Shell', () => {
