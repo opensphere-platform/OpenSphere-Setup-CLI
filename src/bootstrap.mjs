@@ -1252,7 +1252,14 @@ export async function migrateLegacyInstallationLock() {
   const lock = readStoredInstallationLock();
   if (!lock || lock.releaseBom) return null;
   if (isLocalEdgeLock(lock)) {
-    validateLock(lock, { allowInstalledAgentIdentityCutover: true });
+    // An installed edge lock is a rollback/upgrade baseline, not a newly
+    // resolved target. Accept the two historical component sets here for the
+    // same reason readInstallationLock() and upgrade() do: the target release
+    // remains strict and adds any newly governed runtime (for example OSDST).
+    validateLock(lock, {
+      allowLegacyComponentSet: true,
+      allowInstalledAgentIdentityCutover: true
+    });
     return null;
   }
   throw new Error('Legacy Kanidm/PostgreSQL/RustFS installation lock detected; fresh Supabase bootstrap refuses in-place trust migration');

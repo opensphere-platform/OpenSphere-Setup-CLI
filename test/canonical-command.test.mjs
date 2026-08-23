@@ -7,6 +7,7 @@ const installer = readFileSync(new URL('../Install-OpenSphereSetup.ps1', import.
 const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
 const ci = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const entrypoint = readFileSync(new URL('../src/cli.mjs', import.meta.url), 'utf8');
+const bootstrap = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
 
 test('opensphere-setup is the canonical installed package command', () => {
   assert.deepEqual(pkg.bin, { 'opensphere-setup': 'src/cli.mjs' });
@@ -25,4 +26,14 @@ test('operator documentation and CI smoke test use the canonical command', () =>
   assert.match(ci, /Install-OpenSphereSetup\.ps1/);
   assert.match(ci, /opensphere-setup version/);
   assert.doesNotMatch(ci, /opensphere-setup (?:bootstrap|verify|upgrade)/);
+});
+
+test('upgrade preflight accepts historical installed component sets only as baselines', () => {
+  const migrationGuard = bootstrap.match(
+    /export async function migrateLegacyInstallationLock\(\)[\s\S]*?\r?\n}\r?\n/
+  )?.[0] ?? '';
+
+  assert.match(migrationGuard, /isLocalEdgeLock\(lock\)/);
+  assert.match(migrationGuard, /allowLegacyComponentSet:\s*true/);
+  assert.match(migrationGuard, /allowInstalledAgentIdentityCutover:\s*true/);
 });
