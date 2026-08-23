@@ -31,8 +31,11 @@ const REQUIRED_SECRETS = Object.freeze({
   'opensphere-console/opensphere-supabase-runtime': ['jwt-secret', 'service-role-key'],
   'opensphere-console/opensphere-osaa-runtime': [
     'pg-password', 'observer-pg-user', 'observer-pg-password',
-    'relay-pg-user', 'relay-pg-password',
-    'maintenance-pg-user', 'maintenance-pg-password'
+    'relay-pg-user', 'relay-pg-password'
+  ],
+  'opensphere-console/opensphere-osaa-maintenance-runtime': [
+    'operational-pg-user', 'operational-pg-password',
+    'dialogue-pg-user', 'dialogue-pg-password'
   ],
   'opensphere-console/opensphere-gitea-control-plane': [
     'token', 'review-token', 'webhook-secret', 'reconciler-token'
