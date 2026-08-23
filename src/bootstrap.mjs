@@ -214,6 +214,13 @@ export const BASE_MANIFESTS = Object.freeze([
     ]]
   },
   {
+    path: 'backend/opensphere-osdst/deploy.yaml',
+    replacements: [[
+      '(?:ghcr\\.io/opensphere-platform/)?opensphere-osdst(?:@sha256:[A-Za-z0-9_]+|:[A-Za-z0-9][A-Za-z0-9._-]*)',
+      'osdst'
+    ]]
+  },
+  {
     path: 'backend/osaa-governed-adapter/deploy.yaml',
     replacements: [[
       '(?:ghcr\\.io/opensphere-platform/)?opensphere-osaa-governed-adapter(?:@sha256:[A-Za-z0-9_]+|:[A-Za-z0-9][A-Za-z0-9._-]*)',
@@ -237,7 +244,7 @@ export const BASE_MANIFESTS = Object.freeze([
 ]);
 
 export const SUPABASE_MIGRATION_MANIFEST = 'backend/supabase/migrations/manifest.json';
-const MIGRATION_OWNER_COMPONENTS = Object.freeze(['console', 'backend', 'osaaGateway']);
+const MIGRATION_OWNER_COMPONENTS = Object.freeze(['console', 'backend', 'osaaGateway', 'osdst']);
 
 function sha256Text(value) {
   return createHash('sha256').update(String(value).replace(/\r\n/gu, '\n'), 'utf8').digest('hex');
@@ -400,6 +407,7 @@ export const CORE_ROLLOUTS = Object.freeze([
   ['opensphere-console', 'deployment/opensphere-notification-dispatcher', '600s'],
   ['opensphere-console', 'deployment/opensphere-external-channel-executor', '600s'],
   ['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s'],
+  ['opensphere-console', 'deployment/opensphere-osdst', '600s'],
   ['opensphere-console', 'deployment/osaa-governed-adapter', '600s'],
   ['opensphere-console', 'deployment/os-cli', '600s'],
   ['opensphere-console', 'deployment/opensphere-console', '600s']
@@ -414,6 +422,7 @@ export const COMPONENT_ROLLOUTS = Object.freeze({
   ],
   dupaController: [['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s']],
   osaaGateway: [['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']],
+  osdst: [['opensphere-console', 'deployment/opensphere-osdst', '600s']],
   osaaGovernedAdapter: [['opensphere-console', 'deployment/osaa-governed-adapter', '600s']],
   notificationDispatcher: [
     ['opensphere-console', 'deployment/opensphere-notification-dispatcher', '600s'],

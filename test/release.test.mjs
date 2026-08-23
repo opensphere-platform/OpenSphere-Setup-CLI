@@ -8,6 +8,7 @@ import {
   BASE_RUNTIME_COMPONENTS,
   COMPONENTS,
   LEGACY_BASE_RUNTIME_COMPONENTS,
+  PRE_OSDST_BASE_RUNTIME_COMPONENTS,
   LEGACY_RELEASE_TRUST,
   LOCAL_EDGE_TRUST,
   RETIRED_EDGE_ATTESTATION_TRUST,
@@ -164,6 +165,7 @@ test('canonical baseline contains the complete Supabase/Gitea release repositori
     'opensphere-console-backend',
     'opensphere-console-dupa-controller',
     'opensphere-console-osaa-gateway',
+    'opensphere-osdst',
     'opensphere-osaa-governed-adapter',
     'opensphere-console-notification-dispatcher',
     'opensphere-console-gitea',
@@ -179,12 +181,14 @@ test('canonical baseline contains the complete Supabase/Gitea release repositori
 
 test('base runtime requires OSAA Core as native Main Shell runtime', () => {
   assert.deepEqual(BASE_RUNTIME_COMPONENTS, [
-    'console', 'backend', 'dupaController', 'osaaGateway', 'osaaGovernedAdapter',
+    'console', 'backend', 'dupaController', 'osaaGateway', 'osdst', 'osaaGovernedAdapter',
     'notificationDispatcher', 'gitea', 'supabasePostgres', 'supabaseAuth',
     'supabaseRest', 'supabaseStorage', 'giteaPostgres', 'recovery'
   ]);
   assert.equal(BASE_RUNTIME_COMPONENTS.includes('osaaGateway'), true);
-  assert.deepEqual(LEGACY_BASE_RUNTIME_COMPONENTS, BASE_RUNTIME_COMPONENTS.slice(0, -1));
+  assert.equal(BASE_RUNTIME_COMPONENTS.includes('osdst'), true);
+  assert.deepEqual(PRE_OSDST_BASE_RUNTIME_COMPONENTS, BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'osdst'));
+  assert.deepEqual(LEGACY_BASE_RUNTIME_COMPONENTS, BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'osdst' && name !== 'recovery'));
 });
 
 test('installed pre-OSAA lock is accepted only as the exact base of a complete one-way identity cutover', () => {
@@ -1001,6 +1005,7 @@ test('release lock rejects missing or additional components', () => {
 test('pre-recovery component locks are accepted only as explicit installed rollback baselines', async () => {
   const bom = validBom();
   delete bom.components.recovery;
+  delete bom.components.osdst;
   delete bom.artifacts;
   const releaseBom = {
     predicateType: RELEASE_BOM_PREDICATE,

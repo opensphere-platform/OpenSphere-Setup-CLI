@@ -62,6 +62,7 @@ const REQUIRED_SERVICES = Object.freeze([
   ['opensphere-console', 'opensphere-notification-dispatcher'],
   ['opensphere-console', 'opensphere-external-channel-executor'],
   ['opensphere-console', 'opensphere-console-osaa-gateway'],
+  ['opensphere-console', 'opensphere-osdst'],
   ['opensphere-console', 'osaa-governed-adapter'],
   ['opensphere-console', 'opensphere-console-ext']
 ]);
@@ -83,6 +84,7 @@ const WORKLOADS = Object.freeze([
   { component: 'notificationDispatcher', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-notification-dispatcher', container: 'dispatcher' },
   { component: 'notificationDispatcher', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-external-channel-executor', container: 'executor' },
   { component: 'osaaGateway', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-osaa-gateway', container: 'gateway' },
+  { component: 'osdst', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-osdst', container: 'osdst' },
   { component: 'osaaGovernedAdapter', namespace: 'opensphere-console', kind: 'deployment', name: 'osaa-governed-adapter', container: 'reconciler' },
   { artifact: 'cliArtifacts', namespace: 'opensphere-console', kind: 'deployment', name: 'os-cli', container: 'serve' },
   { component: 'console', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console', container: 'shell' }

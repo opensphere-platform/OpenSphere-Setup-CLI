@@ -80,8 +80,8 @@ test('Setup consumes the Console digest-bound migration manifest without a handw
   const raw = readFileSync(new URL(SUPABASE_MIGRATION_MANIFEST, CONSOLE_SOURCE), 'utf8');
   const manifest = parseSupabaseMigrationManifest(raw);
   assert.equal(manifest.migrations[0].name, '0001_console_backbone.sql');
-  assert.equal(manifest.latestMigrationId, '0063');
-  assert.equal(manifest.migrations.at(-1).name, '0063_osaa_canonical_identity_and_conversations.sql');
+  assert.equal(manifest.latestMigrationId, '0073');
+  assert.equal(manifest.migrations.at(-1).name, '0073_osdst_single_maintenance_owner.sql');
   assert.equal(new Set(manifest.migrations.map(({ id }) => id)).size, manifest.migrations.length);
   assert.equal(manifest.schemaVersion, 2);
   const legacyV1 = structuredClone(manifest);
@@ -130,6 +130,7 @@ test('base Main Shell includes Backend, DUPA, notification, OSAA, governed adapt
     'backend/notification-dispatcher/deploy.yaml',
     'backend/recovery/recovery-jobs.yaml',
     'backend/opensphere-console-osaa-gateway/deploy.yaml',
+    'backend/opensphere-osdst/deploy.yaml',
     'backend/osaa-governed-adapter/deploy.yaml',
     'deploy/production-hardening.yaml',
     'deploy/manual-ui-admission-policy.yaml',
@@ -148,17 +149,20 @@ test('rollout order establishes Supabase, Gitea and the CLI artifact before Main
   const backend = index('opensphere-console', 'deployment/opensphere-console-backend');
   const foundationBootstrap = index('opensphere-console', 'deployment/foundation-bootstrap-reconciler');
   const osaa = index('opensphere-console', 'deployment/opensphere-console-osaa-gateway');
+  const osdst = index('opensphere-console', 'deployment/opensphere-osdst');
   const cliArtifact = index('opensphere-console', 'deployment/os-cli');
   const shell = index('opensphere-console', 'deployment/opensphere-console');
   assert.ok(supabase >= 0 && gitea >= 0 && backend >= 0 && foundationBootstrap >= 0
-    && osaa >= 0 && cliArtifact >= 0 && shell >= 0);
+    && osaa >= 0 && osdst >= 0 && cliArtifact >= 0 && shell >= 0);
   assert.ok(supabase < backend);
   assert.ok(gitea < backend);
   assert.ok(backend < foundationBootstrap);
   assert.ok(foundationBootstrap < osaa);
   assert.ok(backend < osaa);
+  assert.ok(backend < osdst);
   assert.ok(cliArtifact < shell);
   assert.ok(osaa < shell);
+  assert.ok(osdst < shell);
 });
 
 test('fresh install downloads os only after the lock-bound CLI artifact and Console are Ready', () => {

@@ -74,6 +74,7 @@ function lock(revision, digestCharacter) {
 function preRecoveryLock(revision, digestCharacter) {
   const previous = lock(revision, digestCharacter);
   delete previous.components.recovery;
+  delete previous.components.osdst;
   const bom = {
     apiVersion: RELEASE_API_VERSION,
     kind: 'OpenSphereReleaseBOM',

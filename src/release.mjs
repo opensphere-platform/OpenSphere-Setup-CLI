@@ -80,6 +80,7 @@ export const COMPONENTS = Object.freeze({
   backend: 'opensphere-console-backend',
   dupaController: 'opensphere-console-dupa-controller',
   osaaGateway: 'opensphere-console-osaa-gateway',
+  osdst: 'opensphere-osdst',
   osaaGovernedAdapter: 'opensphere-osaa-governed-adapter',
   notificationDispatcher: 'opensphere-console-notification-dispatcher',
   gitea: 'opensphere-console-gitea',
@@ -94,7 +95,7 @@ export const COMPONENTS = Object.freeze({
 const LEGACY_INSTALLED_COMPONENTS = legacyInstalledComponentMap(COMPONENTS);
 
 // Runtime-distributed artifacts are independently published and deployed but
-// are not part of the canonical 13-component Platform Release lifecycle. They
+// are not part of the canonical 14-component Platform Release lifecycle. They
 // remain digest-pinned in the installation lock so a mutable auxiliary tag can
 // never decide which executable a fresh cluster serves.
 export const AUXILIARY_ARTIFACTS = Object.freeze({
@@ -110,6 +111,7 @@ export const BASE_RUNTIME_COMPONENTS = Object.freeze([
   'backend',
   'dupaController',
   'osaaGateway',
+  'osdst',
   'osaaGovernedAdapter',
   'notificationDispatcher',
   'gitea',
@@ -121,11 +123,16 @@ export const BASE_RUNTIME_COMPONENTS = Object.freeze([
   'recovery'
 ]);
 
-// Releases published before the governed recovery executor was introduced
-// contain this exact component set. They may be used only as an already
-// installed edge rollback baseline; newly resolved releases remain strict.
+// Installed releases from before OSDST became an independent CBSS service are
+// accepted only as upgrade baselines. Newly resolved releases remain strict.
+export const PRE_OSDST_BASE_RUNTIME_COMPONENTS = Object.freeze(
+  BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'osdst')
+);
+
+// Releases published before both recovery and OSDST were governed contain
+// this exact historical set. They remain rollback/upgrade baselines only.
 export const LEGACY_BASE_RUNTIME_COMPONENTS = Object.freeze(
-  BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'recovery')
+  BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'recovery' && name !== 'osdst')
 );
 
 // Promotion channels remain multi-platform. Edge may contain only the
@@ -476,7 +483,7 @@ function canonicalComponentNames(components, { allowLegacyComponentSet = false }
   const names = Object.keys(components ?? {});
   const candidates = [
     Object.keys(COMPONENTS),
-    ...(allowLegacyComponentSet ? [LEGACY_BASE_RUNTIME_COMPONENTS] : [])
+    ...(allowLegacyComponentSet ? [PRE_OSDST_BASE_RUNTIME_COMPONENTS, LEGACY_BASE_RUNTIME_COMPONENTS] : [])
   ];
   return candidates.find((expected) =>
     names.length === expected.length && expected.every((name) => names.includes(name))
