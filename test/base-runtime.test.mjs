@@ -80,8 +80,8 @@ test('Setup consumes the Console digest-bound migration manifest without a handw
   const raw = readFileSync(new URL(SUPABASE_MIGRATION_MANIFEST, CONSOLE_SOURCE), 'utf8');
   const manifest = parseSupabaseMigrationManifest(raw);
   assert.equal(manifest.migrations[0].name, '0001_console_backbone.sql');
-  assert.equal(manifest.latestMigrationId, '0063');
-  assert.equal(manifest.migrations.at(-1).name, '0063_osaa_canonical_identity_and_conversations.sql');
+  assert.equal(manifest.latestMigrationId, '0071');
+  assert.equal(manifest.migrations.at(-1).name, '0071_osaa_dialogue_state_transition.sql');
   assert.equal(new Set(manifest.migrations.map(({ id }) => id)).size, manifest.migrations.length);
   assert.equal(manifest.schemaVersion, 2);
   const legacyV1 = structuredClone(manifest);
