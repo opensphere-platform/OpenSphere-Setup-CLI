@@ -186,6 +186,13 @@ export const BASE_MANIFESTS = Object.freeze([
     ]]
   },
   {
+    path: 'backend/registry/deploy/registry.yaml',
+    replacements: [[
+      '(?:ghcr\\.io/opensphere-platform/)?opensphere-registry(?:@sha256:[A-Za-z0-9_]+|:[A-Za-z0-9][A-Za-z0-9._-]*)',
+      'registry'
+    ]]
+  },
+  {
     path: 'backend/opensphere-console-backend/deploy.yaml',
     replacements: [[
       '(?:ghcr\\.io/opensphere-platform/)?opensphere-console-backend(?:@sha256:[A-Za-z0-9_]+|:[A-Za-z0-9][A-Za-z0-9._-]*)',
@@ -425,6 +432,7 @@ export const COMPONENT_ROLLOUTS = Object.freeze({
     ['opensphere-console', 'deployment/platform-release-reconciler', '600s']
   ],
   dupaController: [['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s']],
+  registry: [['opensphere-console', 'deployment/opensphere-registry', '600s']],
   osaaGateway: [['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']],
   osdst: [['opensphere-console', 'deployment/opensphere-osdst', '600s']],
   osaaGovernedAdapter: [['opensphere-console', 'deployment/osaa-governed-adapter', '600s']],
@@ -661,6 +669,14 @@ export function renderManifest(
   yaml = yaml.replaceAll('https://localhost:1114', normalizedConsoleUrl);
   yaml = configureShellServiceEndpoint(yaml, normalizedConsoleUrl);
   yaml = yaml.replaceAll('__OPENSPHERE_RELEASE_REVISION__', sourceRevision);
+  if (yaml.includes('__OPENSPHERE_REGISTRY_IMAGE_DIGEST__')) {
+    const registryImage = String(lock.components?.registry?.image ?? '');
+    const registryDigest = registryImage.split('@')[1] ?? '';
+    if (!/^sha256:[a-f0-9]{64}$/u.test(registryDigest)) {
+      throw new Error(`Manifest ${spec.path} lacks the governed Registry image digest`);
+    }
+    yaml = yaml.replaceAll('__OPENSPHERE_REGISTRY_IMAGE_DIGEST__', registryDigest);
+  }
   yaml = yaml.replaceAll(
     'name: AUTH_ENVIRONMENT, value: "development"',
     `name: AUTH_ENVIRONMENT, value: "${validateAuthEnvironment(authEnvironment)}"`
