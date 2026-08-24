@@ -1808,9 +1808,12 @@ export async function upgrade(
   const changedComponents = componentTransition ? targetLock.changedComponents : [];
   const agentIdentityCutover = componentTransition
     && isAgentIdentityCutover(previousLock.components, targetLock.components);
+  const introducedComponents = componentTransition
+    ? changedComponents.filter((component) => !previousLock.components?.[component])
+    : [];
   const rollbackChangedComponents = agentIdentityCutover
     ? changedComponents.map(installedNameForCanonicalComponent)
-    : changedComponents;
+    : changedComponents.filter((component) => !introducedComponents.includes(component));
   const targetWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-target-'));
   const rollbackWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-rollback-'));
   try {
@@ -1825,14 +1828,20 @@ export async function upgrade(
           config.authEnvironment,
           { changedComponents, includeMigrations: true }
         ),
-        operations.prepareComponentRelease(
-          previousLock,
-          rollbackWork,
-          config.storageClass,
-          effectiveConsoleUrl,
-          config.authEnvironment,
-          { changedComponents: rollbackChangedComponents, includeMigrations: false }
-        )
+        rollbackChangedComponents.length > 0
+          ? operations.prepareComponentRelease(
+            previousLock,
+            rollbackWork,
+            config.storageClass,
+            effectiveConsoleUrl,
+            config.authEnvironment,
+            { changedComponents: rollbackChangedComponents, includeMigrations: false }
+          )
+          : Promise.resolve({
+            foundation: { root: rollbackWork, release: [], migration: null },
+            base: [],
+            all: []
+          })
       ])
       : await Promise.all([
         operations.prepareRelease(
@@ -1857,17 +1866,15 @@ export async function upgrade(
     }
     const previousInventory = recordedInventory
       ?? operations.releaseResourceInventory(rollback.all);
-    const previousComponentInventory = agentIdentityCutover
+    const previousComponentInventory = componentTransition && rollback.all.length > 0
       ? operations.releaseResourceInventory(rollback.all)
-      : null;
-    const targetComponentInventory = agentIdentityCutover
+      : [];
+    const targetComponentInventory = componentTransition
       ? operations.releaseResourceInventory(target.all)
-      : null;
-    const targetInventory = agentIdentityCutover
+      : [];
+    const targetInventory = componentTransition
       ? replaceComponentInventory(previousInventory, previousComponentInventory, targetComponentInventory)
-      : componentTransition
-        ? previousInventory
-        : operations.releaseResourceInventory(target.all);
+      : operations.releaseResourceInventory(target.all);
     let agentIdentityMigrationCommitted = false;
     try {
       if (componentTransition) {
@@ -1911,8 +1918,10 @@ export async function upgrade(
       if (agentIdentityCutover) {
         operations.pruneReleaseResources(previousComponentInventory, targetComponentInventory);
         operations.deleteAgentIdentityNamespace(LEGACY_INSTALLED_AGENT_NAMESPACE);
+      } else if (componentTransition) {
+        operations.pruneReleaseResources(previousComponentInventory, targetComponentInventory);
       } else {
-        if (!componentTransition) operations.pruneReleaseResources(previousInventory, targetInventory);
+        operations.pruneReleaseResources(previousInventory, targetInventory);
       }
       operations.recordReleaseInventory(targetLock, targetInventory);
       return {
@@ -1951,7 +1960,7 @@ export async function upgrade(
         throw new Error(`OSAA identity cutover failed before migration; previous installation retained: ${upgradeError.message}`);
       }
       try {
-        if (componentTransition) {
+        if (componentTransition && rollbackChangedComponents.length > 0) {
           operations.installPreparedComponentRelease(
             previousLock,
             rollback,
@@ -1963,9 +1972,12 @@ export async function upgrade(
             { applyMigrations: false }
           );
         } else {
-          operations.installPreparedRelease(
+          if (!componentTransition) operations.installPreparedRelease(
             previousLock, rollback, config.storageClass, effectiveConsoleUrl, '롤백'
           );
+        }
+        if (componentTransition) {
+          operations.pruneReleaseResources(targetComponentInventory, previousComponentInventory);
         }
         operations.recordInstallationState(
           previousLock,
@@ -1975,13 +1987,17 @@ export async function upgrade(
           config.authEnvironment,
           config.shellTlsSecret
         );
-        if (componentTransition) operations.waitForComponentRollouts(rollbackChangedComponents);
+        if (componentTransition && rollbackChangedComponents.length > 0) {
+          operations.waitForComponentRollouts(rollbackChangedComponents);
+        }
         else operations.waitForCoreRollouts(previousLock);
         await operations.verifyInstallation(previousLock, {
           consoleUrl: effectiveConsoleUrl,
           requireZeroRestarts: false,
           mode: 'rollback',
-          componentSelection: componentTransition ? rollbackChangedComponents : null
+          componentSelection: componentTransition && rollbackChangedComponents.length > 0
+            ? rollbackChangedComponents
+            : null
         });
         if (!componentTransition) {
           operations.pruneReleaseResources(targetInventory, previousInventory);
