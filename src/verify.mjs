@@ -87,6 +87,7 @@ const WORKLOADS = Object.freeze([
   { component: 'recovery', namespace: 'opensphere-console-change', kind: 'cronjob', name: 'opensphere-gitea-recovery-backup', container: 'recovery' },
   { component: 'backend', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-backend', container: 'api' },
   { component: 'dupaController', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-dupa-controller', container: 'controller' },
+  { component: 'registry', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-registry', container: 'registry' },
   { component: 'notificationDispatcher', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-notification-dispatcher', container: 'dispatcher' },
   { component: 'notificationDispatcher', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-external-channel-executor', container: 'executor' },
   { component: 'osaaGateway', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-osaa-gateway', container: 'gateway' },

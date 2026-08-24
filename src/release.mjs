@@ -79,6 +79,7 @@ export const COMPONENTS = Object.freeze({
   console: 'opensphere-console',
   backend: 'opensphere-console-backend',
   dupaController: 'opensphere-console-dupa-controller',
+  registry: 'opensphere-registry',
   osaaGateway: 'opensphere-console-osaa-gateway',
   osdst: 'opensphere-osdst',
   osaaGovernedAdapter: 'opensphere-osaa-governed-adapter',
@@ -95,7 +96,7 @@ export const COMPONENTS = Object.freeze({
 const LEGACY_INSTALLED_COMPONENTS = legacyInstalledComponentMap(COMPONENTS);
 
 // Runtime-distributed artifacts are independently published and deployed but
-// are not part of the canonical 14-component Platform Release lifecycle. They
+// are not part of the canonical 15-component Platform Release lifecycle. They
 // remain digest-pinned in the installation lock so a mutable auxiliary tag can
 // never decide which executable a fresh cluster serves.
 export const AUXILIARY_ARTIFACTS = Object.freeze({
@@ -110,6 +111,7 @@ export const BASE_RUNTIME_COMPONENTS = Object.freeze([
   'console',
   'backend',
   'dupaController',
+  'registry',
   'osaaGateway',
   'osdst',
   'osaaGovernedAdapter',
@@ -127,6 +129,13 @@ export const BASE_RUNTIME_COMPONENTS = Object.freeze([
 // accepted only as upgrade baselines. Newly resolved releases remain strict.
 export const PRE_OSDST_BASE_RUNTIME_COMPONENTS = Object.freeze(
   BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'osdst')
+);
+
+// Registry & Catalog was introduced as a new independently deployed CBSS Core
+// Service. The immediately preceding component set is accepted only as the
+// base of the one-way Registry component introduction.
+export const PRE_REGISTRY_BASE_RUNTIME_COMPONENTS = Object.freeze(
+  BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'registry')
 );
 
 // Releases published before both recovery and OSDST were governed contain
@@ -483,7 +492,7 @@ function canonicalComponentNames(components, { allowLegacyComponentSet = false }
   const names = Object.keys(components ?? {});
   const candidates = [
     Object.keys(COMPONENTS),
-    ...(allowLegacyComponentSet ? [PRE_OSDST_BASE_RUNTIME_COMPONENTS, LEGACY_BASE_RUNTIME_COMPONENTS] : [])
+    ...(allowLegacyComponentSet ? [PRE_REGISTRY_BASE_RUNTIME_COMPONENTS, PRE_OSDST_BASE_RUNTIME_COMPONENTS, LEGACY_BASE_RUNTIME_COMPONENTS] : [])
   ];
   return candidates.find((expected) =>
     names.length === expected.length && expected.every((name) => names.includes(name))
@@ -1068,13 +1077,18 @@ export function validateReleaseTransition(baseLock, targetLock) {
     .map((name) => cutover ? canonicalNameForInstalledComponent(name) : name)
     .sort();
   const targetNames = Object.keys(target.components ?? {}).sort();
-  if (JSON.stringify(baseNames) !== JSON.stringify(targetNames)) {
+  const registryIntroduction = !baseNames.includes('registry')
+    && targetNames.includes('registry')
+    && JSON.stringify([...baseNames, 'registry'].sort()) === JSON.stringify(targetNames)
+    && target.changedComponents.includes('registry');
+  if (JSON.stringify(baseNames) !== JSON.stringify(targetNames) && !registryIntroduction) {
     throw new Error('Component release lock cannot change the installed component set');
   }
   const changed = new Set(target.changedComponents);
   for (const name of targetNames) {
     const installedName = cutover ? installedNameForCanonicalComponent(name) : name;
-    const differs = !sameComponent(base.components[installedName], target.components[name]);
+    const differs = registryIntroduction && name === 'registry'
+      ? true : !sameComponent(base.components[installedName], target.components[name]);
     if (changed.has(name) && !differs) {
       throw new Error(`Changed component ${name} is identical to the base release`);
     }
