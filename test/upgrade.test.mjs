@@ -120,6 +120,36 @@ function componentTarget(previous, revision, changedComponents = ['backend']) {
   return target;
 }
 
+function registryIntroductionLocks() {
+  const previous = lock('1'.repeat(40), 'a');
+  previous.trust = LOCAL_EDGE_TRUST;
+  delete previous.releaseBom;
+  delete previous.components.registry;
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, previous.trust);
+  const target = structuredClone(previous);
+  target.releaseScope = RELEASE_SCOPE_COMPONENT;
+  target.baseReleaseDigest = previous.releaseDigest;
+  target.changedComponents = ['registry'];
+  target.sourceRevision = '2'.repeat(40);
+  target.components.registry = {
+    repository: COMPONENTS.registry,
+    image: `ghcr.io/opensphere-platform/${COMPONENTS.registry}@sha256:${'c'.repeat(64)}`,
+    sourceRevision: target.sourceRevision
+  };
+  target.releaseDigest = calculateReleaseDigest(
+    target.channel,
+    target.components,
+    target.trust,
+    undefined,
+    {
+      releaseScope: target.releaseScope,
+      baseReleaseDigest: target.baseReleaseDigest,
+      changedComponents: target.changedComponents
+    }
+  );
+  return { previous, target };
+}
+
 function agentIdentityCutoverLocks() {
   const previous = lock('1'.repeat(40), 'a');
   previous.trust = LOCAL_EDGE_TRUST;
@@ -223,7 +253,9 @@ function runtime(previous, events, {
     }],
     readReleaseInventory: () => recordedInventory,
     recordReleaseInventory: (release) => events.push(`inventory:${release.sourceRevision}`),
-    pruneReleaseResources: (from, to) => events.push(`prune:${from[0].name}->${to[0].name}`),
+    pruneReleaseResources: (from, to) => events.push(
+      `prune:${from[0]?.name ?? 'none'}->${to[0]?.name ?? 'none'}`
+    ),
     deleteAgentIdentityNamespace: (namespace) => events.push(`delete-namespace:${namespace}`),
     recordInstallationState: (release) => events.push(`record:${release.sourceRevision}`),
     waitForCoreRollouts: () => events.push('wait'),
@@ -277,13 +309,49 @@ test('component release is upgrade-only and keeps a complete rollback lock', asy
   assert.ok(events.includes(`verify:${target.sourceRevision}:backend`));
   assert.equal(events.some((event) => event.startsWith('install:')), false);
   assert.equal(events.includes('wait'), false);
-  assert.equal(events.some((event) => event.startsWith('prune:')), false);
+  assert.ok(events.includes(`prune:release-${previous.sourceRevision}->release-${target.sourceRevision}`));
   assert.ok(events.includes(`inventory:${target.sourceRevision}`));
 
   await assert.rejects(
     bootstrap(target, { progress: undefined }),
     /Component release locks are upgrade-only/
   );
+});
+
+test('first Registry introduction has an exact add-only rollback without a fictional old image', async () => {
+  const { previous, target } = registryIntroductionLocks();
+  const events = [];
+  const result = await upgrade(previous, target, {
+    runtime: runtime(previous, events, { recordedInventory: [{ name: 'complete-release' }] })
+  });
+  assert.equal(result.lock, target);
+  assert.ok(events.includes(`prepare-component:${target.sourceRevision}:registry:migrations=true`));
+  assert.equal(events.some((event) => event.startsWith(
+    `prepare-component:${previous.sourceRevision}:registry`
+  )), false);
+  assert.ok(events.includes(`install-component:업그레이드:${target.sourceRevision}:registry:migrations=true`));
+  assert.equal(events.some((event) => event.includes('install-component:롤백')), false);
+  assert.ok(events.includes('prune:none->release-' + target.sourceRevision));
+  assert.ok(events.includes('wait-component:registry'));
+  assert.ok(events.includes(`verify:${target.sourceRevision}:registry`));
+});
+
+test('failed first Registry introduction removes only the newly staged Registry resources', async () => {
+  const { previous, target } = registryIntroductionLocks();
+  const events = [];
+  await assert.rejects(
+    upgrade(previous, target, {
+      runtime: runtime(previous, events, {
+        failTarget: true,
+        recordedInventory: [{ name: 'complete-release' }]
+      })
+    }),
+    /previous release was restored/u
+  );
+  assert.equal(events.some((event) => event.includes('install-component:롤백')), false);
+  assert.ok(events.includes(`prune:release-${target.sourceRevision}->none`));
+  assert.ok(events.includes(`record:${previous.sourceRevision}`));
+  assert.ok(events.includes(`verify:${previous.sourceRevision}:`));
 });
 
 test('OSAA identity cutover stages canonical workloads, commits migration once, and removes only legacy resources', async () => {
@@ -545,7 +613,7 @@ test('failed component verification rolls back only the same changed workloads',
   assert.ok(events.includes(`prepare-component:${target.sourceRevision}:backend,console:migrations=true`));
   assert.ok(events.includes(`prepare-component:${previous.sourceRevision}:backend,console:migrations=false`));
   assert.equal(events.some((event) => event.startsWith('install:')), false);
-  assert.equal(events.some((event) => event.startsWith('prune:')), false);
+  assert.ok(events.includes(`prune:release-${target.sourceRevision}->release-${previous.sourceRevision}`));
 });
 
 test('upgrade accepts an exact pre-recovery installed lock only for the verified rollback side', async () => {
