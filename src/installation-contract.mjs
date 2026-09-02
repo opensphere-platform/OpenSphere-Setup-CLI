@@ -15,7 +15,9 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     'uipluginregistrations.plugins.opensphere.io'
   ]),
   clusterRbac: Object.freeze([
+    'clusterrolebinding/opensphere-extension-controller-cli-downloads',
     'clusterrolebinding/opensphere-registry',
+    'clusterrole/opensphere-extension-controller-cli-downloads',
     'clusterrole/opensphere-registry'
   ]),
   admissionPolicies: Object.freeze([

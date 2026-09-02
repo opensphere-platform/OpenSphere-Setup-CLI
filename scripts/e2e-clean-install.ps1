@@ -27,8 +27,14 @@ $Crds = @(
   'uipluginpackages.plugins.opensphere.io',
   'uipluginregistrations.plugins.opensphere.io'
 )
-$ClusterRoles = @('opensphere-registry')
-$ClusterRoleBindings = @('opensphere-registry')
+$ClusterRoles = @(
+  'opensphere-extension-controller-cli-downloads',
+  'opensphere-registry'
+)
+$ClusterRoleBindings = @(
+  'opensphere-extension-controller-cli-downloads',
+  'opensphere-registry'
+)
 $AdmissionPolicies = @(
   'opensphere-console-manual-ui-contract',
   'opensphere-console-image-integrity-workload',

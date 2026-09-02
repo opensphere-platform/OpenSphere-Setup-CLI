@@ -14,6 +14,7 @@ import {
 import { installConsoleCli } from './install-cli.mjs';
 import { installConsoleCliFromCluster } from './cluster-cli-install.mjs';
 import { normalizeRegistryCredentials, resolveChannel, validateChannel, validateLock } from './release.mjs';
+import { takeSourceArtifactCredential } from './source-artifact-credential.mjs';
 import { assertKubectl, kubectl } from './process.mjs';
 import { verifyInstallation } from './verify.mjs';
 import { defaultConsoleUrl, normalizeConsoleUrl } from './console-url.mjs';
@@ -147,7 +148,8 @@ Usage:
 
 Fresh bootstrap resolves the selected channel at install time. Resume always uses the
 cluster installation lock. --lock is an explicit immutable input; it is never a cache hint.
-Kubernetes receives digest-pinned images only.`);
+Kubernetes receives digest-pinned images only.
+Private Console source artifacts require OPENSPHERE_CONSOLE_SOURCE_TOKEN with GitHub Contents read authority.`);
 }
 
 function readSecret(reference) {
@@ -274,6 +276,7 @@ async function main() {
     );
     progress.step('로컬 실행 환경 확인');
     validateChannel(channel);
+    const sourceArtifactCredential = takeSourceArtifactCredential();
     const registryCredentials = await registryCredentialsOption();
     const local = inspectLocalEnvironment();
     progress.done(formatLocalEnvironment(local));
@@ -310,7 +313,8 @@ async function main() {
     const artifacts = await preflightReleaseArtifacts(lock, {
       storageClass: cluster.storageClass,
       consoleUrl: doctorConsoleUrl,
-      authEnvironment: selectAuthEnvironment(channel, authEnvironment)
+      authEnvironment: selectAuthEnvironment(channel, authEnvironment),
+      sourceArtifactCredential
     });
     progress.done(`${artifacts.artifactCount} artifacts, ${artifacts.manifestGroupCount} manifest groups`);
     progress.item(
@@ -333,6 +337,7 @@ async function main() {
     );
     progress.step('입력 옵션과 설치 정책 검증');
     validateChannel(channel);
+    const sourceArtifactCredential = takeSourceArtifactCredential();
     const registryCredentials = await registryCredentialsOption();
     const selectedAuthEnvironment = selectAuthEnvironment(channel, authEnvironment);
     const requestedShellTlsSecret = hasOption('--shell-tls-secret') ? option('--shell-tls-secret', '') : undefined;
@@ -411,6 +416,7 @@ async function main() {
       shellTlsSecret: requestedShellTlsSecret,
       openOnboarding: !hasOption('--no-open-browser'),
       registryCredentials,
+      sourceArtifactCredential,
       requiredPlatforms: targetPlatforms,
       progress,
     });
@@ -428,6 +434,7 @@ async function main() {
 
   if (command === 'upgrade') {
     validateChannel(channel);
+    const sourceArtifactCredential = takeSourceArtifactCredential();
     const registryCredentials = await registryCredentialsOption();
     assertKubectl();
     const targetPlatforms = readNodePlatforms();
@@ -449,6 +456,7 @@ async function main() {
       storageClass: option('--storage-class', undefined),
       consoleUrl: suppliedConsoleUrl,
       registryCredentials,
+      sourceArtifactCredential,
       requiredPlatforms: targetPlatforms
     });
     const installedCli = await installConsoleCliFromCluster({

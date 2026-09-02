@@ -35,7 +35,9 @@ test('evidence collector is scoped to the exact target bootstrap ownership set',
   for (const resource of [
     'customresourcedefinition/uipluginpackages.plugins.opensphere.io',
     'customresourcedefinition/uipluginregistrations.plugins.opensphere.io',
+    'clusterrole/opensphere-extension-controller-cli-downloads',
     'clusterrole/opensphere-registry',
+    'clusterrolebinding/opensphere-extension-controller-cli-downloads',
     'clusterrolebinding/opensphere-registry',
     'validatingadmissionpolicy/opensphere-console-manual-ui-contract',
     'validatingadmissionpolicybinding/opensphere-console-image-integrity-cronjob'

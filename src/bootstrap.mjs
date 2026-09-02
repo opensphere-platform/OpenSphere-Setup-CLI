@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { kubectl, run } from './process.mjs';
 import { preflight } from './preflight.mjs';
 import { fetchWithRetry } from './http.mjs';
+import { sourceArtifactRequest } from './source-artifact-credential.mjs';
 import {
   hostRegistryCredentials,
   isLocalEdgeLock,
@@ -56,7 +57,7 @@ import {
 } from './release-agent-identity-cutover.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const RAW_ROOT = 'https://raw.githubusercontent.com/opensphere-platform/OpenSphere-console';
+
 const RELEASE_INVENTORY_CONFIGMAP = 'opensphere-release-inventory';
 const LEGACY_RECOVERY_MIGRATION = 'backend/supabase/migrations/0026_schema_migration_ledger.sql';
 const EXTERNAL_CHANNEL_REASON_POLICY_MIGRATION = 'backend/supabase/migrations/0027_external_channel_reason_policy.sql';
@@ -831,15 +832,21 @@ function validateAuthEnvironment(value) {
   return selectAuthEnvironment('edge', value);
 }
 
-async function fetchReleaseArtifact(
+export async function fetchReleaseArtifact(
   lock,
   path,
-  { optional404 = false, sourceRevision = lock.sourceRevision } = {}
+  {
+    optional404 = false,
+    sourceRevision = lock.sourceRevision,
+    sourceArtifactCredential = null,
+    fetchFn = fetchWithRetry
+  } = {}
 ) {
   if (!/^[a-f0-9]{40}$/u.test(sourceRevision ?? '')) {
     throw new Error(`Release artifact source revision is invalid for ${path}`);
   }
-  const response = await fetchWithRetry(`${RAW_ROOT}/${sourceRevision}/${path}`);
+  const request = sourceArtifactRequest(sourceRevision, path, sourceArtifactCredential);
+  const response = await fetchFn(request.url, request.options);
   if (optional404 && response.status === 404) return null;
   if (!response.ok) throw new Error(`Release artifact download failed (${path}): HTTP ${response.status}`);
   return response.text();
@@ -911,9 +918,12 @@ export async function fetchManifest(
   storageClass,
   consoleUrl = defaultConsoleUrl('edge', 'development'),
   authEnvironment = 'development',
-  { sourceRevision = lock.sourceRevision } = {}
+  { sourceRevision = lock.sourceRevision, sourceArtifactCredential = null } = {}
 ) {
-  const sourceYaml = await fetchReleaseArtifact(lock, spec.path, { sourceRevision });
+  const sourceYaml = await fetchReleaseArtifact(lock, spec.path, {
+    sourceRevision,
+    sourceArtifactCredential
+  });
   return renderManifest(
     lock,
     spec,
@@ -937,9 +947,13 @@ export async function materializeSupabaseMigrationSet(
   root,
   sourceRevision = lock.sourceRevision,
   signedEvidence = lock.releaseBom?.migrationManifest,
-  manifestPath = migrationManifestPath(lock)
+  manifestPath = migrationManifestPath(lock),
+  { sourceArtifactCredential = null } = {}
 ) {
-  const rawManifest = await fetchReleaseArtifact(lock, manifestPath, { sourceRevision });
+  const rawManifest = await fetchReleaseArtifact(lock, manifestPath, {
+    sourceRevision,
+    sourceArtifactCredential
+  });
   const manifest = parseSupabaseMigrationManifest(rawManifest);
   const current = manifest.schemaVersion === 1;
   const observedEvidence = current
@@ -964,7 +978,10 @@ export async function materializeSupabaseMigrationSet(
     throw new Error('Console migration manifest differs from release evidence');
   }
   const artifacts = await Promise.all(manifest.migrations.map(async (entry) => {
-    const contents = await fetchReleaseArtifact(lock, entry.path, { sourceRevision });
+    const contents = await fetchReleaseArtifact(lock, entry.path, {
+      sourceRevision,
+      sourceArtifactCredential
+    });
     verifySupabaseMigrationArtifact(entry, contents);
     return { path: entry.path, contents };
   }));
@@ -988,12 +1005,13 @@ async function materializeFoundationInstallers(
   {
     optionalArtifacts = new Set(),
     migrationSourceRevision = lock.sourceRevision,
-    migrationEvidence = lock.releaseBom?.migrationManifest
+    migrationEvidence = lock.releaseBom?.migrationManifest,
+    sourceArtifactCredential = null
   } = {}
 ) {
   const target = isTargetConsoleRelease(lock);
   const manifestArtifacts = await Promise.all(foundationManifestSpecs(lock).map(async (spec) => {
-    const raw = await fetchReleaseArtifact(lock, spec.path);
+    const raw = await fetchReleaseArtifact(lock, spec.path, { sourceArtifactCredential });
     const rendered = renderManifest(
       lock,
       spec,
@@ -1006,7 +1024,8 @@ async function materializeFoundationInstallers(
   }));
   const artifacts = (await Promise.all(foundationArtifactPaths(lock).map(async (path) => {
     const contents = await fetchReleaseArtifact(lock, path, {
-      optional404: optionalArtifacts.has(path)
+      optional404: optionalArtifacts.has(path),
+      sourceArtifactCredential
     });
     return contents === null ? null : { path, contents };
   }))).filter(Boolean);
@@ -1015,7 +1034,9 @@ async function materializeFoundationInstallers(
     lock,
     root,
     migrationSourceRevision,
-    migrationEvidence
+    migrationEvidence,
+    undefined,
+    { sourceArtifactCredential }
   );
   for (const artifact of manifestArtifacts) {
     await writeReleaseArtifact(
@@ -1134,10 +1155,23 @@ function runComponentMigrations(foundation, progress) {
   run('pwsh', args);
 }
 
-async function materializeBaseRelease(lock, storageClass, consoleUrl, authEnvironment) {
+async function materializeBaseRelease(
+  lock,
+  storageClass,
+  consoleUrl,
+  authEnvironment,
+  sourceArtifactCredential = null
+) {
   return Promise.all(baseManifestSpecs(lock).map(async (spec) => ({
     path: spec.path,
-    yaml: await fetchManifest(lock, spec, storageClass, consoleUrl, authEnvironment)
+    yaml: await fetchManifest(
+      lock,
+      spec,
+      storageClass,
+      consoleUrl,
+      authEnvironment,
+      { sourceArtifactCredential }
+    )
   })));
 }
 
@@ -1846,7 +1880,13 @@ async function prepareRelease(
 ) {
   const [foundation, base] = await Promise.all([
     materializeFoundationInstallers(lock, root, storageClass, consoleUrl, authEnvironment, options),
-    materializeBaseRelease(lock, storageClass, consoleUrl, authEnvironment)
+    materializeBaseRelease(
+      lock,
+      storageClass,
+      consoleUrl,
+      authEnvironment,
+      options.sourceArtifactCredential
+    )
   ]);
   return { foundation, base, all: [...foundation.release, ...base] };
 }
@@ -1859,7 +1899,8 @@ export async function prepareComponentRelease(
   authEnvironment,
   {
     changedComponents = lock.changedComponents,
-    includeMigrations = true
+    includeMigrations = true,
+    sourceArtifactCredential = null
   } = {}
 ) {
   const specs = componentReleaseManifestSpecs(lock, changedComponents);
@@ -1883,7 +1924,7 @@ export async function prepareComponentRelease(
         storageClass,
         consoleUrl,
         authEnvironment,
-        { sourceRevision: spec.artifactSourceRevision }
+        { sourceRevision: spec.artifactSourceRevision, sourceArtifactCredential }
       )
     }))),
     Promise.all(specs.base.map(async (spec) => ({
@@ -1894,17 +1935,25 @@ export async function prepareComponentRelease(
         storageClass,
         consoleUrl,
         authEnvironment,
-        { sourceRevision: spec.artifactSourceRevision }
+        { sourceRevision: spec.artifactSourceRevision, sourceArtifactCredential }
       )
     })))
   ]);
   let migration = null;
   if (migrationSourceRevision) {
     const script = await fetchReleaseArtifact(lock, 'backend/supabase/migrate-only.ps1', {
-      sourceRevision: migrationSourceRevision
+      sourceRevision: migrationSourceRevision,
+      sourceArtifactCredential
     });
     await writeReleaseArtifact(root, 'backend/supabase/migrate-only.ps1', script);
-    migration = await materializeSupabaseMigrationSet(lock, root, migrationSourceRevision);
+    migration = await materializeSupabaseMigrationSet(
+      lock,
+      root,
+      migrationSourceRevision,
+      undefined,
+      undefined,
+      { sourceArtifactCredential }
+    );
   }
   const foundation = { root, release: foundationRelease, migration };
   return { foundation, base, all: [...foundationRelease, ...base] };
@@ -1913,7 +1962,8 @@ export async function prepareComponentRelease(
 export async function preflightReleaseArtifacts(lock, {
   storageClass,
   consoleUrl,
-  authEnvironment
+  authEnvironment,
+  sourceArtifactCredential = null
 }, {
   createTemporaryDirectory = () => mkdtemp(join(tmpdir(), 'opensphere-artifact-preflight-')),
   prepare = prepareRelease,
@@ -1926,7 +1976,8 @@ export async function preflightReleaseArtifacts(lock, {
       root,
       storageClass,
       consoleUrl,
-      authEnvironment
+      authEnvironment,
+      { sourceArtifactCredential }
     );
     return {
       artifactCount: installArtifactCount(lock) + Number(prepared.foundation?.migration?.manifest?.migrationCount || 0),
@@ -1958,6 +2009,7 @@ export async function bootstrap(lock, {
   authEnvironment,
   shellTlsSecret,
   registryCredentials,
+  sourceArtifactCredential = null,
   requiredPlatforms,
   progress
 } = {}) {
@@ -2056,7 +2108,8 @@ export async function bootstrap(lock, {
       work,
       cluster.storageClass,
       effectiveConsoleUrl,
-      effectiveAuthEnvironment
+      effectiveAuthEnvironment,
+      { sourceArtifactCredential }
     );
     progress?.done(`${installArtifactCount(lock) + Number(prepared.foundation?.migration?.manifest?.migrationCount || 0)} artifacts, ${prepared.all.length} manifest groups`);
 
@@ -2238,7 +2291,14 @@ export async function bootstrap(lock, {
 export async function upgrade(
   previousLock,
   targetLock,
-  { storageClass, consoleUrl, registryCredentials, requiredPlatforms, runtime = {} } = {}
+  {
+    storageClass,
+    consoleUrl,
+    registryCredentials,
+    sourceArtifactCredential = null,
+    requiredPlatforms,
+    runtime = {}
+  } = {}
 ) {
   validateLock(previousLock, {
     allowLegacyComponentSet: true,
@@ -2332,7 +2392,7 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           config.authEnvironment,
-          { changedComponents, includeMigrations: true }
+          { changedComponents, includeMigrations: true, sourceArtifactCredential }
         ),
         rollbackChangedComponents.length > 0
           ? operations.prepareComponentRelease(
@@ -2341,7 +2401,11 @@ export async function upgrade(
             config.storageClass,
             effectiveConsoleUrl,
             config.authEnvironment,
-            { changedComponents: rollbackChangedComponents, includeMigrations: false }
+            {
+              changedComponents: rollbackChangedComponents,
+              includeMigrations: false,
+              sourceArtifactCredential
+            }
           )
           : Promise.resolve({
             foundation: { root: rollbackWork, release: [], migration: null },
@@ -2351,7 +2415,12 @@ export async function upgrade(
       ])
       : await Promise.all([
         operations.prepareRelease(
-          targetLock, targetWork, config.storageClass, effectiveConsoleUrl, config.authEnvironment
+          targetLock,
+          targetWork,
+          config.storageClass,
+          effectiveConsoleUrl,
+          config.authEnvironment,
+          { sourceArtifactCredential }
         ),
         operations.prepareRelease(
           previousLock,
@@ -2362,7 +2431,8 @@ export async function upgrade(
           {
             optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS,
             migrationSourceRevision: targetLock.sourceRevision,
-            migrationEvidence: targetLock.releaseBom?.migrationManifest
+            migrationEvidence: targetLock.releaseBom?.migrationManifest,
+            sourceArtifactCredential
           }
         )
       ]);

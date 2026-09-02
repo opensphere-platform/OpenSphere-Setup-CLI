@@ -60,7 +60,9 @@ capture target-crds.yaml kubectl --context "$context" get \
   customresourcedefinition/uipluginregistrations.plugins.opensphere.io \
   -o yaml
 capture target-cluster-rbac.yaml kubectl --context "$context" get \
+  clusterrole/opensphere-extension-controller-cli-downloads \
   clusterrole/opensphere-registry \
+  clusterrolebinding/opensphere-extension-controller-cli-downloads \
   clusterrolebinding/opensphere-registry \
   -o yaml
 capture target-admission.yaml kubectl --context "$context" get \

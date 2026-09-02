@@ -42,8 +42,12 @@ test('edge E2E cleanup owns the exact target cluster-scoped set', () => {
     'uipluginpackages.plugins.opensphere.io',
     'uipluginregistrations.plugins.opensphere.io'
   ]);
-  assert.deepEqual(powershellArray('ClusterRoles'), ['opensphere-registry']);
-  assert.deepEqual(powershellArray('ClusterRoleBindings'), ['opensphere-registry']);
+  const clusterRbac = [
+    'opensphere-extension-controller-cli-downloads',
+    'opensphere-registry'
+  ];
+  assert.deepEqual(powershellArray('ClusterRoles'), clusterRbac);
+  assert.deepEqual(powershellArray('ClusterRoleBindings'), clusterRbac);
   const policies = [
     'opensphere-console-manual-ui-contract',
     'opensphere-console-image-integrity-workload',

@@ -33,9 +33,11 @@ test('uninstall refuses to reach Kubernetes without the explicit destructive con
   }
 });
 
-test('managed cluster RBAC owns only the target Registry bootstrap resources', () => {
+test('managed cluster RBAC owns only the target Registry and C_EXT bootstrap resources', () => {
   assert.deepEqual(MANAGED_CLUSTER_RBAC, [
+    'clusterrolebinding/opensphere-extension-controller-cli-downloads',
     'clusterrolebinding/opensphere-registry',
+    'clusterrole/opensphere-extension-controller-cli-downloads',
     'clusterrole/opensphere-registry'
   ]);
   assert.equal(MANAGED_CLUSTER_RBAC.some((resource) => resource.includes('osaa') || resource.includes('backend')), false);

@@ -13,6 +13,7 @@ import {
   EXTENSION_CONTROLLER_MANIFEST,
   FOUNDATION_ARTIFACT_PATHS,
   GITEA_MANIFEST,
+  MANAGED_CLUSTER_RBAC,
   parseSupabaseMigrationManifest,
   renderManifest,
   supabaseServerSecretManifest,
@@ -68,6 +69,21 @@ test('fresh bootstrap consumes the target Supabase, Gitea, C_API, C_EXT and Besz
   assert.deepEqual(BESZEL_MANIFEST.replacements.map(([, component]) => component), [
     'beszelHub', 'beszelAgent', 'beszelBootstrap'
   ]);
+});
+
+test('Setup owns the exact cluster-scoped C_EXT CLI download authority it installs', () => {
+  const source = readFileSync(new URL(EXTENSION_CONTROLLER_MANIFEST.path, CONSOLE_SOURCE), 'utf8');
+  const authority = 'opensphere-extension-controller-cli-downloads';
+  assert.match(source, /kind: ClusterRole\r?\nmetadata:\r?\n  name: opensphere-extension-controller-cli-downloads/u);
+  assert.match(source, /kind: ClusterRoleBinding\r?\nmetadata:\r?\n  name: opensphere-extension-controller-cli-downloads/u);
+  assert.deepEqual(MANAGED_CLUSTER_RBAC, [
+    'clusterrolebinding/opensphere-extension-controller-cli-downloads',
+    'clusterrolebinding/opensphere-registry',
+    'clusterrole/opensphere-extension-controller-cli-downloads',
+    'clusterrole/opensphere-registry'
+  ]);
+  assert.equal(MANAGED_CLUSTER_RBAC.every((resource) => resource.endsWith(authority)
+    || resource.endsWith('opensphere-registry')), true);
 });
 
 test('fresh bootstrap creates only the exact six-key Supabase server Secret', () => {
