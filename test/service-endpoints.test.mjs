@@ -9,13 +9,9 @@ const required = [
   ['opensphere-console-data', 'opensphere-supabase-storage'],
   ['opensphere-console-change', 'opensphere-gitea-postgres'],
   ['opensphere-console-change', 'opensphere-gitea'],
-  ['opensphere-console', 'opensphere-console-backend'],
-  ['opensphere-console', 'opensphere-console-dupa-controller'],
-  ['opensphere-console', 'opensphere-notification-dispatcher'],
-  ['opensphere-console', 'opensphere-external-channel-executor'],
-  ['opensphere-console', 'opensphere-console-osaa-gateway'],
-  ['opensphere-console', 'opensphere-osdst'],
-  ['opensphere-console', 'osaa-governed-adapter'],
+  ['opensphere-monitoring', 'beszel-hub'],
+  ['opensphere-console', 'opensphere-console-api'],
+  ['opensphere-console', 'opensphere-registry'],
   ['opensphere-console', 'opensphere-console-ext']
 ];
 
@@ -32,7 +28,7 @@ function fixture({ ready = true } = {}) {
   };
 }
 
-test('installation verification requires every Supabase/Gitea/Main Shell Service endpoint', () => {
+test('installation verification requires every Supabase, Gitea, Beszel and Console API Service endpoint', () => {
   const { services, slices } = fixture();
   assert.equal(verifyRequiredServiceEndpoints(services, slices).length, required.length);
   slices[0].endpoints[0].conditions.ready = false;
@@ -62,15 +58,11 @@ test('a lock-bound CLI artifact requires its independent Service endpoint', () =
   );
 });
 
-test('pre-OSDST rollback does not require an OSDST Service endpoint', () => {
+test('Console-activated optional modules are not required during bootstrap verification', () => {
   const { services, slices } = fixture();
-  const withoutOsdst = (item) => item.metadata?.name !== 'opensphere-osdst';
   assert.equal(
-    verifyRequiredServiceEndpoints(
-      services.filter(withoutOsdst),
-      slices.filter(withoutOsdst),
-      { includeOsdst: false }
-    ).length,
-    required.length - 1
+    services.some(({ metadata }) => ['opensphere-osdst', 'opensphere-console-osaa-gateway'].includes(metadata.name)),
+    false
   );
+  assert.equal(verifyRequiredServiceEndpoints(services, slices).length, required.length);
 });

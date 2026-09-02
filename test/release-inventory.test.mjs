@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { releaseResourceInventory } from '../src/bootstrap.mjs';
 
-test('release inventory decodes manifests without patching live CRDs', () => {
+test('release inventory records target-owned CRDs without patching live resources', () => {
   const calls = [];
   const inventory = releaseResourceInventory(
     [{ path: 'release.yaml', yaml: 'multi-document release' }],
@@ -23,6 +23,10 @@ test('release inventory decodes manifests without patching live CRDs', () => {
   assert.equal(calls[0].options.capture, true);
   assert.equal(calls[0].options.input, 'multi-document release');
   assert.deepEqual(inventory, [{
+    apiVersion: 'apiextensions.k8s.io/v1',
+    kind: 'CustomResourceDefinition',
+    name: 'uipluginregistrations.plugins.opensphere.io'
+  }, {
     apiVersion: 'apps/v1',
     kind: 'Deployment',
     name: 'console',

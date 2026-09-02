@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
@@ -12,11 +12,18 @@ import {
   hostRegistryCredentials,
   isLocalEdgeLock,
   RELEASE_SCOPE_COMPONENT,
+  releaseResponsibilityProfile,
   validateLock,
   validateReleaseTransition,
   verifyReleaseLock
 } from './release.mjs';
 import { verifyInstallation } from './verify.mjs';
+import {
+  BASELINE_OBSERVABILITY_REQUIREMENT,
+  INSTALLATION_PHASES,
+  MANAGED_CLUSTER_SCOPED_RESOURCES,
+  MANAGED_NAMESPACES
+} from './installation-contract.mjs';
 import {
   configureShellServiceEndpoint,
   defaultConsoleUrl,
@@ -36,11 +43,6 @@ import {
   releaseNeedsRegistryCredentials,
   secretHasGhcrCredential
 } from './registry-pull-secret.mjs';
-import {
-  inspectRecoveryTarget,
-  parseRecoveryTargetSecretRef,
-  recoveryTargetData
-} from './recovery-target.mjs';
 import { reportReleaseProgress } from './progress.mjs';
 import { materializeRuntimeAsset } from './runtime-assets.mjs';
 import {
@@ -98,23 +100,22 @@ const LEGACY_RECOVERY_MANIFESTS = new Set([
   'deploy/console-image-admission-policy.yaml'
 ]);
 const PRUNABLE_MANIFEST_KINDS = new Set([
-  'ClusterRole', 'ClusterRoleBinding', 'ConfigMap', 'CronJob', 'Deployment',
+  'ClusterRole', 'ClusterRoleBinding', 'ConfigMap', 'CronJob', 'CustomResourceDefinition',
+  'DaemonSet', 'Deployment', 'Job',
   'NetworkPolicy', 'PodDisruptionBudget', 'Role', 'RoleBinding', 'Service',
   'ServiceAccount', 'StatefulSet', 'ValidatingAdmissionPolicy',
   'ValidatingAdmissionPolicyBinding'
 ]);
 
-export const MANAGED_NAMESPACES = Object.freeze([
-  'opensphere-console-data',
-  'opensphere-console-change',
-  'opensphere-console-recovery',
-  'opensphere-console',
-  'opensphere-osaa-credentials',
-  'opensphere-foundation',
-  'opensphere-system'
-]);
+export { INSTALLATION_PHASES, MANAGED_NAMESPACES } from './installation-contract.mjs';
 
-export const MANAGED_CRDS = Object.freeze([
+export const MANAGED_CRDS = MANAGED_CLUSTER_SCOPED_RESOURCES.customResourceDefinitions;
+export const MANAGED_CLUSTER_RBAC = MANAGED_CLUSTER_SCOPED_RESOURCES.clusterRbac;
+export const MANAGED_CLUSTER_POLICIES = MANAGED_CLUSTER_SCOPED_RESOURCES.admissionPolicies;
+
+// Historical cluster-scoped resources are evidence for explicit legacy cleanup only.
+// A target uninstall must never delete resources owned by Console-activated modules.
+export const HISTORICAL_MANAGED_CRDS = Object.freeze([
   'platformsupportprofiles.platform.opensphere.io',
   'uipluginpackages.plugins.opensphere.io',
   'uipluginregistrations.plugins.opensphere.io',
@@ -125,8 +126,7 @@ export const MANAGED_CRDS = Object.freeze([
   'identitydirectoryclaims.foundation.opensphere.io',
   'identitydirectorybindings.foundation.opensphere.io'
 ]);
-
-export const MANAGED_CLUSTER_RBAC = Object.freeze([
+export const HISTORICAL_MANAGED_CLUSTER_RBAC = Object.freeze([
   'clusterrolebinding/dupa-module-profile-installer',
   'clusterrolebinding/dupa-console-evidence-reader',
   'clusterrolebinding/dupa-clidownload-reader',
@@ -147,10 +147,7 @@ export const MANAGED_CLUSTER_RBAC = Object.freeze([
   'clusterrole/foundation-control-plane-identity-directory',
   'clusterrole/foundation-control-plane-core'
 ]);
-
-// These resources are cluster-scoped, so namespace deletion cannot remove
-// them. Bindings are deliberately deleted before their policies.
-export const MANAGED_CLUSTER_POLICIES = Object.freeze([
+export const HISTORICAL_MANAGED_CLUSTER_POLICIES = Object.freeze([
   'validatingadmissionpolicybinding/foundation-bootstrap-closed-catalog',
   'validatingadmissionpolicy/foundation-bootstrap-closed-catalog',
   'validatingadmissionpolicybinding/opensphere-console-manual-ui-contract',
@@ -162,6 +159,38 @@ export const MANAGED_CLUSTER_POLICIES = Object.freeze([
 ]);
 
 export const BASE_MANIFESTS = Object.freeze([
+  {
+    path: 'apps/extension-controller/runtime/ui-plugin-crds.yaml',
+    componentOwners: ['extensionController'],
+    applyWholeForComponentRelease: true
+  },
+  {
+    path: 'cmd/os-cli/deploy.yaml',
+    requiresAuxiliaryArtifact: 'cliArtifacts',
+    auxiliaryReplacements: [[
+      '__OPENSPHERE_OS_CLI_IMAGE__',
+      'cliArtifacts'
+    ]]
+  },
+  {
+    path: 'backend/registry/deploy/registry.yaml',
+    replacements: [[
+      '(?:ghcr\\.io/opensphere-platform/)?opensphere-registry(?:@sha256:[A-Za-z0-9_]+|:[A-Za-z0-9][A-Za-z0-9._-]*)',
+      'registry'
+    ]]
+  },
+  { path: 'deploy/manual-ui-admission-policy.yaml' },
+  { path: 'deploy/console-image-admission-policy.yaml' },
+  {
+    path: 'deploy/opensphere-console.yaml',
+    replacements: [[
+      '(?:ghcr\\.io/opensphere-platform/)?opensphere-console(?:@sha256:[A-Za-z0-9_]+|:[A-Za-z0-9][A-Za-z0-9._-]*)',
+      'console'
+    ]]
+  }
+]);
+
+export const LEGACY_BASE_MANIFESTS = Object.freeze([
   { path: 'backend/dupa-control/platform-support-profile-crd.yaml' },
   {
     path: 'backend/dupa-control/ui-plugin-crds.yaml',
@@ -250,17 +279,69 @@ export const BASE_MANIFESTS = Object.freeze([
   }
 ]);
 
-export const SUPABASE_MIGRATION_MANIFEST = 'backend/supabase/migrations/manifest.json';
-const MIGRATION_OWNER_COMPONENTS = Object.freeze(['console', 'backend', 'osaaGateway', 'osdst']);
+export const SUPABASE_MIGRATION_MANIFEST = 'migrations/manifest.json';
+export const LEGACY_SUPABASE_MIGRATION_MANIFEST = 'backend/supabase/migrations/manifest.json';
+const MIGRATION_OWNER_COMPONENTS = Object.freeze(['consoleApi', 'extensionController']);
 
 function sha256Text(value) {
-  return createHash('sha256').update(String(value).replace(/\r\n/gu, '\n'), 'utf8').digest('hex');
+  return createHash('sha256').update(String(value).replace(/\r\n?/gu, '\n'), 'utf8').digest('hex');
 }
 
-export function parseSupabaseMigrationManifest(value) {
-  let manifest;
-  try { manifest = typeof value === 'string' ? JSON.parse(value) : structuredClone(value); }
-  catch { throw new Error('Supabase migration manifest is not valid JSON'); }
+function migrationSetDigest(entries) {
+  const material = entries.map((entry) => [
+    entry.globalId,
+    entry.semanticKey,
+    entry.predecessorGlobalId || '',
+    entry.path,
+    entry.sha256,
+    entry.sourceRevision
+  ].join('|') + '\n').join('');
+  return `sha256:${sha256Text(material)}`;
+}
+
+function parseCurrentMigrationManifest(manifest) {
+  const rootKeys = ['schemaVersion', 'repository', 'latestGlobalId', 'migrationCount', 'setDigest', 'migrations'];
+  if (manifest?.schemaVersion !== 1 || manifest.repository !== 'OpenSphere-Console'
+      || Object.keys(manifest).some((key) => !rootKeys.includes(key))
+      || !Array.isArray(manifest.migrations) || manifest.migrations.length === 0) {
+    throw new Error('Unsupported Console migration manifest');
+  }
+  const ids = new Set();
+  const semanticKeys = new Set();
+  let predecessor = null;
+  for (const [index, entry] of manifest.migrations.entries()) {
+    const entryKeys = [
+      'globalId', 'semanticKey', 'predecessorGlobalId', 'path', 'sha256',
+      'sourceRevision', 'setDigest', 'setSize'
+    ];
+    if (!entry || Object.keys(entry).some((key) => !entryKeys.includes(key))
+        || !/^opensphere-console\/[0-9]{8}\/[0-9]{4}$/u.test(entry.globalId ?? '')
+        || !/^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$/u.test(entry.semanticKey ?? '')
+        || !/^migrations\/(?:baseline|versions)\/[a-z0-9][a-z0-9_.-]*\.sql$/u.test(entry.path ?? '')
+        || !/^[a-f0-9]{64}$/u.test(entry.sha256 ?? '')
+        || !/^[a-f0-9]{40}$/u.test(entry.sourceRevision ?? '')
+        || entry.predecessorGlobalId !== predecessor
+        || entry.setSize !== index + 1
+        || ids.has(entry.globalId) || semanticKeys.has(entry.semanticKey)
+        || entry.setDigest !== migrationSetDigest(manifest.migrations.slice(0, index + 1))) {
+      throw new Error(`Invalid or duplicate Console migration manifest entry: ${entry?.globalId ?? 'unknown'}`);
+    }
+    ids.add(entry.globalId);
+    semanticKeys.add(entry.semanticKey);
+    predecessor = entry.globalId;
+  }
+  if (manifest.migrationCount !== manifest.migrations.length
+      || manifest.latestGlobalId !== predecessor
+      || manifest.setDigest !== migrationSetDigest(manifest.migrations)) {
+    throw new Error('Console migration manifest count/latest/set digest mismatch');
+  }
+  return Object.freeze({
+    ...manifest,
+    migrations: Object.freeze(manifest.migrations.map((entry) => Object.freeze(entry)))
+  });
+}
+
+function parseLegacyMigrationManifest(manifest) {
   if (manifest?.schemaVersion !== 2 || !Array.isArray(manifest.migrations) || manifest.migrations.length === 0) {
     throw new Error('Unsupported Supabase migration manifest');
   }
@@ -277,34 +358,61 @@ export function parseSupabaseMigrationManifest(value) {
         || entry.predecessorMigrationId !== predecessorMigrationId) {
       throw new Error(`Invalid or duplicate Supabase migration manifest entry: ${entry?.name ?? 'unknown'}`);
     }
-    ids.add(entry.id); names.add(entry.name); previous = entry.name; predecessorMigrationId = entry.id;
+    ids.add(entry.id);
+    names.add(entry.name);
+    previous = entry.name;
+    predecessorMigrationId = entry.id;
   }
   const latest = manifest.migrations.at(-1).id;
-  const material = manifest.migrations.map(({ id, predecessorMigrationId: predecessor, name, sha256 }) =>
-    `${id}\n${predecessor ?? '-'}\n${name}\n${sha256}`).join('\n');
+  const material = manifest.migrations.map(({ id, predecessorMigrationId: prior, name, sha256 }) =>
+    `${id}\n${prior ?? '-'}\n${name}\n${sha256}`).join('\n');
   const setDigest = `sha256:${sha256Text(material)}`;
   if (manifest.migrationCount !== manifest.migrations.length
       || manifest.latestMigrationId !== latest || manifest.setDigest !== setDigest) {
     throw new Error('Supabase migration manifest count/latest/set digest mismatch');
   }
-  return Object.freeze({ ...manifest, migrations: Object.freeze(manifest.migrations.map(Object.freeze)) });
+  return Object.freeze({
+    ...manifest,
+    migrations: Object.freeze(manifest.migrations.map((entry) => Object.freeze(entry)))
+  });
+}
+
+export function parseSupabaseMigrationManifest(value) {
+  let manifest;
+  try {
+    manifest = typeof value === 'string' ? JSON.parse(value) : structuredClone(value);
+  } catch {
+    throw new Error('Console migration manifest is not valid JSON');
+  }
+  if (manifest?.schemaVersion === 1) return parseCurrentMigrationManifest(manifest);
+  return parseLegacyMigrationManifest(manifest);
 }
 
 export function verifySupabaseMigrationArtifact(entry, contents) {
   if (!entry || sha256Text(contents) !== entry.sha256) {
-    throw new Error(`Supabase migration digest differs from manifest: ${entry?.name ?? 'unknown'}`);
+    throw new Error(`Console migration digest differs from manifest: ${entry?.globalId ?? entry?.name ?? 'unknown'}`);
   }
   return true;
 }
 
 export const SUPABASE_MANIFEST = Object.freeze({
-  path: 'backend/supabase/bootstrap/supabase.yaml',
+  path: 'backend/supabase/target/deploy.yaml',
   replacements: [
-    ['(?:docker\\.io/supabase/postgres|ghcr\\.io/opensphere-platform/opensphere-console-supabase-postgres)(?:@sha256:[a-f0-9]+|:[A-Za-z0-9][A-Za-z0-9._-]*)', 'supabasePostgres'],
-    ['(?:docker\\.io/supabase/gotrue|ghcr\\.io/opensphere-platform/opensphere-console-supabase-auth)(?:@sha256:[a-f0-9]+|:[A-Za-z0-9][A-Za-z0-9._-]*)', 'supabaseAuth'],
-    ['(?:docker\\.io/postgrest/postgrest|ghcr\\.io/opensphere-platform/opensphere-console-supabase-rest)(?:@sha256:[a-f0-9]+|:[A-Za-z0-9][A-Za-z0-9._-]*)', 'supabaseRest'],
-    ['(?:docker\\.io/supabase/storage-api|ghcr\\.io/opensphere-platform/opensphere-console-supabase-storage)(?:@sha256:[a-f0-9]+|:[A-Za-z0-9][A-Za-z0-9._-]*)', 'supabaseStorage']
+    ['__OPENSPHERE_SUPABASE_POSTGRES_IMAGE__', 'supabasePostgres'],
+    ['__OPENSPHERE_SUPABASE_AUTH_IMAGE__', 'supabaseAuth'],
+    ['__OPENSPHERE_SUPABASE_REST_IMAGE__', 'supabaseRest'],
+    ['__OPENSPHERE_SUPABASE_STORAGE_IMAGE__', 'supabaseStorage']
   ]
+});
+
+export const CONSOLE_API_MANIFEST = Object.freeze({
+  path: 'apps/console-api/deploy.yaml',
+  replacements: [['__OPENSPHERE_CONSOLE_API_IMAGE__', 'consoleApi']]
+});
+
+export const EXTENSION_CONTROLLER_MANIFEST = Object.freeze({
+  path: 'apps/extension-controller/deploy.yaml',
+  replacements: [['__OPENSPHERE_EXTENSION_CONTROLLER_IMAGE__', 'extensionController']]
 });
 
 export const GITEA_MANIFEST = Object.freeze({
@@ -315,7 +423,43 @@ export const GITEA_MANIFEST = Object.freeze({
   ]
 });
 
+export const BESZEL_MANIFEST = Object.freeze({
+  path: 'deploy/baseline-monitoring/beszel-release.yaml',
+  replacements: [
+    ['__OPENSPHERE_BESZEL_HUB_IMAGE__', 'beszelHub'],
+    ['__OPENSPHERE_BESZEL_AGENT_IMAGE__', 'beszelAgent'],
+    ['__OPENSPHERE_BESZEL_BOOTSTRAP_IMAGE__', 'beszelBootstrap']
+  ]
+});
+
+const TARGET_FOUNDATION_MANIFESTS = Object.freeze([
+  SUPABASE_MANIFEST,
+  CONSOLE_API_MANIFEST,
+  EXTENSION_CONTROLLER_MANIFEST,
+  GITEA_MANIFEST,
+  BESZEL_MANIFEST
+]);
+
+const LEGACY_SUPABASE_MANIFEST = Object.freeze({
+  path: 'backend/supabase/bootstrap/supabase.yaml',
+  replacements: [
+    ['(?:docker\\.io/supabase/postgres|ghcr\\.io/opensphere-platform/opensphere-console-supabase-postgres)(?:@sha256:[a-f0-9]+|:[A-Za-z0-9][A-Za-z0-9._-]*)', 'supabasePostgres'],
+    ['(?:docker\\.io/supabase/gotrue|ghcr\\.io/opensphere-platform/opensphere-console-supabase-auth)(?:@sha256:[a-f0-9]+|:[A-Za-z0-9][A-Za-z0-9._-]*)', 'supabaseAuth'],
+    ['(?:docker\\.io/postgrest/postgrest|ghcr\\.io/opensphere-platform/opensphere-console-supabase-rest)(?:@sha256:[a-f0-9]+|:[A-Za-z0-9][A-Za-z0-9._-]*)', 'supabaseRest'],
+    ['(?:docker\\.io/supabase/storage-api|ghcr\\.io/opensphere-platform/opensphere-console-supabase-storage)(?:@sha256:[a-f0-9]+|:[A-Za-z0-9][A-Za-z0-9._-]*)', 'supabaseStorage']
+  ]
+});
+
 export const FOUNDATION_ARTIFACT_PATHS = Object.freeze([
+  'scripts/Install-ConsoleApiRuntime.ps1',
+  'scripts/console-migrations.mjs',
+  'backend/gitea/bootstrap/install.ps1',
+  'backend/gitea/bootstrap/configure-signing.ps1',
+  'backend/gitea/bootstrap/control-plane-bootstrap.ps1',
+  'deploy/baseline-monitoring/install.ps1'
+]);
+
+const LEGACY_FOUNDATION_ARTIFACT_PATHS = Object.freeze([
   'backend/supabase/install.ps1',
   'backend/supabase/migration-transaction.ps1',
   'backend/gitea/bootstrap/install.ps1',
@@ -326,23 +470,45 @@ export const FOUNDATION_ARTIFACT_PATHS = Object.freeze([
 export const INSTALL_ARTIFACT_PATHS = Object.freeze([
   ...FOUNDATION_ARTIFACT_PATHS,
   SUPABASE_MIGRATION_MANIFEST,
-  SUPABASE_MANIFEST.path,
-  GITEA_MANIFEST.path,
+  ...TARGET_FOUNDATION_MANIFESTS.map(({ path }) => path),
   ...BASE_MANIFESTS.map(({ path }) => path)
 ]);
+
+function isTargetConsoleRelease(lock) {
+  return Boolean(lock?.components?.consoleApi && lock?.components?.extensionController);
+}
+
+function migrationManifestPath(lock) {
+  return isTargetConsoleRelease(lock)
+    ? SUPABASE_MIGRATION_MANIFEST
+    : LEGACY_SUPABASE_MIGRATION_MANIFEST;
+}
+
+function foundationManifestSpecs(lock) {
+  return isTargetConsoleRelease(lock)
+    ? TARGET_FOUNDATION_MANIFESTS
+    : [LEGACY_SUPABASE_MANIFEST, GITEA_MANIFEST];
+}
+
+function foundationArtifactPaths(lock) {
+  return isTargetConsoleRelease(lock)
+    ? FOUNDATION_ARTIFACT_PATHS
+    : LEGACY_FOUNDATION_ARTIFACT_PATHS;
+}
 
 function isPreRecoveryRelease(lock) {
   return !lock?.components?.recovery;
 }
 
-function foundationArtifactPaths(lock) {
-  return FOUNDATION_ARTIFACT_PATHS;
-}
 
 export function baseManifestSpecs(lock) {
+  if (lock?.components?.consoleApi) {
+    return BASE_MANIFESTS.filter(({ requiresAuxiliaryArtifact }) =>
+      !requiresAuxiliaryArtifact || Boolean(lock.auxiliaryArtifacts?.[requiresAuxiliaryArtifact]));
+  }
   let specs = isPreRecoveryRelease(lock)
-    ? BASE_MANIFESTS.filter(({ path }) => !LEGACY_RECOVERY_MANIFESTS.has(path))
-    : BASE_MANIFESTS;
+    ? LEGACY_BASE_MANIFESTS.filter(({ path }) => !LEGACY_RECOVERY_MANIFESTS.has(path))
+    : LEGACY_BASE_MANIFESTS;
   if (!lock?.components?.osdst) {
     specs = specs.filter(({ path }) => path !== 'backend/opensphere-osdst/deploy.yaml');
   }
@@ -388,7 +554,7 @@ export function componentReleaseManifestSpecs(
     }
     return [{ ...spec, artifactSourceRevision: [...sourceRevisions][0] }];
   });
-  const foundation = selectRequestedSpecs([SUPABASE_MANIFEST, GITEA_MANIFEST]);
+  const foundation = selectRequestedSpecs(foundationManifestSpecs(lock));
   const base = selectRequestedSpecs(baseManifestSpecs(lock));
   const exposed = new Set(
     [...foundation, ...base].flatMap((spec) => [...manifestSpecComponents(spec)])
@@ -401,10 +567,31 @@ export function componentReleaseManifestSpecs(
 }
 
 function installArtifactCount(lock) {
-  return foundationArtifactPaths(lock).length + 3 + baseManifestSpecs(lock).length;
+  return new Set([
+    ...foundationArtifactPaths(lock),
+    migrationManifestPath(lock),
+    ...foundationManifestSpecs(lock).map(({ path }) => path),
+    ...baseManifestSpecs(lock).map(({ path }) => path)
+  ]).size;
 }
 
 export const CORE_ROLLOUTS = Object.freeze([
+  ['opensphere-console-data', 'statefulset/opensphere-supabase-postgres', '600s'],
+  ['opensphere-console-data', 'deployment/opensphere-supabase-auth', '600s'],
+  ['opensphere-console-data', 'deployment/opensphere-supabase-rest', '600s'],
+  ['opensphere-console-data', 'deployment/opensphere-supabase-storage', '600s'],
+  ['opensphere-console-change', 'deployment/opensphere-gitea-postgres', '600s'],
+  ['opensphere-console-change', 'deployment/opensphere-gitea', '900s'],
+  ['opensphere-console', 'deployment/opensphere-console-api', '600s'],
+  ['opensphere-console', 'deployment/opensphere-extension-controller', '600s'],
+  ['opensphere-console', 'deployment/opensphere-registry', '600s'],
+  ['opensphere-console', 'deployment/os-cli', '600s'],
+  ['opensphere-monitoring', 'statefulset/beszel-hub', '600s'],
+  ['opensphere-monitoring', 'daemonset/beszel-agent', '600s'],
+  ['opensphere-console', 'deployment/opensphere-console', '600s']
+]);
+
+const LEGACY_CORE_ROLLOUTS = Object.freeze([
   ['opensphere-console-data', 'statefulset/opensphere-supabase-postgres', '600s'],
   ['opensphere-console-data', 'deployment/opensphere-supabase-auth', '600s'],
   ['opensphere-console-data', 'deployment/opensphere-supabase-rest', '600s'],
@@ -426,26 +613,22 @@ export const CORE_ROLLOUTS = Object.freeze([
 
 export const COMPONENT_ROLLOUTS = Object.freeze({
   console: [['opensphere-console', 'deployment/opensphere-console', '600s']],
-  backend: [
-    ['opensphere-console', 'deployment/opensphere-console-backend', '600s'],
-    ['opensphere-console', 'deployment/foundation-bootstrap-reconciler', '600s'],
-    ['opensphere-console', 'deployment/platform-release-reconciler', '600s']
-  ],
-  dupaController: [['opensphere-console', 'deployment/opensphere-console-dupa-controller', '600s']],
+  consoleApi: [['opensphere-console', 'deployment/opensphere-console-api', '600s']],
+  extensionController: [['opensphere-console', 'deployment/opensphere-extension-controller', '600s']],
   registry: [['opensphere-console', 'deployment/opensphere-registry', '600s']],
-  osaaGateway: [['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']],
-  osdst: [['opensphere-console', 'deployment/opensphere-osdst', '600s']],
-  osaaGovernedAdapter: [['opensphere-console', 'deployment/osaa-governed-adapter', '600s']],
-  notificationDispatcher: [
-    ['opensphere-console', 'deployment/opensphere-notification-dispatcher', '600s'],
-    ['opensphere-console', 'deployment/opensphere-external-channel-executor', '600s']
-  ],
   gitea: [['opensphere-console-change', 'deployment/opensphere-gitea', '900s']],
   giteaPostgres: [['opensphere-console-change', 'deployment/opensphere-gitea-postgres', '600s']],
   supabasePostgres: [['opensphere-console-data', 'statefulset/opensphere-supabase-postgres', '600s']],
   supabaseAuth: [['opensphere-console-data', 'deployment/opensphere-supabase-auth', '600s']],
   supabaseRest: [['opensphere-console-data', 'deployment/opensphere-supabase-rest', '600s']],
   supabaseStorage: [['opensphere-console-data', 'deployment/opensphere-supabase-storage', '600s']],
+  beszelHub: [['opensphere-monitoring', 'statefulset/beszel-hub', '600s']],
+  beszelAgent: [['opensphere-monitoring', 'daemonset/beszel-agent', '600s']],
+  beszelBootstrap: [],
+  osaaGateway: [],
+  osdst: [],
+  osaaGovernedAdapter: [],
+  notificationDispatcher: [],
   recovery: []
 });
 
@@ -496,59 +679,84 @@ function ensureGenericSecret(namespace, name, literals = {}, files = {}) {
   return true;
 }
 
-function ensureFoundationDataEngineSecretAccess() {
-  applyYaml(`${JSON.stringify({
-    apiVersion: 'rbac.authorization.k8s.io/v1',
-    kind: 'Role',
-    metadata: { name: 'foundation-console-valkey-secret-manager', namespace: 'opensphere-foundation' },
-    rules: [{
-      apiGroups: [''], resources: ['secrets'],
-      resourceNames: ['foundation-data-valkey-auth', 'rustfs-credentials'],
-      verbs: ['get', 'patch']
-    }]
-  })}\n`);
-  applyYaml(`${JSON.stringify({
-    apiVersion: 'rbac.authorization.k8s.io/v1',
-    kind: 'RoleBinding',
-    metadata: { name: 'foundation-console-valkey-secret-manager', namespace: 'opensphere-foundation' },
-    roleRef: { apiGroup: 'rbac.authorization.k8s.io', kind: 'Role', name: 'foundation-console-valkey-secret-manager' },
-    subjects: [{ kind: 'ServiceAccount', name: 'opensphere-foundation', namespace: 'opensphere-console' }]
-  })}\n`);
+function jwtSegment(value) {
+  return Buffer.from(JSON.stringify(value), 'utf8').toString('base64url');
 }
 
-export function ensureFoundationDataEngineCredentials() {
-  ensureGenericSecret('opensphere-foundation', 'foundation-data-valkey-auth', {
-    password: randomBytes(32).toString('base64')
-  });
-  ensureGenericSecret('opensphere-foundation', 'rustfs-credentials', {
-    access_key: `opensphere-${randomBytes(9).toString('hex')}`,
-    secret_key: randomBytes(32).toString('base64url')
-  });
-  ensureFoundationDataEngineSecretAccess();
-}
-
-function ensureRecoveryTargetSecret(namespace, source) {
-  const candidate = recoveryTargetData(source);
-  let existing = null;
-  try { existing = readSecret(namespace, 'opensphere-platform-recovery-target'); } catch {}
-  if (existing) {
-    const changed = Object.keys(candidate).some((key) => existing.data?.[key] !== candidate[key]);
-    if (changed) {
-      throw new Error(`Recovery target rotation is a governed migration; refusing to replace ${namespace}/opensphere-platform-recovery-target during bootstrap`);
-    }
-    return false;
+export function createSupabaseServiceJwt(secret, role, now = Math.floor(Date.now() / 1000)) {
+  if (!Buffer.isBuffer(secret) || secret.length < 32) {
+    throw new Error('Supabase JWT secret must contain at least 32 bytes');
   }
-  applyYaml(`${JSON.stringify({
+  if (!['anon', 'service_role'].includes(role)) {
+    throw new Error('Unsupported Supabase service JWT role');
+  }
+  const header = jwtSegment({ alg: 'HS256', typ: 'JWT' });
+  const payload = jwtSegment({
+    iss: 'supabase',
+    role,
+    iat: now,
+    exp: now + (10 * 365 * 24 * 60 * 60)
+  });
+  const unsigned = `${header}.${payload}`;
+  const signature = createHmac('sha256', secret).update(unsigned, 'ascii').digest('base64url');
+  return `${unsigned}.${signature}`;
+}
+
+export function supabaseServerSecretManifest(existing = null) {
+  const expectedKeys = [
+    'anon-key',
+    'jwt-secret',
+    'postgres-password',
+    's3-access-key-id',
+    's3-access-key-secret',
+    'service-role-key'
+  ].sort();
+  if (existing) {
+    const actualKeys = Object.keys(existing.data ?? {}).sort();
+    if (existing.type !== 'Opaque'
+        || existing.metadata?.labels?.['opensphere.io/secret-scope'] !== 'supabase-server-only'
+        || JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys)
+        || expectedKeys.some((key) => !existing.data?.[key])) {
+      throw new Error('Existing opensphere-supabase-secrets differs from the exact six-key target contract; no implicit repair or rotation was attempted');
+    }
+    return null;
+  }
+
+  const jwtSecret = randomBytes(48);
+  const jwtSecretText = jwtSecret.toString('base64url');
+  const literals = {
+    'anon-key': createSupabaseServiceJwt(Buffer.from(jwtSecretText, 'utf8'), 'anon'),
+    'jwt-secret': jwtSecretText,
+    'postgres-password': randomBytes(48).toString('base64url'),
+    's3-access-key-id': `opensphere-${randomBytes(12).toString('hex')}`,
+    's3-access-key-secret': randomBytes(48).toString('base64url'),
+    'service-role-key': createSupabaseServiceJwt(Buffer.from(jwtSecretText, 'utf8'), 'service_role')
+  };
+  jwtSecret.fill(0);
+  return {
     apiVersion: 'v1',
     kind: 'Secret',
     metadata: {
-      name: 'opensphere-platform-recovery-target',
-      namespace,
-      labels: { 'opensphere.io/authority': 'external-recovery-target' }
+      name: 'opensphere-supabase-secrets',
+      namespace: 'opensphere-console-data',
+      labels: { 'opensphere.io/secret-scope': 'supabase-server-only' }
     },
     type: 'Opaque',
-    data: candidate
-  })}\n`);
+    data: Object.fromEntries(
+      Object.entries(literals).map(([key, value]) => [
+        key,
+        Buffer.from(value, 'utf8').toString('base64')
+      ])
+    )
+  };
+}
+
+export function ensureSupabaseServerSecret() {
+  let existing = null;
+  try { existing = readSecret('opensphere-console-data', 'opensphere-supabase-secrets'); } catch {}
+  const manifest = supabaseServerSecretManifest(existing);
+  if (!manifest) return false;
+  applyYaml(`${JSON.stringify(manifest)}\n`);
   return true;
 }
 
@@ -723,31 +931,47 @@ export async function materializeSupabaseMigrationSet(
   lock,
   root,
   sourceRevision = lock.sourceRevision,
-  signedEvidence = lock.releaseBom?.migrationManifest
+  signedEvidence = lock.releaseBom?.migrationManifest,
+  manifestPath = migrationManifestPath(lock)
 ) {
-  const rawManifest = await fetchReleaseArtifact(lock, SUPABASE_MIGRATION_MANIFEST, { sourceRevision });
+  const rawManifest = await fetchReleaseArtifact(lock, manifestPath, { sourceRevision });
   const manifest = parseSupabaseMigrationManifest(rawManifest);
-  if (signedEvidence) {
-    const observedEvidence = {
-      path: SUPABASE_MIGRATION_MANIFEST,
-      sha256: `sha256:${sha256Text(rawManifest)}`,
-      setDigest: manifest.setDigest,
-      latestMigrationId: manifest.latestMigrationId,
-      migrationCount: manifest.migrationCount,
-    };
-    if (Object.entries(observedEvidence).some(([key, value]) => signedEvidence[key] !== value)
-        || Object.keys(signedEvidence).length !== Object.keys(observedEvidence).length) {
-      throw new Error('Supabase migration manifest differs from signed Release BOM evidence');
-    }
+  const current = manifest.schemaVersion === 1;
+  const observedEvidence = current
+    ? {
+        path: manifestPath,
+        sha256: `sha256:${sha256Text(rawManifest)}`,
+        setDigest: manifest.setDigest,
+        latestGlobalId: manifest.latestGlobalId,
+        migrationCount: manifest.migrationCount
+      }
+    : {
+        path: manifestPath,
+        sha256: `sha256:${sha256Text(rawManifest)}`,
+        setDigest: manifest.setDigest,
+        latestMigrationId: manifest.latestMigrationId,
+        migrationCount: manifest.migrationCount
+      };
+  if (signedEvidence && (
+    Object.entries(observedEvidence).some(([key, value]) => signedEvidence[key] !== value)
+    || Object.keys(signedEvidence).length !== Object.keys(observedEvidence).length
+  )) {
+    throw new Error('Console migration manifest differs from release evidence');
   }
   const artifacts = await Promise.all(manifest.migrations.map(async (entry) => {
     const contents = await fetchReleaseArtifact(lock, entry.path, { sourceRevision });
     verifySupabaseMigrationArtifact(entry, contents);
     return { path: entry.path, contents };
   }));
-  await writeReleaseArtifact(root, SUPABASE_MIGRATION_MANIFEST, rawManifest);
+  await writeReleaseArtifact(root, manifestPath, rawManifest);
   for (const artifact of artifacts) await writeReleaseArtifact(root, artifact.path, artifact.contents);
-  return { manifest, sourceRevision, artifactCount: artifacts.length + 1 };
+  return {
+    manifest,
+    manifestPath,
+    sourceRevision,
+    evidence: Object.freeze(observedEvidence),
+    artifactCount: artifacts.length + 1
+  };
 }
 
 async function materializeFoundationInstallers(
@@ -762,10 +986,19 @@ async function materializeFoundationInstallers(
     migrationEvidence = lock.releaseBom?.migrationManifest
   } = {}
 ) {
-  const [supabaseManifest, giteaManifest] = await Promise.all([
-    fetchManifest(lock, SUPABASE_MANIFEST, storageClass, consoleUrl, authEnvironment),
-    fetchManifest(lock, GITEA_MANIFEST, storageClass, consoleUrl, authEnvironment)
-  ]);
+  const target = isTargetConsoleRelease(lock);
+  const manifestArtifacts = await Promise.all(foundationManifestSpecs(lock).map(async (spec) => {
+    const raw = await fetchReleaseArtifact(lock, spec.path);
+    const rendered = renderManifest(
+      lock,
+      spec,
+      raw,
+      storageClass,
+      consoleUrl,
+      authEnvironment
+    );
+    return { spec, raw, rendered };
+  }));
   const artifacts = (await Promise.all(foundationArtifactPaths(lock).map(async (path) => {
     const contents = await fetchReleaseArtifact(lock, path, {
       optional404: optionalArtifacts.has(path)
@@ -773,29 +1006,36 @@ async function materializeFoundationInstallers(
     return contents === null ? null : { path, contents };
   }))).filter(Boolean);
   for (const artifact of artifacts) await writeReleaseArtifact(root, artifact.path, artifact.contents);
-  // Database expansion is forward-only. During rollback preparation, callers
-  // source the immutable migration set from the target release while the
-  // workloads/installers still come from the previous release. This avoids
-  // requiring a newly introduced manifest in an older source revision.
   const migration = await materializeSupabaseMigrationSet(
     lock,
     root,
     migrationSourceRevision,
     migrationEvidence
   );
-  await writeReleaseArtifact(root, SUPABASE_MANIFEST.path, supabaseManifest);
-  await writeReleaseArtifact(root, GITEA_MANIFEST.path, giteaManifest);
+  for (const artifact of manifestArtifacts) {
+    await writeReleaseArtifact(
+      root,
+      artifact.spec.path,
+      target ? artifact.raw : artifact.rendered
+    );
+  }
   return {
     root,
+    target,
     migration,
-    release: [
-      { path: SUPABASE_MANIFEST.path, yaml: supabaseManifest },
-      { path: GITEA_MANIFEST.path, yaml: giteaManifest }
-    ]
+    release: manifestArtifacts.map(({ spec, rendered }) => ({
+      path: spec.path,
+      yaml: rendered
+    }))
   };
 }
 
-function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, progress) {
+function currentKubeContext() {
+  return process.env.OPENSPHERE_KUBE_CONTEXT
+    || kubectl(['config', 'current-context'], { capture: true }).trim();
+}
+
+function runLegacyFoundationInstallers(lock, foundation, storageClass, consoleUrl, progress) {
   const context = process.env.OPENSPHERE_KUBE_CONTEXT || '';
   const supabaseArgs = [
     '-NoProfile', '-NonInteractive', '-File',
@@ -806,9 +1046,8 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
     '-SourceRevision', lock.sourceRevision
   ];
   if (context) supabaseArgs.push('-KubeContext', context);
-  progress?.item('설치', 'Supabase Data & Identity Backbone');
+  progress?.item('설치', 'Legacy Supabase rollback baseline');
   run('pwsh', supabaseArgs);
-  progress?.item('완료', 'Supabase Data & Identity Backbone manifest 적용');
 
   const giteaArgs = [
     '-NoProfile', '-NonInteractive', '-File',
@@ -820,13 +1059,64 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
     '-StorageClass', storageClass
   ];
   if (context) giteaArgs.push('-KubeContext', context);
-  progress?.item('설치', 'Gitea Declarative Change Authority');
   run('pwsh', giteaArgs);
-  progress?.item('완료', 'Gitea Declarative Change Authority manifest 적용');
+}
+
+function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, progress) {
+  if (!foundation.target) {
+    runLegacyFoundationInstallers(lock, foundation, storageClass, consoleUrl, progress);
+    return;
+  }
+  const context = currentKubeContext();
+
+  progress?.item('설치', 'Gitea Declarative Change Authority');
+  run('pwsh', [
+    '-NoProfile', '-NonInteractive', '-File',
+    join(foundation.root, 'backend', 'gitea', 'bootstrap', 'install.ps1'),
+    '-GiteaNamespace', 'opensphere-console-change',
+    '-ConsoleNamespace', 'opensphere-console',
+    '-GiteaImage', lock.components.gitea.image,
+    '-PostgresImage', lock.components.giteaPostgres.image,
+    '-StorageClass', storageClass,
+    '-KubeContext', context
+  ]);
+  progress?.item('완료', 'Gitea bootstrap 및 control-plane credential');
+
+  const migration = foundation.migration.evidence;
+  progress?.item('설치', 'Supabase Data & Identity + Console API/Extension Controller');
+  run('pwsh', [
+    '-NoProfile', '-NonInteractive', '-File',
+    join(foundation.root, 'scripts', 'Install-ConsoleApiRuntime.ps1'),
+    '-ConsoleApiImage', lock.components.consoleApi.image,
+    '-ExtensionControllerImage', lock.components.extensionController.image,
+    '-SupabasePostgresImage', lock.components.supabasePostgres.image,
+    '-SupabaseAuthImage', lock.components.supabaseAuth.image,
+    '-SupabaseRestImage', lock.components.supabaseRest.image,
+    '-SupabaseStorageImage', lock.components.supabaseStorage.image,
+    '-ConsoleUrl', consoleUrl,
+    '-StorageClass', storageClass,
+    '-KubeContext', context,
+    '-VerifiedMaterializedRelease',
+    '-ExpectedMigrationManifestSha256', migration.sha256,
+    '-ExpectedMigrationSetDigest', migration.setDigest,
+    '-ExpectedMigrationLatestGlobalId', migration.latestGlobalId
+  ]);
+  progress?.item('완료', 'fresh migration prefix 및 최소권한 C_API/C_EXT runtime');
+
+  progress?.item('설치', 'Beszel baseline host observability');
+  run('pwsh', [
+    '-NoProfile', '-NonInteractive', '-File',
+    join(foundation.root, 'deploy', 'baseline-monitoring', 'install.ps1'),
+    '-KubectlContext', context,
+    '-BeszelHubImage', lock.components.beszelHub.image,
+    '-BeszelAgentImage', lock.components.beszelAgent.image,
+    '-BeszelBootstrapImage', lock.components.beszelBootstrap.image
+  ]);
+  progress?.item('완료', 'Beszel Hub bootstrap Job 및 Agent restart 검증');
 }
 
 function runComponentMigrations(foundation, progress) {
-  if (!foundation.migration) return;
+  if (!foundation.migration || foundation.target) return;
   const context = process.env.OPENSPHERE_KUBE_CONTEXT || '';
   const args = [
     '-NoProfile', '-NonInteractive', '-File',
@@ -1092,11 +1382,18 @@ export function workloadReady(workload) {
   const generation = Number(workload.metadata?.generation ?? 0);
   if (observedGeneration < generation) return false;
 
+  const kind = String(workload.kind ?? '').toLowerCase();
+  if (kind === 'daemonset') {
+    const scheduled = Number(workload.status?.desiredNumberScheduled ?? 0);
+    return scheduled > 0
+      && Number(workload.status?.updatedNumberScheduled ?? 0) === scheduled
+      && Number(workload.status?.numberReady ?? 0) === scheduled
+      && Number(workload.status?.numberUnavailable ?? 0) === 0;
+  }
+
   const ready = Number(workload.status?.readyReplicas ?? 0) === desired;
   const updated = Number(workload.status?.updatedReplicas ?? 0) === desired;
   if (!ready || !updated) return false;
-
-  const kind = String(workload.kind ?? '').toLowerCase();
   if (kind === 'deployment') {
     return Number(workload.status?.availableReplicas ?? 0) === desired
       && Number(workload.status?.unavailableReplicas ?? 0) === 0;
@@ -1135,7 +1432,8 @@ function waitForRollouts(rollouts, progress) {
 }
 
 export function coreRolloutsForLock(lock) {
-  return CORE_ROLLOUTS.filter(([, resource]) => (
+  const rollouts = isTargetConsoleRelease(lock) ? CORE_ROLLOUTS : LEGACY_CORE_ROLLOUTS;
+  return rollouts.filter(([, resource]) => (
     (resource !== 'deployment/os-cli' || Boolean(lock?.auxiliaryArtifacts?.cliArtifacts))
     && (resource !== 'deployment/opensphere-osdst' || Boolean(lock?.components?.osdst))
   ));
@@ -1194,13 +1492,73 @@ export function waitForJobCompletion(
   throw new Error(`Job ${namespace}/${name} did not complete within ${timeoutMs / 1000}s`);
 }
 
-function recordInstallationState(
+function installationClusterScopedResources() {
+  return {
+    customResourceDefinitions: [...MANAGED_CLUSTER_SCOPED_RESOURCES.customResourceDefinitions],
+    clusterRbac: [...MANAGED_CLUSTER_SCOPED_RESOURCES.clusterRbac],
+    admissionPolicies: [...MANAGED_CLUSTER_SCOPED_RESOURCES.admissionPolicies]
+  };
+}
+
+function baselineObservabilityState(observed = {}) {
+  return {
+    ...BASELINE_OBSERVABILITY_REQUIREMENT,
+    hostAccess: [...BASELINE_OBSERVABILITY_REQUIREMENT.hostAccess],
+    podSecurityEnforce: String(observed.podSecurityEnforce ?? 'not-observed'),
+    status: String(observed.status ?? 'not-observed')
+  };
+}
+
+export function installationStateDocument(
+  phase,
+  lock,
+  {
+    observedAt = new Date().toISOString(),
+    verification,
+    failureCode,
+    baselineObservabilitySecurity
+  } = {}
+) {
+  if (!INSTALLATION_PHASES.includes(phase)) {
+    throw new Error(`Unsupported installation phase: ${phase}`);
+  }
+  if (!/^sha256:[a-f0-9]{64}$/u.test(lock?.releaseDigest ?? '')) {
+    throw new Error('Installation state requires an exact release digest');
+  }
+  if (phase === 'Ready') {
+    if (verification?.evidenceConfigMap !== 'opensphere-installation-evidence'
+        || !/^\d{4}-\d{2}-\d{2}T/u.test(verification?.verifiedAt ?? '')) {
+      throw new Error('Ready installation state requires completed verification evidence');
+    }
+  } else if (verification !== undefined) {
+    throw new Error(`${phase} installation state cannot claim completed verification`);
+  }
+  if (phase === 'Failed' && !/^[a-z][a-z0-9-]{2,63}$/u.test(failureCode ?? '')) {
+    throw new Error('Failed installation state requires a bounded failure code');
+  }
+  return {
+    apiVersion: 'bootstrap.opensphere.io/v1alpha1',
+    kind: 'OpenSphereInstallationState',
+    phase,
+    releaseDigest: lock.releaseDigest,
+    observedAt,
+    managedNamespaces: [...MANAGED_NAMESPACES],
+    managedClusterScopedResources: installationClusterScopedResources(),
+    baselineObservabilitySecurity: baselineObservabilityState(baselineObservabilitySecurity),
+    ...(verification ? { verification } : {}),
+    ...(failureCode ? { failureCode } : {})
+  };
+}
+
+export function recordInstallationState(
   lock,
   storageClass,
   initialAdmin,
   consoleUrl,
   authEnvironment,
-  shellTlsSecret
+  shellTlsSecret,
+  phase = 'Preparing',
+  stateOptions = {}
 ) {
   const config = {
     apiVersion: 'bootstrap.opensphere.io/v1alpha1',
@@ -1211,18 +1569,26 @@ function recordInstallationState(
     storageClass,
     consoleUrl: normalizeConsoleUrl(consoleUrl),
     authEnvironment: validateAuthEnvironment(authEnvironment),
+    responsibilityBoundary: releaseResponsibilityProfile(lock.components, lock.auxiliaryArtifacts),
+    baselineObservabilityRequirement: {
+      ...BASELINE_OBSERVABILITY_REQUIREMENT,
+      hostAccess: [...BASELINE_OBSERVABILITY_REQUIREMENT.hostAccess]
+    },
     ...(shellTlsSecret ? { shellTlsSecret } : {}),
     initialAdmin
   };
+  const state = installationStateDocument(phase, lock, stateOptions);
   applyYaml(`${JSON.stringify({
     apiVersion: 'v1',
     kind: 'ConfigMap',
     metadata: { name: 'opensphere-installation-lock', namespace: 'opensphere-console' },
     data: {
       'release.json': JSON.stringify(lock),
-      'config.json': JSON.stringify(config)
+      'config.json': JSON.stringify(config),
+      'state.json': JSON.stringify(state)
     }
   })}\n`);
+  return { config, state };
 }
 
 function recordInitialAdmin(initialAdmin, state = 'required') {
@@ -1256,6 +1622,29 @@ function readStoredInstallationLock() {
       '-n', 'opensphere-console', 'get', 'configmap', 'opensphere-installation-lock', '-o', 'json'
     ], { capture: true }));
     return JSON.parse(object.data?.['release.json'] ?? 'null');
+  } catch {
+    return null;
+  }
+}
+
+export function readInstallationState() {
+  try {
+    const object = JSON.parse(kubectl([
+      '-n', 'opensphere-console', 'get', 'configmap', 'opensphere-installation-lock', '-o', 'json'
+    ], { capture: true }));
+    const state = JSON.parse(object.data?.['state.json'] ?? 'null');
+    if (!state || state.apiVersion !== 'bootstrap.opensphere.io/v1alpha1'
+        || state.kind !== 'OpenSphereInstallationState'
+        || !INSTALLATION_PHASES.includes(state.phase)
+        || !/^sha256:[a-f0-9]{64}$/u.test(state.releaseDigest ?? '')
+        || JSON.stringify(state.managedNamespaces) !== JSON.stringify(MANAGED_NAMESPACES)
+        || JSON.stringify(state.managedClusterScopedResources) !== JSON.stringify(installationClusterScopedResources())
+        || JSON.stringify(state.baselineObservabilitySecurity?.hostAccess) !== JSON.stringify(BASELINE_OBSERVABILITY_REQUIREMENT.hostAccess)
+        || state.baselineObservabilitySecurity?.setupRepairsHost !== false
+        || state.baselineObservabilitySecurity?.setupLowersPodSecurity !== false) {
+      throw new Error('Installation state is absent or does not own the canonical namespace set');
+    }
+    return state;
   } catch {
     return null;
   }
@@ -1297,6 +1686,11 @@ export function existingOpenSphereNamespaces() {
     .sort();
 }
 
+export function existingManagedNamespaces(namespaces = existingOpenSphereNamespaces()) {
+  const managed = new Set(MANAGED_NAMESPACES);
+  return [...new Set(namespaces.filter((name) => managed.has(name)))].sort();
+}
+
 function listManagedPersistentVolumes() {
   const namespaces = new Set(MANAGED_NAMESPACES);
   const volumes = JSON.parse(kubectl(['get', 'persistentvolumes', '-o', 'json'], { capture: true }));
@@ -1309,7 +1703,9 @@ function listManagedPersistentVolumes() {
 export async function uninstallManagedInstallation({ runtime = {} } = {}) {
   const operations = {
     readInstallationLock,
+    readInstallationState,
     existingOpenSphereNamespaces,
+    existingManagedNamespaces,
     listManagedPersistentVolumes,
     deleteManagedNamespace: (namespace) =>
       kubectl(['delete', 'namespace', namespace, '--ignore-not-found', '--wait=false']),
@@ -1323,11 +1719,21 @@ export async function uninstallManagedInstallation({ runtime = {} } = {}) {
       kubectl(['delete', resource, '--ignore-not-found', '--wait=true']),
     ...runtime
   };
+  if (runtime.existingOpenSphereNamespaces && !runtime.existingManagedNamespaces) {
+    operations.existingManagedNamespaces = () =>
+      existingManagedNamespaces(runtime.existingOpenSphereNamespaces());
+  }
   const installed = operations.readInstallationLock();
-  const namespaces = operations.existingOpenSphereNamespaces();
+  const state = operations.readInstallationState();
+  const namespaces = operations.existingManagedNamespaces();
   if (!installed) {
-    if (namespaces.length) throw new Error(`Refusing to purge unmanaged OpenSphere namespaces: ${namespaces.join(', ')}`);
+    if (namespaces.length) throw new Error(`Refusing to purge unmanaged Setup namespaces: ${namespaces.join(', ')}`);
     throw new Error('No managed OpenSphere installation lock was found');
+  }
+  if (!state || state.releaseDigest !== installed.releaseDigest
+      || JSON.stringify(state.managedNamespaces) !== JSON.stringify(MANAGED_NAMESPACES)
+      || JSON.stringify(state.managedClusterScopedResources) !== JSON.stringify(installationClusterScopedResources())) {
+    throw new Error('Installation lock does not own the canonical managed namespace and cluster-scoped resource set');
   }
   const unexpected = namespaces.filter((name) => !MANAGED_NAMESPACES.includes(name));
   const missing = MANAGED_NAMESPACES.filter((name) => !namespaces.includes(name));
@@ -1338,16 +1744,17 @@ export async function uninstallManagedInstallation({ runtime = {} } = {}) {
   for (const namespace of MANAGED_NAMESPACES) operations.deleteManagedNamespace(namespace);
   for (const namespace of MANAGED_NAMESPACES) operations.waitForManagedNamespaceDeletion(namespace);
   for (const volume of persistentVolumes) operations.deleteManagedPersistentVolume(volume);
-  for (const crd of MANAGED_CRDS) operations.deleteManagedCrd(crd);
-  for (const resource of MANAGED_CLUSTER_POLICIES) operations.deleteManagedClusterRbac(resource);
-  for (const resource of MANAGED_CLUSTER_RBAC) operations.deleteManagedClusterRbac(resource);
+  const ownedClusterScoped = state.managedClusterScopedResources;
+  for (const crd of ownedClusterScoped.customResourceDefinitions) operations.deleteManagedCrd(crd);
+  for (const resource of ownedClusterScoped.admissionPolicies) operations.deleteManagedClusterRbac(resource);
+  for (const resource of ownedClusterScoped.clusterRbac) operations.deleteManagedClusterRbac(resource);
   return {
     releaseDigest: installed.releaseDigest,
     namespaces: [...MANAGED_NAMESPACES],
     persistentVolumes,
-    customResourceDefinitions: [...MANAGED_CRDS],
-    clusterPolicies: [...MANAGED_CLUSTER_POLICIES],
-    clusterRbac: [...MANAGED_CLUSTER_RBAC]
+    customResourceDefinitions: [...ownedClusterScoped.customResourceDefinitions],
+    clusterPolicies: [...ownedClusterScoped.admissionPolicies],
+    clusterRbac: [...ownedClusterScoped.clusterRbac]
   };
 }
 
@@ -1497,7 +1904,6 @@ export async function bootstrap(lock, {
   openOnboarding = true,
   authEnvironment,
   shellTlsSecret,
-  recoveryTargetSecret,
   registryCredentials,
   requiredPlatforms,
   progress
@@ -1520,7 +1926,7 @@ export async function bootstrap(lock, {
     consoleUrl ?? defaultConsoleUrl(lock.channel, requestedAuthEnvironment)
   );
   const installed = readInstallationLock();
-  const existingNamespaces = existingOpenSphereNamespaces();
+  const existingNamespaces = existingManagedNamespaces();
   if (!installed && !lock.auxiliaryArtifacts?.cliArtifacts) {
     throw new Error('Fresh installation release lock lacks the digest-bound Console CLI artifact');
   }
@@ -1556,7 +1962,6 @@ export async function bootstrap(lock, {
     throw new Error(`Installation uses Console URL ${effectiveConsoleUrl}; changing it requires endpoint migration`);
   }
   const requestedShellTls = shellTlsSecret ? parseShellTlsSecretRef(shellTlsSecret) : undefined;
-  const requestedRecoveryTarget = recoveryTargetSecret ? parseRecoveryTargetSecretRef(recoveryTargetSecret) : undefined;
   const storedShellTls = storedConfig?.shellTlsSecret
     ? parseShellTlsSecretRef(storedConfig.shellTlsSecret)
     : undefined;
@@ -1577,8 +1982,20 @@ export async function bootstrap(lock, {
     storageClass: storedConfig?.storageClass ?? storageClass,
     channel: lock.channel
   });
-  progress?.done(`${cluster.serverVersion}, ${cluster.nodeCount} nodes, StorageClass ${cluster.storageClass}`);
+  progress?.done(`${cluster.serverVersion}, ${cluster.readyNodeCount}/${cluster.nodeCount} Ready schedulable nodes, StorageClass ${cluster.storageClass}`);
+  for (const node of cluster.degradedNodes) {
+    progress?.item(
+      '노드 경고',
+      `${node.name}: ${node.ready ? 'Ready/unschedulable' : 'NotReady'} (${node.reason}) — Kubernetes 운영자 복구 대상; Setup은 노드나 Docker Desktop을 재시작하지 않음`
+    );
+  }
+  progress?.item(
+    'Beszel Pod Security',
+    `${cluster.baselineObservabilitySecurity.podSecurityEnforce}; ${cluster.baselineObservabilitySecurity.status}; root + read-only hostPath 요구를 설치 상태에 기록하며 Setup은 host/PSA를 변경하지 않음`
+  );
   const work = await mkdtemp(join(tmpdir(), 'opensphere-setup-supabase-'));
+  let installationStateRecorded = false;
+  let installationReady = false;
   try {
     progress?.step('서명된 release artifact 전체 다운로드와 digest 고정 manifest 생성');
     const prepared = await prepareRelease(
@@ -1594,28 +2011,28 @@ export async function bootstrap(lock, {
       ? readSecret(effectiveShellTls.namespace, effectiveShellTls.name)
       : undefined;
     if (externalShellTls) inspectExternalShellTlsSecret(externalShellTls, effectiveConsoleUrl);
-    const externalRecoveryTarget = requestedRecoveryTarget
-      ? readSecret(requestedRecoveryTarget.namespace, requestedRecoveryTarget.name)
-      : undefined;
-    if (externalRecoveryTarget) inspectRecoveryTarget(externalRecoveryTarget);
-
-    progress?.step('관리 namespace와 GHCR image pull 경로 준비');
-    for (const namespace of MANAGED_NAMESPACES) {
+    progress?.step('관리 namespace, installation lock과 GHCR image pull 경로 준비');
+    ensureNamespace('opensphere-console');
+    recordInstallationState(
+      lock,
+      cluster.storageClass,
+      initialAdmin,
+      effectiveConsoleUrl,
+      effectiveAuthEnvironment,
+      shellTlsSecretRefText(effectiveShellTls),
+      'Preparing',
+      { baselineObservabilitySecurity: cluster.baselineObservabilitySecurity }
+    );
+    installationStateRecorded = true;
+    progress?.item('namespace', 'opensphere-console');
+    for (const namespace of MANAGED_NAMESPACES.filter((name) => name !== 'opensphere-console')) {
       ensureNamespace(namespace);
       progress?.item('namespace', namespace);
     }
     const registry = ensureRegistryPullSecrets(lock, registryCredentials);
     progress?.done(`GHCR credentials=${registry.credentialSource}`);
 
-    if (externalRecoveryTarget) {
-      progress?.step('외부 S3 recovery target을 데이터·변경·격리 drill namespace에 최소 복제');
-      for (const namespace of ['opensphere-console-data', 'opensphere-console-change', 'opensphere-console-recovery']) {
-        ensureRecoveryTargetSecret(namespace, externalRecoveryTarget);
-      }
-      progress?.done('Recovery target Secret 준비 (백업 Job은 Change Control 승인 전 suspend)');
-    } else {
-      progress?.item('Recovery', '외부 recovery target 미지정 — backup/drill Job은 fail-closed 상태로 유지');
-    }
+    progress?.item('설치 경계', 'Recovery 및 기타 선택 모듈 설정은 bootstrap 이후 Console에서 수행');
 
     progress?.step('Console HTTPS 인증서와 TLS Secret 준비');
     recordInstallationState(
@@ -1624,8 +2041,11 @@ export async function bootstrap(lock, {
       initialAdmin,
       effectiveConsoleUrl,
       effectiveAuthEnvironment,
-      shellTlsSecretRefText(effectiveShellTls)
+      shellTlsSecretRefText(effectiveShellTls),
+      'Preparing',
+      { baselineObservabilitySecurity: cluster.baselineObservabilitySecurity }
     );
+    installationStateRecorded = true;
 
     const certificateGenerator = await materializeRuntimeAsset('New-Certificates.ps1', HERE);
     try {
@@ -1670,23 +2090,20 @@ export async function bootstrap(lock, {
     ensureGenericSecret('opensphere-console', 'opensphere-console-cli-runtime', {
       'jwt-secret': randomBytes(48).toString('base64')
     });
-    ensureGenericSecret('opensphere-console', 'opensphere-notification-runtime', {
-      'encryption-key': randomBytes(32).toString('base64'),
-      'internal-token': hex(32),
-      'event-token': hex(32)
-    });
-    ensureGenericSecret('opensphere-console', 'opensphere-external-channel-runtime', {
-      'credential-encryption-key': randomBytes(32).toString('base64'),
-      'backup-encryption-key': randomBytes(32).toString('base64'),
-      'internal-token': hex(32)
-    });
-    // Foundation Valkey는 Console/Control Plane에 namespace-wide Secret create
-    // 권한을 주지 않는다. 플랫폼 installer가 exact Secret을 최초 1회 만들고,
-    // ensureGenericSecret의 merge 규칙으로 resume·reboot·upgrade 시 값을 보존한다.
-    ensureFoundationDataEngineCredentials();
-    progress?.done('CLI·notification·external-channel runtime 및 Valkey·RustFS exact Secret·RBAC 준비');
+    ensureSupabaseServerSecret();
+    progress?.done('CLI runtime과 exact six-key Supabase server Secret 준비');
 
-    progress?.step('Supabase·Gitea foundation 및 OpenSphere workload 적용');
+    progress?.step('Supabase·Gitea·Beszel backbone 및 OpenSphere workload 적용');
+    recordInstallationState(
+      lock,
+      cluster.storageClass,
+      initialAdmin,
+      effectiveConsoleUrl,
+      effectiveAuthEnvironment,
+      shellTlsSecretRefText(effectiveShellTls),
+      'Installing',
+      { baselineObservabilitySecurity: cluster.baselineObservabilitySecurity }
+    );
     installPreparedRelease(
       lock,
       prepared,
@@ -1697,7 +2114,7 @@ export async function bootstrap(lock, {
     );
     recordInitialAdmin(initialAdmin, 'required');
     progress?.done('Kubernetes API 적용 완료');
-    progress?.step('Supabase·Gitea·OSAA·CLI artifact·Main Shell rollout 대기');
+    progress?.step('Supabase·Gitea·Beszel·C_API·C_EXT·Registry·CLI·Main Shell rollout 대기');
     waitForCoreRollouts(lock, progress);
     progress?.done('핵심 workload Ready');
 
@@ -1708,6 +2125,23 @@ export async function bootstrap(lock, {
       requireRecoveryDrill: false
     });
     recordReleaseInventory(lock, releaseResourceInventory(prepared.all));
+    recordInstallationState(
+      lock,
+      cluster.storageClass,
+      initialAdmin,
+      effectiveConsoleUrl,
+      effectiveAuthEnvironment,
+      shellTlsSecretRefText(effectiveShellTls),
+      'Ready',
+      {
+        verification: {
+          evidenceConfigMap: 'opensphere-installation-evidence',
+          verifiedAt: evidence.verifiedAt
+        },
+        baselineObservabilitySecurity: cluster.baselineObservabilitySecurity
+      }
+    );
+    installationReady = true;
     progress?.done(`${evidence.podCount} pods, ${evidence.serviceCount} services`);
     progress?.step('최초 관리자 onboarding 인계');
     if (openOnboarding) {
@@ -1721,9 +2155,28 @@ export async function bootstrap(lock, {
       lock,
       evidence,
       consoleUrl: effectiveConsoleUrl,
-      setupRequired: evidence.backend.initialOperatorState === 'required',
+      setupRequired: evidence.consoleApi.initialOperatorState === 'required',
       temporaryDirectory: keepTemporaryFiles ? work : undefined
     };
+  } catch (error) {
+    if (installationStateRecorded && !installationReady) {
+      try {
+        recordInstallationState(
+          lock,
+          cluster.storageClass,
+          initialAdmin,
+          effectiveConsoleUrl,
+          effectiveAuthEnvironment,
+          shellTlsSecretRefText(effectiveShellTls),
+          'Failed',
+          {
+            failureCode: 'bootstrap-failed',
+            baselineObservabilitySecurity: cluster.baselineObservabilitySecurity
+          }
+        );
+      } catch {}
+    }
+    throw error;
   } finally {
     if (!keepTemporaryFiles) await rm(work, { recursive: true, force: true });
   }

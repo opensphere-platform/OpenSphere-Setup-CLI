@@ -98,6 +98,20 @@ test('retired backup target option is rejected instead of ignored', () => {
   assert.match(result.stderr, /retired --backup-target-secret option is not accepted/);
 });
 
+test('recovery target input is preflight-only and never ignored by bootstrap', () => {
+  const help = spawnSync(process.execPath, [CLI, 'help'], { encoding: 'utf8', cwd: ROOT, windowsHide: true });
+  assert.equal(help.status, 0);
+  assert.equal((help.stdout.match(/--recovery-target-secret/g) ?? []).length, 1);
+
+  const bootstrap = spawnSync(process.execPath, [
+    CLI, 'bootstrap', '--release', 'edge',
+    '--recovery-target-secret', 'platform-secrets/recovery'
+  ], { encoding: 'utf8', cwd: ROOT, windowsHide: true });
+  assert.notEqual(bootstrap.status, 0);
+  assert.match(bootstrap.stderr, /accepted only by promotion preflight/);
+  assert.doesNotMatch(bootstrap.stderr, /kubectl/i);
+});
+
 test('registry credentials are accepted only through the paired token-stdin contract', () => {
   const missingTokenStdin = spawnSync(process.execPath, [CLI, 'resolve', '--release', 'edge', '--registry-username', 'opensphere-platform'], {
     encoding: 'utf8', cwd: ROOT, windowsHide: true

@@ -7,6 +7,7 @@ import {
   AUXILIARY_ARTIFACTS,
   BASE_RUNTIME_COMPONENTS,
   COMPONENTS,
+  HISTORICAL_COMPONENTS,
   LEGACY_BASE_RUNTIME_COMPONENTS,
   PRE_OSDST_BASE_RUNTIME_COMPONENTS,
   LEGACY_RELEASE_TRUST,
@@ -38,39 +39,102 @@ import { LEGACY_INSTALLED_AGENT_COMPONENTS } from '../src/release-agent-identity
 
 const REVISION = '1'.repeat(40);
 const DIGEST = `sha256:${'a'.repeat(64)}`;
+const RELEASE_TAG = '202609020101';
 const MIGRATION_MANIFEST = Object.freeze({
-  path: 'backend/supabase/migrations/manifest.json',
+  path: 'migrations/manifest.json',
   sha256: `sha256:${'b'.repeat(64)}`,
   setDigest: `sha256:${'c'.repeat(64)}`,
-  latestMigrationId: '0053',
-  migrationCount: 52
+  latestGlobalId: 'opensphere-console/20260902/0001',
+  migrationCount: 1
 });
 
-function validLock(channel = 'edge') {
-  const components = Object.fromEntries(Object.entries(COMPONENTS).map(([name, repository]) => [
+function artifactEntries(repositories, revision = REVISION, digest = DIGEST) {
+  return Object.fromEntries(Object.entries(repositories).map(([name, repository]) => [
     name,
     {
       repository,
-      image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
-      sourceRevision: REVISION
+      image: `ghcr.io/opensphere-platform/${repository}@${digest}`,
+      sourceRevision: revision
     }
   ]));
+}
+
+function artifactScope(repository) {
+  return Object.values(AUXILIARY_ARTIFACTS).includes(repository) ? 'auxiliary' : 'canonical';
+}
+
+function releaseLabels(repository, {
+  revision = REVISION,
+  releaseTag = RELEASE_TAG,
+  overrides = {}
+} = {}) {
+  return {
+    'io.opensphere.channel': 'edge',
+    'io.opensphere.release-tag': releaseTag,
+    'io.opensphere.source-revision': revision,
+    'io.opensphere.release-scope': artifactScope(repository),
+    'opensphere.io/build-authority': 'localhost',
+    'opensphere.io/release-class': 'pre-ga',
+    'opensphere.io/ga-eligible': 'false',
+    ...overrides
+  };
+}
+
+function inspectedArtifact(repository, image, {
+  revision = REVISION,
+  releaseTag = RELEASE_TAG,
+  overrides
+} = {}) {
+  return {
+    image,
+    sourceRevision: revision,
+    labels: releaseLabels(repository, { revision, releaseTag, overrides }),
+    registryCredentialsRequired: false
+  };
+}
+
+function signedArtifact(repository, image, {
+  revision = REVISION,
+  releaseTag = RELEASE_TAG
+} = {}) {
+  return {
+    image,
+    sourceRevision: revision,
+    labels: {
+      'io.opensphere.release-tag': releaseTag,
+      'io.opensphere.source-revision': revision,
+      'io.opensphere.release-scope': artifactScope(repository)
+    },
+    registryCredentialsRequired: false
+  };
+}
+
+function validLock(channel = 'edge') {
+  const components = artifactEntries(COMPONENTS);
+  const auxiliaryArtifacts = artifactEntries(AUXILIARY_ARTIFACTS);
   return {
     apiVersion: RELEASE_API_VERSION,
     kind: 'OpenSphereReleaseLock',
     channel,
-    releaseDigest: calculateReleaseDigest(channel, components),
+    releaseDigest: calculateReleaseDigest(channel, components, RELEASE_TRUST, undefined, { auxiliaryArtifacts }),
     source: SOURCE,
     sourceRevision: REVISION,
     trust: RELEASE_TRUST,
+    auxiliaryArtifacts,
     components
   };
 }
 
-function validComponentTransition(changedComponents = ['backend']) {
+function validComponentTransition(changedComponents = ['consoleApi']) {
   const base = validLock('edge');
   base.trust = LOCAL_EDGE_TRUST;
-  base.releaseDigest = calculateReleaseDigest('edge', base.components, LOCAL_EDGE_TRUST);
+  base.releaseDigest = calculateReleaseDigest(
+    'edge',
+    base.components,
+    LOCAL_EDGE_TRUST,
+    undefined,
+    { auxiliaryArtifacts: base.auxiliaryArtifacts }
+  );
   const targetRevision = '2'.repeat(40);
   const target = structuredClone(base);
   target.releaseScope = RELEASE_SCOPE_COMPONENT;
@@ -90,41 +154,28 @@ function validComponentTransition(changedComponents = ['backend']) {
     {
       releaseScope: target.releaseScope,
       baseReleaseDigest: target.baseReleaseDigest,
-      changedComponents: target.changedComponents
+      changedComponents: target.changedComponents,
+      auxiliaryArtifacts: target.auxiliaryArtifacts
     }
   );
   return { base, target };
 }
 
-function validAgentIdentityCutover() {
-  const { base: canonicalBase, target } = validComponentTransition([
-    'osaaGateway',
-    'osaaGovernedAdapter'
-  ]);
-  const base = structuredClone(canonicalBase);
-  delete base.components.osaaGateway;
-  delete base.components.osaaGovernedAdapter;
-  for (const [name, repository] of Object.entries(LEGACY_INSTALLED_AGENT_COMPONENTS)) {
-    base.components[name] = {
-      repository,
-      image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
-      sourceRevision: REVISION
-    };
-  }
-  base.releaseDigest = calculateReleaseDigest(base.channel, base.components, base.trust);
-  target.baseReleaseDigest = base.releaseDigest;
-  target.releaseDigest = calculateReleaseDigest(
-    target.channel,
-    target.components,
-    target.trust,
-    undefined,
-    {
-      releaseScope: target.releaseScope,
-      baseReleaseDigest: target.baseReleaseDigest,
-      changedComponents: target.changedComponents
-    }
-  );
-  return { base, target };
+function validLegacyAgentLock() {
+  const components = artifactEntries(HISTORICAL_COMPONENTS);
+  delete components.osaaGateway;
+  delete components.osaaGovernedAdapter;
+  Object.assign(components, artifactEntries(LEGACY_INSTALLED_AGENT_COMPONENTS));
+  return {
+    apiVersion: RELEASE_API_VERSION,
+    kind: 'OpenSphereReleaseLock',
+    channel: 'edge',
+    releaseDigest: calculateReleaseDigest('edge', components, LOCAL_EDGE_TRUST),
+    source: SOURCE,
+    sourceRevision: REVISION,
+    trust: LOCAL_EDGE_TRUST,
+    components
+  };
 }
 
 function validBom(channel = 'edge', revision = REVISION, digest = DIGEST) {
@@ -132,19 +183,13 @@ function validBom(channel = 'edge', revision = REVISION, digest = DIGEST) {
     apiVersion: RELEASE_API_VERSION,
     kind: 'OpenSphereReleaseBOM',
     channel,
-    status: 'Active',
+    status: channel === 'candidate' ? 'Candidate' : 'Active',
     source: SOURCE,
     sourceRevision: revision,
+    releaseTag: RELEASE_TAG,
     artifacts: { supabaseMigrationManifest: { ...MIGRATION_MANIFEST } },
     supportedPlatforms: ['linux/amd64', 'linux/arm64'],
-    components: Object.fromEntries(Object.entries(COMPONENTS).map(([name, repository]) => [
-      name,
-      {
-        repository,
-        image: `ghcr.io/opensphere-platform/${repository}@${digest}`,
-        sourceRevision: revision
-      }
-    ]))
+    components: artifactEntries(COMPONENTS, revision, digest)
   };
 }
 
@@ -159,11 +204,11 @@ function bomVerifier(bom = validBom()) {
   return async (subject) => ({ bom, digest: calculateReleaseBomDigest(bom), subject });
 }
 
-test('canonical baseline contains the complete Supabase/Gitea release repositories', () => {
+test('canonical release set contains the full target Console distribution', () => {
   assert.deepEqual(Object.values(COMPONENTS), [
     'opensphere-console',
-    'opensphere-console-backend',
-    'opensphere-console-dupa-controller',
+    'opensphere-console-api',
+    'opensphere-extension-controller',
     'opensphere-registry',
     'opensphere-console-osaa-gateway',
     'opensphere-osdst',
@@ -175,52 +220,41 @@ test('canonical baseline contains the complete Supabase/Gitea release repositori
     'opensphere-console-supabase-rest',
     'opensphere-console-supabase-storage',
     'opensphere-console-gitea-postgres',
-    'opensphere-console-recovery'
+    'opensphere-console-recovery',
+    'opensphere-console-beszel-hub',
+    'opensphere-console-beszel-agent',
+    'opensphere-console-beszel-bootstrap'
   ]);
-  assert.deepEqual(AUXILIARY_ARTIFACTS, { cliArtifacts: 'opensphere-os-cli' });
+  assert.deepEqual(AUXILIARY_ARTIFACTS, {
+    cliArtifacts: 'opensphere-os-cli',
+    osShellControl: 'opensphere-console-os-shell-control',
+    osShellRuntime: 'opensphere-os-shell-runtime'
+  });
 });
 
-test('base runtime requires OSAA Core as native Main Shell runtime', () => {
-  assert.deepEqual(BASE_RUNTIME_COMPONENTS, [
-    'console', 'backend', 'dupaController', 'registry', 'osaaGateway', 'osdst', 'osaaGovernedAdapter',
-    'notificationDispatcher', 'gitea', 'supabasePostgres', 'supabaseAuth',
-    'supabaseRest', 'supabaseStorage', 'giteaPostgres', 'recovery'
-  ]);
-  assert.equal(BASE_RUNTIME_COMPONENTS.includes('osaaGateway'), true);
-  assert.equal(BASE_RUNTIME_COMPONENTS.includes('osdst'), true);
-  assert.deepEqual(PRE_OSDST_BASE_RUNTIME_COMPONENTS, BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'osdst'));
-  assert.deepEqual(LEGACY_BASE_RUNTIME_COMPONENTS, BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'osdst' && name !== 'recovery'));
+test('base release distribution includes bootstrap core and Console-activated modules', () => {
+  assert.deepEqual(BASE_RUNTIME_COMPONENTS, Object.keys(COMPONENTS));
+  assert.equal(BASE_RUNTIME_COMPONENTS.includes('consoleApi'), true);
+  assert.equal(BASE_RUNTIME_COMPONENTS.includes('extensionController'), true);
+  assert.equal(BASE_RUNTIME_COMPONENTS.includes('beszelHub'), true);
+  assert.equal(BASE_RUNTIME_COMPONENTS.includes('beszelAgent'), true);
+  assert.equal(BASE_RUNTIME_COMPONENTS.includes('beszelBootstrap'), true);
+  assert.deepEqual(PRE_OSDST_BASE_RUNTIME_COMPONENTS, Object.keys(HISTORICAL_COMPONENTS).filter((name) => name !== 'osdst'));
+  assert.deepEqual(
+    LEGACY_BASE_RUNTIME_COMPONENTS,
+    Object.keys(HISTORICAL_COMPONENTS).filter((name) => name !== 'osdst' && name !== 'recovery')
+  );
 });
 
-test('installed pre-OSAA lock is accepted only as the exact base of a complete one-way identity cutover', () => {
-  const { base, target } = validAgentIdentityCutover();
+test('installed pre-OSAA lock remains readable only through the explicit historical gate', () => {
+  const base = validLegacyAgentLock();
   assert.throws(() => validateLock(base), /component set is not canonical/u);
   assert.equal(validateLock(base, { allowInstalledAgentIdentityCutover: true }), base);
-  assert.equal(validateReleaseTransition(base, target), target);
-
-  for (const omitted of ['osaaGateway', 'osaaGovernedAdapter']) {
-    const partial = structuredClone(target);
-    partial.changedComponents = partial.changedComponents.filter((name) => name !== omitted);
-    partial.releaseDigest = calculateReleaseDigest(
-      partial.channel,
-      partial.components,
-      partial.trust,
-      undefined,
-      {
-        releaseScope: partial.releaseScope,
-        baseReleaseDigest: partial.baseReleaseDigest,
-        changedComponents: partial.changedComponents
-      }
-    );
-    assert.throws(
-      () => validateReleaseTransition(base, partial),
-      /must change both canonical agent components together/u
-    );
-  }
+  assert.throws(() => validateReleaseTransition(validLock(), base), /component set is not canonical/u);
 });
 
-test('agent identity cutover rejects malformed legacy repositories and every canonical-to-legacy target', () => {
-  const { base, target } = validAgentIdentityCutover();
+test('historical agent identity gate rejects a canonical repository substituted into the old name', () => {
+  const base = validLegacyAgentLock();
   const wrongRepository = structuredClone(base);
   wrongRepository.components.oaaGateway.repository = 'opensphere-console-osaa-gateway';
   wrongRepository.releaseDigest = calculateReleaseDigest(
@@ -232,24 +266,6 @@ test('agent identity cutover rejects malformed legacy repositories and every can
     () => validateLock(wrongRepository, { allowInstalledAgentIdentityCutover: true }),
     /repository is not canonical/u
   );
-
-  const reverse = structuredClone(base);
-  reverse.releaseScope = RELEASE_SCOPE_COMPONENT;
-  reverse.baseReleaseDigest = target.releaseDigest;
-  reverse.changedComponents = ['oaaGateway', 'oaaGovernedAdapter'];
-  reverse.sourceRevision = '3'.repeat(40);
-  reverse.releaseDigest = calculateReleaseDigest(
-    reverse.channel,
-    reverse.components,
-    reverse.trust,
-    undefined,
-    {
-      releaseScope: reverse.releaseScope,
-      baseReleaseDigest: reverse.baseReleaseDigest,
-      changedComponents: reverse.changedComponents
-    }
-  );
-  assert.throws(() => validateReleaseTransition(target, reverse), /changedComponents|component set/u);
 });
 
 test('release baseline requires native manifests for every supported Linux platform', () => {
@@ -365,66 +381,58 @@ test('canonical digest-pinned release lock is accepted', () => {
 test('localhost build trust is accepted only for edge and cannot claim a signed BOM', () => {
   const edge = validLock('edge');
   edge.trust = LOCAL_EDGE_TRUST;
-  edge.releaseDigest = calculateReleaseDigest('edge', edge.components, LOCAL_EDGE_TRUST);
+  edge.releaseDigest = calculateReleaseDigest('edge', edge.components, LOCAL_EDGE_TRUST, undefined, { auxiliaryArtifacts: edge.auxiliaryArtifacts });
   assert.equal(validateLock(edge), edge);
 
   const promoted = structuredClone(edge);
   promoted.channel = 'candidate';
-  promoted.releaseDigest = calculateReleaseDigest('candidate', promoted.components, LOCAL_EDGE_TRUST);
+  promoted.releaseDigest = calculateReleaseDigest('candidate', promoted.components, LOCAL_EDGE_TRUST, undefined, { auxiliaryArtifacts: promoted.auxiliaryArtifacts });
   assert.throws(() => validateLock(promoted), /accepted only for the edge channel/);
 
   edge.releaseBom = releaseBomPointer(validBom('edge'));
-  edge.releaseDigest = calculateReleaseDigest('edge', edge.components, LOCAL_EDGE_TRUST, edge.releaseBom);
+  edge.releaseDigest = calculateReleaseDigest('edge', edge.components, LOCAL_EDGE_TRUST, edge.releaseBom, { auxiliaryArtifacts: edge.auxiliaryArtifacts });
   assert.throws(() => validateLock(edge), /cannot claim a signed Release BOM/);
 });
 
-test('localhost edge lock revalidation inspects immutable images without demanding a signed BOM', async () => {
+test('localhost edge lock revalidation inspects every immutable governed artifact without a signed BOM', async () => {
   const edge = validLock('edge');
   edge.trust = LOCAL_EDGE_TRUST;
-  edge.releaseDigest = calculateReleaseDigest('edge', edge.components, LOCAL_EDGE_TRUST);
-  const labels = {
-    'io.opensphere.channel': 'edge',
-    'io.opensphere.release-tag': '202607241141',
-    'io.opensphere.source-revision': REVISION,
-    'opensphere.io/build-authority': 'localhost',
-    'opensphere.io/release-class': 'pre-ga',
-    'opensphere.io/ga-eligible': 'false'
-  };
+  edge.releaseDigest = calculateReleaseDigest(
+    'edge',
+    edge.components,
+    LOCAL_EDGE_TRUST,
+    undefined,
+    { auxiliaryArtifacts: edge.auxiliaryArtifacts }
+  );
   const inspected = [];
   const verified = await verifyReleaseLock(edge, {
     requiredPlatforms: ['linux/amd64'],
     async inspectImageFn(repository, image, options) {
       inspected.push({ repository, image, requiredPlatforms: options.requiredPlatforms });
-      return {
-        image,
-        sourceRevision: REVISION,
-        labels,
-        registryCredentialsRequired: false
-      };
+      return inspectedArtifact(repository, image);
     },
     verifyBom() {
       throw new Error('localhost edge must not require a signed Release BOM');
     }
   });
-  assert.equal(inspected.length, Object.keys(COMPONENTS).length);
+  assert.equal(inspected.length, Object.keys(COMPONENTS).length + Object.keys(AUXILIARY_ARTIFACTS).length);
   assert.equal(inspected.every(({ requiredPlatforms }) => requiredPlatforms[0] === 'linux/amd64'), true);
   assert.match(verified.localVerifiedAt, /^\d{4}-\d{2}-\d{2}T/);
 });
 
-test('localhost edge revalidation accepts a pre-OSDST lock only as an explicit legacy baseline', async () => {
-  const edge = validLock('edge');
-  delete edge.components.osdst;
-  edge.trust = LOCAL_EDGE_TRUST;
-  edge.releaseDigest = calculateReleaseDigest('edge', edge.components, LOCAL_EDGE_TRUST);
-  const labels = {
-    'io.opensphere.channel': 'edge',
-    'io.opensphere.release-tag': '202608232239',
-    'io.opensphere.source-revision': REVISION,
-    'opensphere.io/build-authority': 'localhost',
-    'opensphere.io/release-class': 'pre-ga',
-    'opensphere.io/ga-eligible': 'false'
+test('localhost edge revalidation accepts a pre-OSDST lock only as an explicit historical baseline', async () => {
+  const components = artifactEntries(HISTORICAL_COMPONENTS);
+  delete components.osdst;
+  const edge = {
+    apiVersion: RELEASE_API_VERSION,
+    kind: 'OpenSphereReleaseLock',
+    channel: 'edge',
+    releaseDigest: calculateReleaseDigest('edge', components, LOCAL_EDGE_TRUST),
+    source: SOURCE,
+    sourceRevision: REVISION,
+    trust: LOCAL_EDGE_TRUST,
+    components
   };
-
   await assert.rejects(
     verifyReleaseLock(edge, { async inspectImageFn() { throw new Error('must not inspect'); } }),
     /component set is not canonical/
@@ -433,7 +441,7 @@ test('localhost edge revalidation accepts a pre-OSDST lock only as an explicit l
     allowLegacyComponentSet: true,
     requiredPlatforms: ['linux/amd64'],
     async inspectImageFn(repository, image) {
-      return { image, sourceRevision: REVISION, labels, registryCredentialsRequired: false };
+      return inspectedArtifact(repository, image);
     }
   });
   assert.equal(Object.hasOwn(verified.components, 'osdst'), false);
@@ -459,15 +467,15 @@ test('release lock rejects mixed source revisions', () => {
 });
 
 test('component release transition reuses every unlisted component exactly', () => {
-  const { base, target } = validComponentTransition(['backend']);
+  const { base, target } = validComponentTransition(['consoleApi']);
   assert.equal(validateLock(target), target);
   assert.equal(validateReleaseTransition(base, target), target);
   assert.equal(target.components.console.image, base.components.console.image);
-  assert.notEqual(target.components.backend.image, base.components.backend.image);
+  assert.notEqual(target.components.consoleApi.image, base.components.consoleApi.image);
 });
 
 test('component release transition binds its base digest and explicit change set', () => {
-  const { base, target } = validComponentTransition(['backend']);
+  const { base, target } = validComponentTransition(['consoleApi']);
 
   const wrongBase = structuredClone(target);
   wrongBase.baseReleaseDigest = `sha256:${'c'.repeat(64)}`;
@@ -479,7 +487,8 @@ test('component release transition binds its base digest and explicit change set
     {
       releaseScope: wrongBase.releaseScope,
       baseReleaseDigest: wrongBase.baseReleaseDigest,
-      changedComponents: wrongBase.changedComponents
+      changedComponents: wrongBase.changedComponents,
+      auxiliaryArtifacts: wrongBase.auxiliaryArtifacts
     }
   );
   assert.throws(
@@ -498,7 +507,8 @@ test('component release transition binds its base digest and explicit change set
     {
       releaseScope: hiddenChange.releaseScope,
       baseReleaseDigest: hiddenChange.baseReleaseDigest,
-      changedComponents: hiddenChange.changedComponents
+      changedComponents: hiddenChange.changedComponents,
+      auxiliaryArtifacts: hiddenChange.auxiliaryArtifacts
     }
   );
   assert.throws(
@@ -507,7 +517,7 @@ test('component release transition binds its base digest and explicit change set
   );
 
   const noChange = structuredClone(target);
-  noChange.components.backend = structuredClone(base.components.backend);
+  noChange.components.consoleApi = structuredClone(base.components.consoleApi);
   noChange.releaseDigest = calculateReleaseDigest(
     noChange.channel,
     noChange.components,
@@ -516,17 +526,18 @@ test('component release transition binds its base digest and explicit change set
     {
       releaseScope: noChange.releaseScope,
       baseReleaseDigest: noChange.baseReleaseDigest,
-      changedComponents: noChange.changedComponents
+      changedComponents: noChange.changedComponents,
+      auxiliaryArtifacts: noChange.auxiliaryArtifacts
     }
   );
   assert.throws(
     () => validateReleaseTransition(base, noChange),
-    /Changed component backend (?:source revision differs|is identical)/
+    /Changed component consoleApi (?:source revision differs|is identical)/
   );
 });
 
 test('component release scope is edge-local, canonical, and digest-bound', () => {
-  const { target } = validComponentTransition(['backend', 'console']);
+  const { target } = validComponentTransition(['consoleApi', 'console']);
   assert.doesNotThrow(() => validateLock(target));
 
   const promoted = structuredClone(target);
@@ -539,7 +550,8 @@ test('component release scope is edge-local, canonical, and digest-bound', () =>
     {
       releaseScope: promoted.releaseScope,
       baseReleaseDigest: promoted.baseReleaseDigest,
-      changedComponents: promoted.changedComponents
+      changedComponents: promoted.changedComponents,
+      auxiliaryArtifacts: promoted.auxiliaryArtifacts
     }
   );
   assert.throws(() => validateLock(promoted), /localhost edge trust|accepted only for the edge channel/);
@@ -554,7 +566,8 @@ test('component release scope is edge-local, canonical, and digest-bound', () =>
     {
       releaseScope: unsorted.releaseScope,
       baseReleaseDigest: unsorted.baseReleaseDigest,
-      changedComponents: unsorted.changedComponents
+      changedComponents: unsorted.changedComponents,
+      auxiliaryArtifacts: unsorted.auxiliaryArtifacts
     }
   );
   assert.throws(() => validateLock(unsorted), /canonical sorted set/);
@@ -564,27 +577,19 @@ test('component release scope is edge-local, canonical, and digest-bound', () =>
   assert.throws(() => validateLock(tamperedContract), /digest does not match/);
 });
 
-test('component edge verification accepts inherited old tags and verifies changed tags together', async () => {
-  const { target } = validComponentTransition(['backend', 'console']);
+test('component edge verification accepts inherited old tags and groups changed tags', async () => {
+  const { target } = validComponentTransition(['consoleApi', 'console']);
   const verified = await verifyReleaseLock(target, {
     requiredPlatforms: ['linux/amd64'],
     async inspectImageFn(repository, image) {
-      const name = Object.entries(COMPONENTS).find(([, value]) => value === repository)[0];
-      const component = target.components[name];
-      return {
-        image,
-        sourceRevision: component.sourceRevision,
-        labels: {
-          'io.opensphere.channel': 'edge',
-          'io.opensphere.release-tag':
-            target.changedComponents.includes(name) ? '202607301900' : '202607291200',
-          'io.opensphere.source-revision': component.sourceRevision,
-          'opensphere.io/build-authority': 'localhost',
-          'opensphere.io/release-class': 'pre-ga',
-          'opensphere.io/ga-eligible': 'false'
-        },
-        registryCredentialsRequired: false
-      };
+      const canonical = Object.entries(COMPONENTS).find(([, value]) => value === repository);
+      const auxiliary = Object.entries(AUXILIARY_ARTIFACTS).find(([, value]) => value === repository);
+      const [name] = canonical ?? auxiliary;
+      const artifact = canonical ? target.components[name] : target.auxiliaryArtifacts[name];
+      return inspectedArtifact(repository, image, {
+        revision: artifact.sourceRevision,
+        releaseTag: target.changedComponents.includes(name) ? '202607301900' : '202607291200'
+      });
     }
   });
   assert.match(verified.localVerifiedAt, /^\d{4}-\d{2}-\d{2}T/);
@@ -593,7 +598,7 @@ test('component edge verification accepts inherited old tags and verifies change
 test('release lock accepts only a boolean registry credential requirement', () => {
   const lock = validLock();
   lock.components.console.registryCredentialsRequired = 'yes';
-  lock.releaseDigest = calculateReleaseDigest(lock.channel, lock.components);
+  lock.releaseDigest = calculateReleaseDigest(lock.channel, lock.components, lock.trust, undefined, { auxiliaryArtifacts: lock.auxiliaryArtifacts });
   assert.throws(() => validateLock(lock), /registry credential requirement is invalid/);
 });
 
@@ -615,6 +620,7 @@ test('release lock rejects an absent or substituted trust root', () => {
 
 test('an installed v1 edge lock remains rollback-compatible but cannot promote', () => {
   const legacyTrusted = validLock('edge');
+  delete legacyTrusted.auxiliaryArtifacts;
   legacyTrusted.trust = LEGACY_RELEASE_TRUST;
   legacyTrusted.releaseDigest = calculateReleaseDigest('edge', legacyTrusted.components, LEGACY_RELEASE_TRUST);
   assert.doesNotThrow(() => validateLock(legacyTrusted));
@@ -626,6 +632,7 @@ test('an installed v1 edge lock remains rollback-compatible but cannot promote',
 
 test('the retired GitHub Actions edge trust is rollback-only', async () => {
   const retired = validLock('edge');
+  delete retired.auxiliaryArtifacts;
   retired.trust = RETIRED_EDGE_ATTESTATION_TRUST;
   retired.releaseDigest = calculateReleaseDigest('edge', retired.components, RETIRED_EDGE_ATTESTATION_TRUST);
   retired.provenanceVerifiedAt = '2026-07-24T00:32:49.216Z';
@@ -639,21 +646,22 @@ test('the retired GitHub Actions edge trust is rollback-only', async () => {
   assert.throws(() => validateLock(retired), /Retired GitHub Actions edge trust is accepted only for the edge channel/);
 });
 
-test('a legacy lock receives the trust root only after its original digest is proven', () => {
+test('a pre-auxiliary legacy lock cannot be upgraded into the current trusted target', () => {
   const legacy = validLock();
   delete legacy.trust;
+  delete legacy.auxiliaryArtifacts;
   legacy.releaseDigest = calculateLegacyReleaseDigest(legacy.channel, legacy.components);
-
-  const migrated = migrateLegacyReleaseLock(legacy);
-  assert.equal(migrated.trust, RELEASE_TRUST);
-  assert.equal(migrated.releaseDigest, calculateReleaseDigest(migrated.channel, migrated.components));
-  assert.doesNotThrow(() => validateLock(migrated));
+  assert.throws(
+    () => migrateLegacyReleaseLock(legacy),
+    /complete governed auxiliary artifact set/
+  );
   assert.equal(Object.hasOwn(legacy, 'trust'), false);
 });
 
 test('a tampered legacy lock cannot be upgraded into the trusted format', () => {
   const legacy = validLock();
   delete legacy.trust;
+  delete legacy.auxiliaryArtifacts;
   legacy.releaseDigest = `sha256:${'c'.repeat(64)}`;
   assert.throws(() => migrateLegacyReleaseLock(legacy), /Legacy release lock digest/);
 });
@@ -672,7 +680,7 @@ test('image provenance verification binds GH attestation to the release workflow
       'attestation', 'verify', `oci://${image}`,
       '--bundle-from-oci',
       '--repo', 'opensphere-platform/OpenSphere-console',
-      '--signer-workflow', 'opensphere-platform/OpenSphere-console/.github/workflows/publish-ga-images.yml',
+      '--signer-workflow', 'opensphere-platform/OpenSphere-console/.github/workflows/publish-candidate-images.yml',
       '--cert-oidc-issuer', 'https://token.actions.githubusercontent.com',
       '--source-ref', 'refs/heads/main',
       '--deny-self-hosted-runners',
@@ -711,32 +719,51 @@ test('Release BOM attestation is verified against the governed workflow and immu
   assert.deepEqual(invocation.args.slice(-2), ['--format', 'json']);
 });
 
-test('a release lock is accepted only when its components and BOM digest match the verified signed BOM', async () => {
+test('a release lock is accepted only when its canonical set, auxiliary set and BOM match', async () => {
   const bom = validBom();
   const lock = validLock();
   lock.releaseBom = releaseBomPointer(bom);
   assert.deepEqual(lock.releaseBom.migrationManifest, MIGRATION_MANIFEST);
-  lock.releaseDigest = calculateReleaseDigest(lock.channel, lock.components, lock.trust, lock.releaseBom);
+  assert.equal(lock.releaseBom.releaseTag, RELEASE_TAG);
+  lock.releaseDigest = calculateReleaseDigest(
+    lock.channel,
+    lock.components,
+    lock.trust,
+    lock.releaseBom,
+    { auxiliaryArtifacts: lock.auxiliaryArtifacts }
+  );
+  const inspectImageFn = async (repository, image) => signedArtifact(repository, image);
   await assert.doesNotReject(verifyReleaseLock(lock, {
     verifyBom: bomVerifier(bom),
     verifyImage() {},
-    verifySbom() {}
+    verifySbom() {},
+    inspectImageFn
   }));
 
   const tampered = structuredClone(lock);
   tampered.releaseBom.digest = `sha256:${'f'.repeat(64)}`;
-  tampered.releaseDigest = calculateReleaseDigest(tampered.channel, tampered.components, tampered.trust, tampered.releaseBom);
+  tampered.releaseDigest = calculateReleaseDigest(
+    tampered.channel,
+    tampered.components,
+    tampered.trust,
+    tampered.releaseBom,
+    { auxiliaryArtifacts: tampered.auxiliaryArtifacts }
+  );
   await assert.rejects(verifyReleaseLock(tampered, {
-    verifyBom: bomVerifier(bom), verifyImage() {}, verifySbom() {}
+    verifyBom: bomVerifier(bom), verifyImage() {}, verifySbom() {}, inspectImageFn
   }), /BOM digest differs/);
 
   const substitutedManifest = structuredClone(lock);
   substitutedManifest.releaseBom.migrationManifest.setDigest = `sha256:${'f'.repeat(64)}`;
   substitutedManifest.releaseDigest = calculateReleaseDigest(
-    substitutedManifest.channel, substitutedManifest.components, substitutedManifest.trust, substitutedManifest.releaseBom
+    substitutedManifest.channel,
+    substitutedManifest.components,
+    substitutedManifest.trust,
+    substitutedManifest.releaseBom,
+    { auxiliaryArtifacts: substitutedManifest.auxiliaryArtifacts }
   );
   await assert.rejects(verifyReleaseLock(substitutedManifest, {
-    verifyBom: bomVerifier(bom), verifyImage() {}, verifySbom() {}
+    verifyBom: bomVerifier(bom), verifyImage() {}, verifySbom() {}, inspectImageFn
   }), /migration manifest evidence differs/u);
 });
 
@@ -783,41 +810,45 @@ test('attestation verification retries only transient GitHub metadata failures',
   }), /Image provenance verification failed/);
 });
 
-test('release provenance verification requires every component image', async () => {
+test('release provenance verification requires every canonical and auxiliary image', async () => {
   const provenance = [];
   const sboms = [];
   const events = [];
-  const verified = await verifyReleaseProvenance(validLock(), {
+  const lock = validLock();
+  const governedImages = [
+    ...Object.values(lock.components),
+    ...Object.values(lock.auxiliaryArtifacts)
+  ].map(({ image }) => image);
+  const verified = await verifyReleaseProvenance(lock, {
     verifyImage(image) { provenance.push(image); },
     verifySbom(image) { sboms.push(image); },
     onProgress(event) { events.push(event); }
   });
-  assert.equal(provenance.length, Object.keys(COMPONENTS).length);
-  assert.deepEqual(new Set(provenance), new Set(Object.values(validLock().components).map(({ image }) => image)));
+  const artifactCount = Object.keys(COMPONENTS).length + Object.keys(AUXILIARY_ARTIFACTS).length;
+  assert.equal(provenance.length, artifactCount);
+  assert.deepEqual(new Set(provenance), new Set(governedImages));
   assert.deepEqual(new Set(sboms), new Set(provenance));
   assert.match(verified.provenanceVerifiedAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.equal(verified.sbomVerifiedAt, verified.provenanceVerifiedAt);
-  assert.equal(events.filter(({ type }) => type === 'provenance-start').length, Object.keys(COMPONENTS).length);
-  assert.equal(events.filter(({ type }) => type === 'provenance-complete').length, Object.keys(COMPONENTS).length);
-  assert.equal(events.filter(({ type }) => type === 'sbom-start').length, Object.keys(COMPONENTS).length);
-  assert.equal(events.filter(({ type }) => type === 'sbom-complete').length, Object.keys(COMPONENTS).length);
+  for (const type of ['provenance-start', 'provenance-complete', 'sbom-start', 'sbom-complete']) {
+    assert.equal(events.filter((event) => event.type === type).length, artifactCount);
+  }
 });
 
-test('channel resolution verifies every Supabase/Gitea release attestation before returning a lock', async () => {
+test('channel resolution verifies all canonical and auxiliary release artifacts before returning a lock', async () => {
   const bom = validBom();
   const events = [];
+  const resolveCalls = [];
   const resolved = await resolveChannel('edge', {
     async resolveImageFn(repository, reference) {
-      assert.equal(repository, COMPONENTS.console);
-      assert.equal(reference, 'edge');
-      return {
-        image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
-        sourceRevision: REVISION,
-        registryCredentialsRequired: false
-      };
+      resolveCalls.push({ repository, reference });
+      const image = repository === COMPONENTS.console
+        ? bom.components.console.image
+        : `ghcr.io/opensphere-platform/${repository}@${DIGEST}`;
+      return signedArtifact(repository, image);
     },
     async inspectImageFn(repository, image) {
-      return { image, sourceRevision: REVISION, registryCredentialsRequired: false };
+      return signedArtifact(repository, image);
     },
     verifyBom: bomVerifier(bom),
     verifyImage(image) {
@@ -830,34 +861,31 @@ test('channel resolution verifies every Supabase/Gitea release attestation befor
   });
   assert.equal(resolved.trust, RELEASE_TRUST);
   assert.deepEqual(resolved.releaseBom, releaseBomPointer(bom));
+  assert.deepEqual(Object.keys(resolved.auxiliaryArtifacts), Object.keys(AUXILIARY_ARTIFACTS));
   assert.match(resolved.sbomVerifiedAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.doesNotThrow(() => validateLock(resolved));
-  assert.equal(events[0].type, 'anchor-start');
+  assert.deepEqual(resolveCalls[0], { repository: COMPONENTS.console, reference: 'edge' });
+  assert.deepEqual(
+    resolveCalls.slice(1),
+    Object.values(AUXILIARY_ARTIFACTS).map((repository) => ({ repository, reference: RELEASE_TAG }))
+  );
   assert.equal(events.filter(({ type }) => type === 'component-complete').length, Object.keys(COMPONENTS).length);
-  assert.equal(events.filter(({ type }) => type === 'sbom-complete').length, Object.keys(COMPONENTS).length);
+  assert.equal(
+    events.filter(({ type }) => type === 'sbom-complete').length,
+    Object.keys(COMPONENTS).length + Object.keys(AUXILIARY_ARTIFACTS).length
+  );
 });
 
 test('localhost edge resolves one target platform through immutable local tags without GitHub attestations', async () => {
   const calls = [];
-  const labels = {
-    'io.opensphere.channel': 'edge',
-    'io.opensphere.release-tag': '202607241141',
-    'io.opensphere.source-revision': REVISION,
-    'opensphere.io/build-authority': 'localhost',
-    'opensphere.io/release-class': 'pre-ga',
-    'opensphere.io/ga-eligible': 'false'
-  };
   const resolved = await resolveChannel('edge', {
     requiredPlatforms: ['linux/amd64'],
     async resolveImageFn(repository, reference, options) {
       calls.push({ repository, reference, platforms: options.requiredPlatforms });
-      return {
-        image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
-        sourceRevision: REVISION,
-        labels,
-        platforms: options.requiredPlatforms,
-        registryCredentialsRequired: false
-      };
+      return inspectedArtifact(
+        repository,
+        `ghcr.io/opensphere-platform/${repository}@${DIGEST}`
+      );
     },
     verifyBom() {
       throw new Error('localhost edge must not request a GitHub Release BOM attestation');
@@ -873,12 +901,15 @@ test('localhost edge resolves one target platform through immutable local tags w
   assert.equal(resolved.trust, LOCAL_EDGE_TRUST);
   assert.equal(resolved.releaseBom, undefined);
   assert.equal(resolved.sourceRevision, REVISION);
-  assert.deepEqual(resolved.auxiliaryArtifacts.cliArtifacts, {
-    repository: 'opensphere-os-cli',
-    image: `ghcr.io/opensphere-platform/opensphere-os-cli@${DIGEST}`,
-    sourceRevision: REVISION,
-    registryCredentialsRequired: false
-  });
+  assert.deepEqual(Object.keys(resolved.auxiliaryArtifacts), Object.keys(AUXILIARY_ARTIFACTS));
+  for (const [name, repository] of Object.entries(AUXILIARY_ARTIFACTS)) {
+    assert.deepEqual(resolved.auxiliaryArtifacts[name], {
+      repository,
+      image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
+      sourceRevision: REVISION,
+      registryCredentialsRequired: false
+    });
+  }
   assert.deepEqual(calls[0], {
     repository: COMPONENTS.console,
     reference: 'edge',
@@ -890,99 +921,57 @@ test('localhost edge resolves one target platform through immutable local tags w
   assert.doesNotThrow(() => validateLock(resolved));
 });
 
-test('localhost edge rejects an auxiliary CLI artifact from another source revision', async () => {
-  const labels = {
-    'io.opensphere.channel': 'edge',
-    'io.opensphere.release-tag': '202607241141',
-    'io.opensphere.source-revision': REVISION,
-    'opensphere.io/build-authority': 'localhost',
-    'opensphere.io/release-class': 'pre-ga',
-    'opensphere.io/ga-eligible': 'false'
-  };
+test('localhost edge rejects any auxiliary artifact from another source revision', async () => {
   await assert.rejects(resolveChannel('edge', {
     requiredPlatforms: ['linux/amd64'],
     async resolveImageFn(repository) {
       const sourceRevision = repository === AUXILIARY_ARTIFACTS.cliArtifacts
         ? '2'.repeat(40)
         : REVISION;
-      return {
-        image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
-        sourceRevision,
-        labels: {
-          ...labels,
-          'io.opensphere.source-revision': sourceRevision
-        },
-        registryCredentialsRequired: false
-      };
+      return inspectedArtifact(
+        repository,
+        `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
+        { revision: sourceRevision }
+      );
     }
   }), /opensphere-os-cli source revision differs from the Console anchor/u);
 });
 
-test('auxiliary CLI artifact is digest-bound and cannot be added outside localhost edge trust', () => {
-  const lock = validLock();
-  lock.auxiliaryArtifacts = {
-    cliArtifacts: {
-      repository: AUXILIARY_ARTIFACTS.cliArtifacts,
-      image: `ghcr.io/opensphere-platform/opensphere-os-cli@${DIGEST}`,
-      sourceRevision: REVISION
-    }
-  };
-  lock.releaseDigest = calculateReleaseDigest(
-    lock.channel,
-    lock.components,
-    lock.trust,
-    undefined,
-    { auxiliaryArtifacts: lock.auxiliaryArtifacts }
-  );
-  assert.throws(() => validateLock(lock), /require localhost edge trust/u);
+test('current locks require the exact digest-bound three-artifact auxiliary set', () => {
+  const signed = validLock();
+  assert.equal(validateLock(signed), signed);
 
-  lock.trust = LOCAL_EDGE_TRUST;
-  lock.releaseDigest = calculateReleaseDigest(
-    lock.channel,
-    lock.components,
-    lock.trust,
+  const missing = structuredClone(signed);
+  delete missing.auxiliaryArtifacts.osShellRuntime;
+  missing.releaseDigest = calculateReleaseDigest(
+    missing.channel,
+    missing.components,
+    missing.trust,
     undefined,
-    { auxiliaryArtifacts: lock.auxiliaryArtifacts }
+    { auxiliaryArtifacts: missing.auxiliaryArtifacts }
   );
-  assert.equal(validateLock(lock), lock);
-  lock.auxiliaryArtifacts.cliArtifacts.image = 'ghcr.io/opensphere-platform/opensphere-os-cli:edge';
-  assert.throws(() => validateLock(lock), /not digest-pinned/u);
+  assert.throws(() => validateLock(missing), /auxiliary artifact set is not canonical/u);
+
+  const local = structuredClone(signed);
+  local.trust = LOCAL_EDGE_TRUST;
+  local.releaseDigest = calculateReleaseDigest(
+    local.channel,
+    local.components,
+    local.trust,
+    undefined,
+    { auxiliaryArtifacts: local.auxiliaryArtifacts }
+  );
+  assert.equal(validateLock(local), local);
+  local.auxiliaryArtifacts.osShellRuntime.image =
+    'ghcr.io/opensphere-platform/opensphere-os-shell-runtime:edge';
+  assert.throws(() => validateLock(local), /not digest-pinned/u);
 });
 
-test('component release preserves the independently versioned CLI artifact byte-for-byte', () => {
-  const { base, target } = validComponentTransition(['backend']);
-  base.auxiliaryArtifacts = {
-    cliArtifacts: {
-      repository: AUXILIARY_ARTIFACTS.cliArtifacts,
-      image: `ghcr.io/opensphere-platform/opensphere-os-cli@${DIGEST}`,
-      sourceRevision: REVISION,
-      registryCredentialsRequired: false
-    }
-  };
-  base.releaseDigest = calculateReleaseDigest(
-    base.channel,
-    base.components,
-    base.trust,
-    undefined,
-    { auxiliaryArtifacts: base.auxiliaryArtifacts }
-  );
-  target.baseReleaseDigest = base.releaseDigest;
-  target.auxiliaryArtifacts = structuredClone(base.auxiliaryArtifacts);
-  target.releaseDigest = calculateReleaseDigest(
-    target.channel,
-    target.components,
-    target.trust,
-    undefined,
-    {
-      releaseScope: target.releaseScope,
-      baseReleaseDigest: target.baseReleaseDigest,
-      changedComponents: target.changedComponents,
-      auxiliaryArtifacts: target.auxiliaryArtifacts
-    }
-  );
+test('component release preserves every auxiliary artifact byte-for-byte', () => {
+  const { base, target } = validComponentTransition(['consoleApi']);
   assert.equal(validateReleaseTransition(base, target), target);
-  target.auxiliaryArtifacts.cliArtifacts.image =
-    `ghcr.io/opensphere-platform/opensphere-os-cli@sha256:${'d'.repeat(64)}`;
+  target.auxiliaryArtifacts.osShellControl.image =
+    `ghcr.io/opensphere-platform/opensphere-console-os-shell-control@sha256:${'d'.repeat(64)}`;
   target.releaseDigest = calculateReleaseDigest(
     target.channel,
     target.components,
@@ -999,25 +988,18 @@ test('component release preserves the independently versioned CLI artifact byte-
 });
 
 test('localhost edge fails closed when any image lacks its development trust labels', async () => {
-  const labels = {
-    'io.opensphere.channel': 'edge',
-    'io.opensphere.release-tag': '202607241141',
-    'io.opensphere.source-revision': REVISION,
-    'opensphere.io/build-authority': 'localhost',
-    'opensphere.io/release-class': 'pre-ga',
-    'opensphere.io/ga-eligible': 'false'
-  };
   await assert.rejects(resolveChannel('edge', {
     requiredPlatforms: ['linux/amd64'],
-    async resolveImageFn(repository, reference) {
-      return {
-        image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
-        sourceRevision: REVISION,
-        labels: repository === COMPONENTS.supabaseAuth
-          ? { ...labels, 'opensphere.io/ga-eligible': 'true' }
-          : labels,
-        registryCredentialsRequired: false
-      };
+    async resolveImageFn(repository) {
+      return inspectedArtifact(
+        repository,
+        `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
+        {
+          overrides: repository === COMPONENTS.supabaseAuth
+            ? { 'opensphere.io/ga-eligible': 'true' }
+            : {}
+        }
+      );
     }
   }), /supabase-auth has invalid opensphere\.io\/ga-eligible label/);
 });
@@ -1033,25 +1015,34 @@ test('release lock rejects missing or additional components', () => {
 });
 
 test('pre-recovery component locks are accepted only as explicit installed rollback baselines', async () => {
-  const bom = validBom();
-  delete bom.components.recovery;
-  delete bom.components.osdst;
-  delete bom.artifacts;
-  const releaseBom = {
-    predicateType: RELEASE_BOM_PREDICATE,
-    subject: bom.components.console.image,
-    digest: calculateReleaseBomDigest(bom)
+  const components = artifactEntries(HISTORICAL_COMPONENTS);
+  delete components.recovery;
+  delete components.osdst;
+  const bom = {
+    apiVersion: RELEASE_API_VERSION,
+    kind: 'OpenSphereReleaseBOM',
+    channel: 'edge',
+    status: 'Active',
+    source: SOURCE,
+    sourceRevision: REVISION,
+    releaseTag: RELEASE_TAG,
+    supportedPlatforms: [...RELEASE_PLATFORMS],
+    components
   };
+  const releaseBom = releaseBomPointer(bom, components.console.image, {
+    allowLegacyComponentSet: true,
+    allowLegacyReleaseArtifacts: true
+  });
   const lock = {
     apiVersion: RELEASE_API_VERSION,
     kind: 'OpenSphereReleaseLock',
     channel: 'edge',
-    releaseDigest: calculateReleaseDigest('edge', bom.components, RELEASE_TRUST, releaseBom),
+    releaseDigest: calculateReleaseDigest('edge', components, RELEASE_TRUST, releaseBom),
     source: SOURCE,
     sourceRevision: REVISION,
     trust: RELEASE_TRUST,
     releaseBom,
-    components: bom.components
+    components
   };
 
   assert.throws(() => validateLock(lock), /component set is not canonical/);
@@ -1065,39 +1056,46 @@ test('pre-recovery component locks are accepted only as explicit installed rollb
   }));
 });
 
-test('channel resolution samples one mutable anchor and reads every other component by signed immutable digest', async () => {
+test('channel resolution samples one mutable anchor, canonical digests and immutable auxiliary tags', async () => {
   const bom = validBom();
   const tagCalls = [];
   const digestCalls = [];
   await resolveChannel('edge', {
     async resolveImageFn(repository, reference) {
       tagCalls.push({ repository, reference });
-      return { image: bom.components.console.image, sourceRevision: REVISION, registryCredentialsRequired: false };
+      const image = repository === COMPONENTS.console
+        ? bom.components.console.image
+        : `ghcr.io/opensphere-platform/${repository}@${DIGEST}`;
+      return signedArtifact(repository, image);
     },
     async inspectImageFn(repository, image) {
       digestCalls.push({ repository, image });
-      return { image, sourceRevision: REVISION, registryCredentialsRequired: false };
+      return signedArtifact(repository, image);
     },
     verifyBom: bomVerifier(bom),
     verifyImage: async () => {},
     verifySbom: async () => {}
   });
-  assert.deepEqual(tagCalls, [{ repository: COMPONENTS.console, reference: 'edge' }]);
+  assert.deepEqual(tagCalls, [
+    { repository: COMPONENTS.console, reference: 'edge' },
+    ...Object.values(AUXILIARY_ARTIFACTS).map((repository) => ({
+      repository,
+      reference: RELEASE_TAG
+    }))
+  ]);
   assert.deepEqual(digestCalls, Object.entries(COMPONENTS).slice(1).map(([name, repository]) => ({
     repository,
     image: bom.components[name].image
   })));
 });
 
-test('channel resolution rejects a registry component that differs from the signed BOM before provenance acceptance', async () => {
+test('channel resolution rejects a canonical registry component that differs from the signed BOM', async () => {
   const bom = validBom();
   let provenanceChecks = 0;
   await assert.rejects(resolveChannel('edge', {
-    resolveImageFn: async () => ({ image: bom.components.console.image, sourceRevision: REVISION, registryCredentialsRequired: false }),
-    inspectImageFn: async (repository, image) => ({
-      image,
-      sourceRevision: repository === COMPONENTS.supabaseAuth ? '2'.repeat(40) : REVISION,
-      registryCredentialsRequired: false
+    resolveImageFn: async (repository) => signedArtifact(repository, bom.components.console.image),
+    inspectImageFn: async (repository, image) => signedArtifact(repository, image, {
+      revision: repository === COMPONENTS.supabaseAuth ? '2'.repeat(40) : REVISION
     }),
     verifyBom: bomVerifier(bom),
     verifyImage: async () => { provenanceChecks += 1; },
@@ -1106,18 +1104,21 @@ test('channel resolution rejects a registry component that differs from the sign
   assert.equal(provenanceChecks, 0);
 });
 
-test('a historical source-revision tag becomes a verified explicit rollback lock only when all images match', async () => {
+test('a historical source-revision tag becomes a verified explicit rollback lock', async () => {
   const bom = validBom();
   const tagCalls = [];
   const digestCalls = [];
   const resolved = await resolveSourceRevision(REVISION, {
     async resolveImageFn(repository, tag) {
       tagCalls.push({ repository, tag });
-      return { image: bom.components.console.image, sourceRevision: REVISION, registryCredentialsRequired: false };
+      const image = repository === COMPONENTS.console
+        ? bom.components.console.image
+        : `ghcr.io/opensphere-platform/${repository}@${DIGEST}`;
+      return signedArtifact(repository, image);
     },
     async inspectImageFn(repository, image) {
       digestCalls.push({ repository, image });
-      return { image, sourceRevision: REVISION, registryCredentialsRequired: false };
+      return signedArtifact(repository, image);
     },
     verifyBom: bomVerifier(bom),
     verifyImage() {},
@@ -1125,24 +1126,35 @@ test('a historical source-revision tag becomes a verified explicit rollback lock
   });
   assert.equal(resolved.channel, 'edge');
   assert.equal(resolved.sourceRevision, REVISION);
-  assert.equal(resolved.releaseDigest, calculateReleaseDigest('edge', resolved.components, RELEASE_TRUST, resolved.releaseBom));
-  assert.deepEqual(tagCalls, [{ repository: COMPONENTS.console, tag: `sha-${REVISION.slice(0, 7)}` }]);
+  assert.equal(
+    resolved.releaseDigest,
+    calculateReleaseDigest(
+      'edge',
+      resolved.components,
+      RELEASE_TRUST,
+      resolved.releaseBom,
+      { auxiliaryArtifacts: resolved.auxiliaryArtifacts }
+    )
+  );
+  assert.deepEqual(tagCalls, [
+    { repository: COMPONENTS.console, tag: `sha-${REVISION.slice(0, 7)}` },
+    ...Object.values(AUXILIARY_ARTIFACTS).map((repository) => ({
+      repository,
+      tag: RELEASE_TAG
+    }))
+  ]);
   assert.equal(digestCalls.length, Object.keys(COMPONENTS).length - 1);
 });
 
-test('a historical source-revision resolver rejects a short-tag collision or mixed image set before attestation acceptance', async () => {
+test('a historical source-revision resolver rejects a short-tag collision before attestation acceptance', async () => {
   const bom = validBom();
   let provenanceChecks = 0;
   await assert.rejects(
     resolveSourceRevision(REVISION, {
-      async resolveImageFn() {
-        return {
-          image: bom.components.console.image,
-          sourceRevision: 'b'.repeat(40),
-          registryCredentialsRequired: false
-        };
+      async resolveImageFn(repository) {
+        return signedArtifact(repository, bom.components.console.image, { revision: 'b'.repeat(40) });
       },
-      inspectImageFn: async (repository, image) => ({ image, sourceRevision: REVISION, registryCredentialsRequired: false }),
+      inspectImageFn: async (repository, image) => signedArtifact(repository, image),
       verifyBom: bomVerifier(bom),
       verifyImage() { provenanceChecks += 1; },
       verifySbom() { provenanceChecks += 1; }

@@ -4,7 +4,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
   bootstrap,
-  existingOpenSphereNamespaces,
+  existingManagedNamespaces,
   migrateLegacyInstallationLock,
   preflightReleaseArtifacts,
   readInstallationLock,
@@ -121,7 +121,6 @@ Usage:
        [--storage-class <name>] [--console <https-origin|loopback-http-origin>]
        [--auth-environment <development|production>]
        [--shell-tls-secret <namespace/name>]
-       [--recovery-target-secret <namespace/name>]
        [--registry-username <github-login> --registry-token-stdin]
        [--no-open-browser] [--add-to-path]
   opensphere-setup upgrade --release <edge|candidate|stable> [--lock <verified-lock-file>]
@@ -173,7 +172,10 @@ async function main() {
   const authEnvironment = hasOption('--auth-environment') ? option('--auth-environment', '') : undefined;
   if (context) process.env.OPENSPHERE_KUBE_CONTEXT = context;
   if (hasOption('--backup-target-secret')) {
-    throw new Error('The retired --backup-target-secret option is not accepted; use --recovery-target-secret <namespace/name>');
+    throw new Error('The retired --backup-target-secret option is not accepted; recovery readiness is checked only by the preflight command');
+  }
+  if (command !== 'preflight' && hasOption('--recovery-target-secret')) {
+    throw new Error('--recovery-target-secret is accepted only by promotion preflight; configure post-install recovery through Console');
   }
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
@@ -281,7 +283,14 @@ async function main() {
       storageClass: option('--storage-class', undefined),
       channel
     });
-    progress.done(`${cluster.serverVersion}, ${cluster.nodeCount} nodes (${cluster.nodePlatforms.join(', ')}), StorageClass ${cluster.storageClass}`);
+    progress.done(`${cluster.serverVersion}, ${cluster.readyNodeCount}/${cluster.nodeCount} Ready schedulable nodes (${cluster.nodePlatforms.join(', ')}), StorageClass ${cluster.storageClass}`);
+    for (const node of cluster.degradedNodes) {
+      progress.item('노드 경고', `${node.name}: ${node.ready ? 'Ready/unschedulable' : 'NotReady'} (${node.reason}) — Kubernetes 운영자가 복구해야 하며 Setup은 노드나 Docker Desktop을 재시작하지 않음`);
+    }
+    progress.item(
+      'Beszel Pod Security',
+      `${cluster.baselineObservabilitySecurity.podSecurityEnforce}; ${cluster.baselineObservabilitySecurity.status}; root + read-only hostPath 요구를 기록하며 Setup은 host/PSA를 변경하지 않음`
+    );
     const doctorConsoleUrl = suppliedConsoleUrl
       ?? defaultConsoleUrl(channel, selectAuthEnvironment(channel, authEnvironment));
     if (!readInstallationLock()) {
@@ -362,9 +371,9 @@ async function main() {
       progress.item('재개', `cluster release lock ${lock.releaseDigest}`);
       progress.done('관리형 설치 재개');
     } else {
-      const unmanaged = existingOpenSphereNamespaces();
+      const unmanaged = existingManagedNamespaces();
       if (unmanaged.length) {
-        throw new Error(`OpenSphere namespaces exist without an installation lock: ${unmanaged.join(', ')}`);
+        throw new Error(`Setup-managed namespaces exist without an installation lock: ${unmanaged.join(', ')}`);
       }
       const freshConsoleUrl = suppliedConsoleUrl
         ?? defaultConsoleUrl(channel, selectedAuthEnvironment);
@@ -380,7 +389,7 @@ async function main() {
       } else {
         progress.done('신규 설치 상태');
         progress.step(
-          '릴리스 anchor·13개 component·독립 CLI artifact 공급망 검증',
+          '릴리스 anchor·bootstrap core·available module·독립 CLI artifact 공급망 검증',
           `channel=${channel}`
         );
         lock = await resolveChannel(channel, {
@@ -400,7 +409,6 @@ async function main() {
       consoleUrl: suppliedConsoleUrl ?? defaultConsoleUrl(channel, selectedAuthEnvironment),
       authEnvironment: selectedAuthEnvironment,
       shellTlsSecret: requestedShellTlsSecret,
-      recoveryTargetSecret: hasOption('--recovery-target-secret') ? option('--recovery-target-secret', '') : undefined,
       openOnboarding: !hasOption('--no-open-browser'),
       registryCredentials,
       requiredPlatforms: targetPlatforms,

@@ -1,34 +1,47 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  AUXILIARY_ARTIFACTS,
   BASE_RUNTIME_COMPONENTS,
   COMPONENTS,
   LOCAL_EDGE_TRUST,
   calculateReleaseDigest,
-  validateReleaseTransition,
+  validateReleaseTransition
 } from '../src/release.mjs';
 import { BASE_MANIFESTS, COMPONENT_ROLLOUTS, renderManifest } from '../src/bootstrap.mjs';
 
 const digest = (value) => `sha256:${value.repeat(64)}`;
 
-function lock({ registry = true } = {}) {
-  const names = BASE_RUNTIME_COMPONENTS.filter((name) => registry || name !== 'registry');
+function lock() {
   const value = {
     apiVersion: 'release.opensphere.io/v1alpha1',
     kind: 'OpenSphereReleaseLock',
     channel: 'edge',
     releaseDigest: '',
-    resolvedAt: '2026-08-24T00:00:00.000Z',
+    resolvedAt: '2026-09-02T00:00:00.000Z',
     source: 'https://github.com/opensphere-platform/OpenSphere-console',
     sourceRevision: 'a'.repeat(40),
     trust: structuredClone(LOCAL_EDGE_TRUST),
-    components: Object.fromEntries(names.map((name, index) => [name, {
+    components: Object.fromEntries(BASE_RUNTIME_COMPONENTS.map((name, index) => [name, {
       repository: COMPONENTS[name],
-      image: `ghcr.io/opensphere-platform/${COMPONENTS[name]}@${digest((index % 10).toString())}`,
-      sourceRevision: 'a'.repeat(40),
+      image: `ghcr.io/opensphere-platform/${COMPONENTS[name]}@${digest(String(index % 10))}`,
+      sourceRevision: 'a'.repeat(40)
     }])),
+    auxiliaryArtifacts: Object.fromEntries(
+      Object.entries(AUXILIARY_ARTIFACTS).map(([name, repository], index) => [name, {
+        repository,
+        image: `ghcr.io/opensphere-platform/${repository}@${digest(String(index + 6))}`,
+        sourceRevision: 'a'.repeat(40)
+      }])
+    )
   };
-  value.releaseDigest = calculateReleaseDigest(value.channel, value.components, value.trust);
+  value.releaseDigest = calculateReleaseDigest(
+    value.channel,
+    value.components,
+    value.trust,
+    undefined,
+    { auxiliaryArtifacts: value.auxiliaryArtifacts }
+  );
   return value;
 }
 
@@ -47,22 +60,33 @@ test('Registry manifest receives exact image and self-reported digest from one l
   assert.doesNotMatch(rendered, /__OPENSPHERE_/);
 });
 
-test('one-way Registry introduction preserves every existing component', () => {
-  const base = lock({ registry: false });
+test('Registry component release preserves every unlisted canonical and auxiliary artifact', () => {
+  const base = lock();
   const target = structuredClone(base);
+  target.sourceRevision = 'b'.repeat(40);
   target.components.registry = {
     repository: COMPONENTS.registry,
     image: `ghcr.io/opensphere-platform/${COMPONENTS.registry}@${digest('e')}`,
-    sourceRevision: target.sourceRevision,
+    sourceRevision: target.sourceRevision
   };
   target.releaseScope = 'component';
   target.baseReleaseDigest = base.releaseDigest;
   target.changedComponents = ['registry'];
-  target.releaseDigest = calculateReleaseDigest(target.channel, target.components, target.trust, undefined, {
-    releaseScope: target.releaseScope,
-    baseReleaseDigest: target.baseReleaseDigest,
-    changedComponents: target.changedComponents,
-  });
+  target.releaseDigest = calculateReleaseDigest(
+    target.channel,
+    target.components,
+    target.trust,
+    undefined,
+    {
+      releaseScope: target.releaseScope,
+      baseReleaseDigest: target.baseReleaseDigest,
+      changedComponents: target.changedComponents,
+      auxiliaryArtifacts: target.auxiliaryArtifacts
+    }
+  );
   assert.equal(validateReleaseTransition(base, target), target);
-  for (const [name, component] of Object.entries(base.components)) assert.deepEqual(target.components[name], component);
+  for (const [name, component] of Object.entries(base.components)) {
+    if (name !== 'registry') assert.deepEqual(target.components[name], component);
+  }
+  assert.deepEqual(target.auxiliaryArtifacts, base.auxiliaryArtifacts);
 });

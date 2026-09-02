@@ -5,14 +5,18 @@ import {
   INSTALL_ARTIFACT_PATHS,
   preflightReleaseArtifacts
 } from '../src/bootstrap.mjs';
+import { AUXILIARY_ARTIFACTS, COMPONENTS } from '../src/release.mjs';
 
 test('artifact preflight materializes the complete release and always removes its temporary directory', async () => {
   const calls = [];
   const result = await preflightReleaseArtifacts(
     {
       sourceRevision: 'a'.repeat(40),
-      components: { recovery: {}, osdst: {} },
-      auxiliaryArtifacts: { cliArtifacts: { image: `ghcr.io/example@sha256:${'b'.repeat(64)}` } }
+      components: Object.fromEntries(Object.keys(COMPONENTS).map((name) => [name, {}])),
+      auxiliaryArtifacts: Object.fromEntries(Object.keys(AUXILIARY_ARTIFACTS).map((name) => [
+        name,
+        { image: `ghcr.io/example/${name}@sha256:${'b'.repeat(64)}` }
+      ]))
     },
     {
       storageClass: 'hostpath',

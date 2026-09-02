@@ -16,7 +16,7 @@ export const RELEASE_SCOPE_COMPONENT = 'component';
 export const REGISTRY = 'ghcr.io';
 export const OWNER = 'opensphere-platform';
 export const SOURCE = 'https://github.com/opensphere-platform/OpenSphere-console';
-export const SUPABASE_MIGRATION_MANIFEST_PATH = 'backend/supabase/migrations/manifest.json';
+export const SUPABASE_MIGRATION_MANIFEST_PATH = 'migrations/manifest.json';
 // v1 locks predate the signed SBOM gate.  They are accepted only as an already
 // installed edge rollback baseline; no new channel resolution may produce one.
 export const LEGACY_RELEASE_TRUST = Object.freeze({
@@ -37,7 +37,7 @@ export const RELEASE_TRUST = Object.freeze({
   // The retired edge workflow remains recorded solely in LEGACY_RELEASE_TRUST
   // so an already-installed pre-policy lock can be identified and rejected
   // from every new promotion path.
-  signerWorkflow: 'opensphere-platform/OpenSphere-console/.github/workflows/publish-ga-images.yml',
+  signerWorkflow: 'opensphere-platform/OpenSphere-console/.github/workflows/publish-candidate-images.yml',
   oidcIssuer: LEGACY_RELEASE_TRUST.oidcIssuer,
   sourceRef: LEGACY_RELEASE_TRUST.sourceRef,
   provenancePredicate: 'https://slsa.dev/provenance/v1',
@@ -77,6 +77,27 @@ function report(onProgress, event) {
 
 export const COMPONENTS = Object.freeze({
   console: 'opensphere-console',
+  consoleApi: 'opensphere-console-api',
+  extensionController: 'opensphere-extension-controller',
+  registry: 'opensphere-registry',
+  osaaGateway: 'opensphere-console-osaa-gateway',
+  osdst: 'opensphere-osdst',
+  osaaGovernedAdapter: 'opensphere-osaa-governed-adapter',
+  notificationDispatcher: 'opensphere-console-notification-dispatcher',
+  gitea: 'opensphere-console-gitea',
+  supabasePostgres: 'opensphere-console-supabase-postgres',
+  supabaseAuth: 'opensphere-console-supabase-auth',
+  supabaseRest: 'opensphere-console-supabase-rest',
+  supabaseStorage: 'opensphere-console-supabase-storage',
+  giteaPostgres: 'opensphere-console-gitea-postgres',
+  recovery: 'opensphere-console-recovery',
+  beszelHub: 'opensphere-console-beszel-hub',
+  beszelAgent: 'opensphere-console-beszel-agent',
+  beszelBootstrap: 'opensphere-console-beszel-bootstrap'
+});
+
+export const HISTORICAL_COMPONENTS = Object.freeze({
+  console: 'opensphere-console',
   backend: 'opensphere-console-backend',
   dupaController: 'opensphere-console-dupa-controller',
   registry: 'opensphere-registry',
@@ -93,55 +114,90 @@ export const COMPONENTS = Object.freeze({
   recovery: 'opensphere-console-recovery'
 });
 
-const LEGACY_INSTALLED_COMPONENTS = legacyInstalledComponentMap(COMPONENTS);
+const LEGACY_INSTALLED_COMPONENTS = legacyInstalledComponentMap(HISTORICAL_COMPONENTS);
 
 // Runtime-distributed artifacts are independently published and deployed but
-// are not part of the canonical 15-component Platform Release lifecycle. They
+// are not part of the canonical Console component lifecycle. They
 // remain digest-pinned in the installation lock so a mutable auxiliary tag can
 // never decide which executable a fresh cluster serves.
 export const AUXILIARY_ARTIFACTS = Object.freeze({
-  cliArtifacts: 'opensphere-os-cli'
+  cliArtifacts: 'opensphere-os-cli',
+  osShellControl: 'opensphere-console-os-shell-control',
+  osShellRuntime: 'opensphere-os-shell-runtime'
 });
 
-// Per CONSTITUTION-0004 v1.3.0, OSAA Core is Main Shell native required
-// runtime, not an optional AI subShell staging package. It is part of the
-// base Console runtime lifecycle (clean bootstrap, upgrade, rollback,
-// uninstall) alongside every other governed component.
-export const BASE_RUNTIME_COMPONENTS = Object.freeze([
+export const BOOTSTRAP_AUXILIARY_ARTIFACTS = Object.freeze(['cliArtifacts']);
+export const AVAILABLE_AUXILIARY_ARTIFACTS = Object.freeze([
+  'osShellControl',
+  'osShellRuntime'
+]);
+
+// The canonical distribution catalog is complete even though Setup deploys only
+// BOOTSTRAP_CORE_COMPONENTS. Console activates AVAILABLE_MODULE_COMPONENTS later
+// from the exact digests retained in the same installation lock.
+export const BASE_RUNTIME_COMPONENTS = Object.freeze(Object.keys(COMPONENTS));
+
+export const BOOTSTRAP_CORE_COMPONENTS = Object.freeze([
   'console',
-  'backend',
-  'dupaController',
+  'consoleApi',
+  'extensionController',
   'registry',
-  'osaaGateway',
-  'osdst',
-  'osaaGovernedAdapter',
-  'notificationDispatcher',
   'gitea',
+  'giteaPostgres',
   'supabasePostgres',
   'supabaseAuth',
   'supabaseRest',
   'supabaseStorage',
-  'giteaPostgres',
+  'beszelHub',
+  'beszelAgent',
+  'beszelBootstrap'
+]);
+
+export const AVAILABLE_MODULE_COMPONENTS = Object.freeze([
+  'osaaGateway',
+  'osdst',
+  'osaaGovernedAdapter',
+  'notificationDispatcher',
   'recovery'
 ]);
+
+export function releaseResponsibilityProfile(components = COMPONENTS, auxiliaryArtifacts = AUXILIARY_ARTIFACTS) {
+  const names = new Set(Object.keys(components));
+  const auxiliaryNames = new Set(Object.keys(auxiliaryArtifacts ?? {}));
+  const missingBootstrapCore = BOOTSTRAP_CORE_COMPONENTS.filter((name) => !names.has(name));
+  const missingAvailableModules = AVAILABLE_MODULE_COMPONENTS.filter((name) => !names.has(name));
+  const missingBootstrapArtifacts = BOOTSTRAP_AUXILIARY_ARTIFACTS.filter((name) => !auxiliaryNames.has(name));
+  const missingAvailableArtifacts = AVAILABLE_AUXILIARY_ARTIFACTS.filter((name) => !auxiliaryNames.has(name));
+  return Object.freeze({
+    bootstrapCore: Object.freeze(BOOTSTRAP_CORE_COMPONENTS.filter((name) => names.has(name))),
+    availableModules: Object.freeze(AVAILABLE_MODULE_COMPONENTS.filter((name) => names.has(name))),
+    bootstrapAuxiliaryArtifacts: Object.freeze(BOOTSTRAP_AUXILIARY_ARTIFACTS.filter((name) => auxiliaryNames.has(name))),
+    availableAuxiliaryArtifacts: Object.freeze(AVAILABLE_AUXILIARY_ARTIFACTS.filter((name) => auxiliaryNames.has(name))),
+    missingBootstrapCore: Object.freeze(missingBootstrapCore),
+    missingAvailableModules: Object.freeze(missingAvailableModules),
+    missingBootstrapArtifacts: Object.freeze(missingBootstrapArtifacts),
+    missingAvailableArtifacts: Object.freeze(missingAvailableArtifacts)
+  });
+}
+
+const HISTORICAL_BASE_RUNTIME_COMPONENTS = Object.freeze(Object.keys(HISTORICAL_COMPONENTS));
 
 // Installed releases from before OSDST became an independent CBSS service are
 // accepted only as upgrade baselines. Newly resolved releases remain strict.
 export const PRE_OSDST_BASE_RUNTIME_COMPONENTS = Object.freeze(
-  BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'osdst')
+  HISTORICAL_BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'osdst')
 );
 
-// Registry & Catalog was introduced as a new independently deployed CBSS Core
-// Service. The immediately preceding component set is accepted only as the
-// base of the one-way Registry component introduction.
+// Registry & Catalog was introduced after the immediately preceding historical
+// component set. It is accepted only as an installed transition baseline.
 export const PRE_REGISTRY_BASE_RUNTIME_COMPONENTS = Object.freeze(
-  BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'registry')
+  HISTORICAL_BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'registry')
 );
 
 // Releases published before both recovery and OSDST were governed contain
 // this exact historical set. They remain rollback/upgrade baselines only.
 export const LEGACY_BASE_RUNTIME_COMPONENTS = Object.freeze(
-  BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'recovery' && name !== 'osdst')
+  HISTORICAL_BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'recovery' && name !== 'osdst')
 );
 
 // Promotion channels remain multi-platform. Edge may contain only the
@@ -157,6 +213,7 @@ const RELEASE_METADATA_LABELS = Object.freeze([
   'io.opensphere.channel',
   'io.opensphere.release-tag',
   'io.opensphere.source-revision',
+  'io.opensphere.release-scope',
   'opensphere.io/build-authority',
   'opensphere.io/release-class',
   'opensphere.io/ga-eligible'
@@ -488,24 +545,38 @@ function verifyImageAttestation(image, predicateType, subjectError, failureLabel
   throw lastError;
 }
 
-function canonicalComponentNames(components, { allowLegacyComponentSet = false } = {}) {
+function canonicalComponentProfile(components, { allowLegacyComponentSet = false } = {}) {
   const names = Object.keys(components ?? {});
-  const candidates = [
-    Object.keys(COMPONENTS),
-    ...(allowLegacyComponentSet ? [PRE_REGISTRY_BASE_RUNTIME_COMPONENTS, PRE_OSDST_BASE_RUNTIME_COMPONENTS, LEGACY_BASE_RUNTIME_COMPONENTS] : [])
-  ];
-  return candidates.find((expected) =>
-    names.length === expected.length && expected.every((name) => names.includes(name))
-  ) ?? null;
+  const current = Object.keys(COMPONENTS);
+  if (names.length === current.length && current.every((name) => names.includes(name))) {
+    return { names: current, repositories: COMPONENTS };
+  }
+  if (allowLegacyComponentSet) {
+    for (const historical of [
+      HISTORICAL_BASE_RUNTIME_COMPONENTS,
+      PRE_REGISTRY_BASE_RUNTIME_COMPONENTS,
+      PRE_OSDST_BASE_RUNTIME_COMPONENTS,
+      LEGACY_BASE_RUNTIME_COMPONENTS
+    ]) {
+      if (names.length === historical.length && historical.every((name) => names.includes(name))) {
+        return { names: historical, repositories: HISTORICAL_COMPONENTS };
+      }
+    }
+  }
+  return null;
+}
+
+function canonicalComponentNames(components, options = {}) {
+  return canonicalComponentProfile(components, options)?.names ?? null;
 }
 
 function installedComponentProfile(components, {
   allowLegacyComponentSet = false,
   allowInstalledAgentIdentityCutover = false
 } = {}) {
-  const canonicalNames = canonicalComponentNames(components, { allowLegacyComponentSet });
-  if (canonicalNames) {
-    return { names: canonicalNames, repositories: COMPONENTS, agentIdentity: 'canonical' };
+  const canonicalProfile = canonicalComponentProfile(components, { allowLegacyComponentSet });
+  if (canonicalProfile) {
+    return { ...canonicalProfile, agentIdentity: 'canonical' };
   }
   const names = Object.keys(components ?? {});
   const legacyNames = Object.keys(LEGACY_INSTALLED_COMPONENTS);
@@ -533,9 +604,13 @@ export function validateReleaseBom(bom, {
   }
   validateChannel(bom.channel);
   if (channel && bom.channel !== channel) throw new Error('Signed release BOM channel differs from the requested channel');
-  if (bom.status !== 'Active') throw new Error(`Signed release BOM is not installable: ${bom.status ?? 'missing status'}`);
-  if (bom.source !== SOURCE || !/^[a-f0-9]{40}$/.test(bom.sourceRevision ?? '')) {
-    throw new Error('Signed release BOM source identity is invalid');
+  const installableStatus = bom.channel === 'candidate' ? 'Candidate' : 'Active';
+  if (bom.status !== installableStatus) {
+    throw new Error(`Signed release BOM status differs from ${bom.channel} policy: ${bom.status ?? 'missing status'}`);
+  }
+  if (bom.source !== SOURCE || !/^[a-f0-9]{40}$/.test(bom.sourceRevision ?? '')
+      || !/^\d{12}$/u.test(bom.releaseTag ?? '')) {
+    throw new Error('Signed release BOM source identity or immutable release tag is invalid');
   }
   const platforms = Array.isArray(bom.supportedPlatforms) ? [...new Set(bom.supportedPlatforms)] : [];
   const canonicalPlatformSet = platforms.length === bom.supportedPlatforms?.length
@@ -554,12 +629,13 @@ export function validateReleaseBom(bom, {
       throw new Error(`Release BOM does not support target platform(s): ${missing.join(', ')}`);
     }
   }
-  const expectedNames = canonicalComponentNames(bom.components, { allowLegacyComponentSet });
-  if (!expectedNames) {
+  const componentProfile = canonicalComponentProfile(bom.components, { allowLegacyComponentSet });
+  if (!componentProfile) {
     throw new Error('Signed release BOM component set is not canonical');
   }
+  const { names: expectedNames, repositories } = componentProfile;
   for (const name of expectedNames) {
-    const repository = COMPONENTS[name];
+    const repository = repositories[name];
     const component = bom.components[name];
     if (component?.repository !== repository) {
       throw new Error(`Signed release BOM component ${name} repository is not canonical`);
@@ -578,7 +654,7 @@ export function validateReleaseBom(bom, {
   const validMigrationEvidence = migration?.path === SUPABASE_MIGRATION_MANIFEST_PATH
     && /^sha256:[a-f0-9]{64}$/.test(migration?.sha256 ?? '')
     && /^sha256:[a-f0-9]{64}$/.test(migration?.setDigest ?? '')
-    && /^\d{4}$/.test(migration?.latestMigrationId ?? '')
+    && /^opensphere-console\/[0-9]{8}\/[0-9]{4}$/.test(migration?.latestGlobalId ?? '')
     && Number.isInteger(migration?.migrationCount) && migration.migrationCount > 0;
   if (!validMigrationEvidence && !allowLegacyReleaseArtifacts) {
     throw new Error('Signed release BOM lacks canonical Supabase migration manifest evidence');
@@ -592,6 +668,7 @@ export function releaseBomPointer(bom, subject = bom?.components?.console?.image
     predicateType: RELEASE_BOM_PREDICATE,
     subject,
     digest: calculateReleaseBomDigest(validated),
+    releaseTag: validated.releaseTag,
     ...(validated.artifacts?.supabaseMigrationManifest
       ? { migrationManifest: structuredClone(validated.artifacts.supabaseMigrationManifest) }
       : {})
@@ -603,7 +680,8 @@ export function assertSignedReleaseBom(lock) {
   const consoleImage = lock?.components?.console?.image;
   if (pointer?.predicateType !== RELEASE_BOM_PREDICATE
       || pointer?.subject !== consoleImage
-      || !/^sha256:[a-f0-9]{64}$/.test(pointer?.digest ?? '')) {
+      || !/^sha256:[a-f0-9]{64}$/.test(pointer?.digest ?? '')
+      || !/^\d{12}$/u.test(pointer?.releaseTag ?? '')) {
     throw new Error('Release lock has no governed signed Release BOM');
   }
   return pointer;
@@ -680,16 +758,44 @@ export function verifyImageSbom(image, options = {}) {
   );
 }
 
+
+export function assertReleaseArtifactMetadata(image, {
+  repository,
+  sourceRevision,
+  releaseTag,
+  artifactScope
+} = {}) {
+  const labels = image?.labels ?? {};
+  if (!['canonical', 'auxiliary'].includes(artifactScope)
+      || labels['io.opensphere.release-scope'] !== artifactScope) {
+    throw new Error(`Release image ${repository ?? 'artifact'} has invalid io.opensphere.release-scope label`);
+  }
+  if (image?.sourceRevision !== sourceRevision
+      || labels['io.opensphere.source-revision'] !== sourceRevision) {
+    throw new Error(`Release image ${repository ?? 'artifact'} source revision differs from the signed release`);
+  }
+  if (!/^\d{12}$/u.test(releaseTag ?? '')
+      || labels['io.opensphere.release-tag'] !== releaseTag) {
+    throw new Error(`Release image ${repository ?? 'artifact'} release tag differs from the signed release`);
+  }
+  return image;
+}
+
 export function assertLocalEdgeImage(image, {
   repository,
   sourceRevision,
-  releaseTag
+  releaseTag,
+  artifactScope = 'canonical'
 } = {}) {
   const labels = image?.labels ?? {};
   for (const [name, expected] of Object.entries(LOCAL_EDGE_LABELS)) {
     if (labels[name] !== expected) {
       throw new Error(`Local edge image ${repository ?? 'component'} has invalid ${name} label`);
     }
+  }
+  if (!['canonical', 'auxiliary'].includes(artifactScope)
+      || labels['io.opensphere.release-scope'] !== artifactScope) {
+    throw new Error('Local edge image ' + (repository ?? 'component') + ' has invalid io.opensphere.release-scope label');
   }
   if (!/^[a-f0-9]{40}$/.test(image?.sourceRevision ?? '')
       || labels['io.opensphere.source-revision'] !== image.sourceRevision) {
@@ -728,10 +834,10 @@ async function verifyLocalEdgeLock(lock, {
     throw new Error('Only a localhost edge lock may use local image verification');
   }
   const releaseEntries = [
-    ...Object.entries(validated.components),
-    ...Object.entries(validated.auxiliaryArtifacts ?? {})
+    ...Object.entries(validated.components).map(([name, component]) => [name, component, 'canonical']),
+    ...Object.entries(validated.auxiliaryArtifacts ?? {}).map(([name, component]) => [name, component, 'auxiliary'])
   ];
-  const metadata = await Promise.all(releaseEntries.map(async ([name, component]) => {
+  const metadata = await Promise.all(releaseEntries.map(async ([name, component, artifactScope]) => {
     report(onProgress, { type: 'local-component-start', component: name, image: component.image });
     const inspected = await inspectImageFn(component.repository, component.image, {
       registryCredentials,
@@ -742,7 +848,8 @@ async function verifyLocalEdgeLock(lock, {
     }
     const observed = assertLocalEdgeImage(inspected, {
       repository: component.repository,
-      sourceRevision: component.sourceRevision
+      sourceRevision: component.sourceRevision,
+      artifactScope
     });
     report(onProgress, { type: 'local-component-complete', component: name, image: component.image });
     return { name, ...observed };
@@ -776,7 +883,11 @@ export async function verifyReleaseProvenance(lock, {
   if (canonicalTrust(validated.trust) !== RELEASE_TRUST) {
     throw new Error('Legacy attestation trust cannot satisfy the signed SBOM release gate');
   }
-  await Promise.all(Object.entries(validated.components).map(async ([name, { image }]) => {
+  const governedArtifacts = [
+    ...Object.entries(validated.components),
+    ...Object.entries(validated.auxiliaryArtifacts ?? {})
+  ];
+  await Promise.all(governedArtifacts.map(async ([name, { image }]) => {
     const options = registryCredentials?.token ? { authToken: registryCredentials.token } : undefined;
     report(onProgress, { type: 'provenance-start', component: name, image });
     await verifyImage(image, options);
@@ -846,6 +957,9 @@ export async function verifyReleaseLock(lock, {
     requiredPlatforms
   });
   const expectedMigrationManifest = bom.artifacts?.supabaseMigrationManifest;
+  if (pointer.releaseTag !== bom.releaseTag) {
+    throw new Error('Release lock immutable tag differs from the signed Release BOM');
+  }
   if (expectedMigrationManifest
       && JSON.stringify(stableValue(pointer.migrationManifest)) !== JSON.stringify(stableValue(expectedMigrationManifest))) {
     throw new Error('Release lock migration manifest evidence differs from the signed Release BOM');
@@ -859,6 +973,21 @@ export async function verifyReleaseLock(lock, {
     if (actual.repository !== expected.repository || actual.image !== expected.image || actual.sourceRevision !== expected.sourceRevision) {
       throw new Error(`Release lock component ${name} differs from the signed Release BOM`);
     }
+  }
+  for (const [name, actual] of Object.entries(validated.auxiliaryArtifacts ?? {})) {
+    const inspected = await inspectImageFn(actual.repository, actual.image, {
+      registryCredentials,
+      requiredPlatforms
+    });
+    if (inspected.image !== actual.image) {
+      throw new Error(`Release lock auxiliary artifact ${name} differs from the registry`);
+    }
+    assertReleaseArtifactMetadata(inspected, {
+      repository: actual.repository,
+      sourceRevision: validated.sourceRevision,
+      releaseTag: pointer.releaseTag,
+      artifactScope: 'auxiliary'
+    });
   }
   return verifyReleaseProvenance(validated, {
     verifyImage,
@@ -952,6 +1081,11 @@ export function validateLock(lock, {
     throw new Error('Release lock component set is not canonical');
   }
   const { names: expectedNames, repositories } = componentProfile;
+  if (repositories === COMPONENTS
+      && [LOCAL_EDGE_TRUST, RELEASE_TRUST].includes(trust)
+      && lock.auxiliaryArtifacts === undefined) {
+    throw new Error('Current release lock requires the complete governed auxiliary artifact set');
+  }
   for (const name of expectedNames) {
     const repository = repositories[name];
     const component = lock.components[name];
@@ -978,8 +1112,8 @@ export function validateLock(lock, {
     }
   }
   if (lock.auxiliaryArtifacts !== undefined) {
-    if (trust !== LOCAL_EDGE_TRUST || lock.channel !== 'edge') {
-      throw new Error('Auxiliary runtime artifacts currently require localhost edge trust');
+    if (![LOCAL_EDGE_TRUST, RELEASE_TRUST].includes(trust)) {
+      throw new Error('Auxiliary runtime artifacts require governed local-edge or signed release trust');
     }
     const names = Object.keys(lock.auxiliaryArtifacts);
     const expectedAuxiliaryNames = Object.keys(AUXILIARY_ARTIFACTS);
@@ -1118,7 +1252,7 @@ async function resolveLocalEdgeRelease(reference, anchor, {
     throw new Error('Localhost releases may be resolved only through the edge channel');
   }
   const targetPlatforms = canonicalRequiredPlatforms(requiredPlatforms);
-  const anchorMetadata = assertLocalEdgeImage(anchor, { repository: COMPONENTS.console });
+  const anchorMetadata = assertLocalEdgeImage(anchor, { repository: COMPONENTS.console, artifactScope: 'canonical' });
   const resolved = await Promise.all(Object.entries(COMPONENTS).map(async ([name, repository]) => {
     report(onProgress, {
       type: 'local-component-start',
@@ -1136,7 +1270,8 @@ async function resolveLocalEdgeRelease(reference, anchor, {
     assertLocalEdgeImage(inspected, {
       repository,
       sourceRevision: anchorMetadata.sourceRevision,
-      releaseTag: anchorMetadata.releaseTag
+      releaseTag: anchorMetadata.releaseTag,
+      artifactScope: 'canonical'
     });
     report(onProgress, { type: 'local-component-complete', component: name, image: inspected.image });
     return [name, releaseComponent(repository, inspected)];
@@ -1156,7 +1291,8 @@ async function resolveLocalEdgeRelease(reference, anchor, {
     assertLocalEdgeImage(inspected, {
       repository,
       sourceRevision: anchorMetadata.sourceRevision,
-      releaseTag: anchorMetadata.releaseTag
+      releaseTag: anchorMetadata.releaseTag,
+      artifactScope: 'auxiliary'
     });
     report(onProgress, { type: 'local-auxiliary-complete', component: name, image: inspected.image });
     return [name, releaseComponent(repository, inspected)];
@@ -1247,15 +1383,39 @@ async function resolveSignedRelease(reference, channel, {
     if (inspected.image !== signed.image || inspected.sourceRevision !== signed.sourceRevision) {
       throw new Error(`Registry image ${name} differs from the signed Release BOM`);
     }
+    assertReleaseArtifactMetadata(inspected, {
+      repository,
+      sourceRevision: bom.sourceRevision,
+      releaseTag: bom.releaseTag,
+      artifactScope: 'canonical'
+    });
     report(onProgress, { type: 'component-complete', component: name, image: inspected.image });
     return [name, releaseComponent(repository, inspected)];
   }));
   const components = Object.fromEntries(resolved);
+  const auxiliaryResolved = await Promise.all(Object.entries(AUXILIARY_ARTIFACTS).map(async ([name, repository]) => {
+    report(onProgress, { type: 'auxiliary-start', component: name, repository, reference: bom.releaseTag });
+    const inspected = await resolveImageFn(repository, bom.releaseTag, {
+      registryCredentials,
+      requiredPlatforms: targetPlatforms
+    });
+    assertReleaseArtifactMetadata(inspected, {
+      repository,
+      sourceRevision: bom.sourceRevision,
+      releaseTag: bom.releaseTag,
+      artifactScope: 'auxiliary'
+    });
+    report(onProgress, { type: 'auxiliary-complete', component: name, image: inspected.image });
+    return [name, releaseComponent(repository, inspected)];
+  }));
+  const auxiliaryArtifacts = Object.fromEntries(auxiliaryResolved);
   const sourceRevision = bom.sourceRevision;
   if (Object.values(components).some((component) => component.sourceRevision !== sourceRevision)) {
     throw new Error('Registry component source revisions differ from the signed Release BOM');
   }
-  const releaseDigest = calculateReleaseDigest(channel, components, RELEASE_TRUST, releaseBom);
+  const releaseDigest = calculateReleaseDigest(channel, components, RELEASE_TRUST, releaseBom, {
+    auxiliaryArtifacts
+  });
   const lock = {
     apiVersion: RELEASE_API_VERSION,
     kind: 'OpenSphereReleaseLock',
@@ -1266,6 +1426,7 @@ async function resolveSignedRelease(reference, channel, {
     sourceRevision,
     trust: RELEASE_TRUST,
     releaseBom,
+    auxiliaryArtifacts,
     components
   };
   return verifyReleaseProvenance(lock, {

@@ -13,6 +13,7 @@ import {
 import {
   calculateReleaseBomDigest,
   calculateReleaseDigest,
+  AUXILIARY_ARTIFACTS,
   COMPONENTS,
   RELEASE_API_VERSION,
   RELEASE_BOM_PREDICATE,
@@ -29,11 +30,11 @@ import {
 } from '../src/release-agent-identity-cutover.mjs';
 
 const MIGRATION_MANIFEST = Object.freeze({
-  path: 'backend/supabase/migrations/manifest.json',
+  path: 'migrations/manifest.json',
   sha256: `sha256:${'d'.repeat(64)}`,
   setDigest: `sha256:${'e'.repeat(64)}`,
-  latestMigrationId: '0053',
-  migrationCount: 52
+  latestGlobalId: 'opensphere-console/20260902/0001',
+  migrationCount: 1
 });
 
 function lock(revision, digestCharacter) {
@@ -46,6 +47,14 @@ function lock(revision, digestCharacter) {
       sourceRevision: revision
     }
   ]));
+  const auxiliaryArtifacts = Object.fromEntries(Object.entries(AUXILIARY_ARTIFACTS).map(([name, repository]) => [
+    name,
+    {
+      repository,
+      image: 'ghcr.io/opensphere-platform/' + repository + '@' + imageDigest,
+      sourceRevision: revision
+    }
+  ]));
   const bom = {
     apiVersion: RELEASE_API_VERSION,
     kind: 'OpenSphereReleaseBOM',
@@ -53,6 +62,7 @@ function lock(revision, digestCharacter) {
     status: 'Active',
     source: SOURCE,
     sourceRevision: revision,
+    releaseTag: '202609020101',
     artifacts: { supabaseMigrationManifest: { ...MIGRATION_MANIFEST } },
     supportedPlatforms: ['linux/amd64', 'linux/arm64'],
     components
@@ -62,11 +72,12 @@ function lock(revision, digestCharacter) {
     apiVersion: RELEASE_API_VERSION,
     kind: 'OpenSphereReleaseLock',
     channel: 'edge',
-    releaseDigest: calculateReleaseDigest('edge', components, RELEASE_TRUST, releaseBom),
+    releaseDigest: calculateReleaseDigest('edge', components, RELEASE_TRUST, releaseBom, { auxiliaryArtifacts }),
     source: SOURCE,
     sourceRevision: revision,
     trust: RELEASE_TRUST,
     releaseBom,
+    auxiliaryArtifacts,
     components
   };
 }
@@ -94,7 +105,7 @@ function preRecoveryLock(revision, digestCharacter) {
   return previous;
 }
 
-function componentTarget(previous, revision, changedComponents = ['backend']) {
+function componentTarget(previous, revision, changedComponents = ['consoleApi']) {
   const target = structuredClone(previous);
   target.releaseScope = RELEASE_SCOPE_COMPONENT;
   target.baseReleaseDigest = previous.releaseDigest;
@@ -114,7 +125,8 @@ function componentTarget(previous, revision, changedComponents = ['backend']) {
     {
       releaseScope: target.releaseScope,
       baseReleaseDigest: target.baseReleaseDigest,
-      changedComponents: target.changedComponents
+      changedComponents: target.changedComponents,
+      auxiliaryArtifacts: target.auxiliaryArtifacts
     }
   );
   return target;
@@ -125,7 +137,7 @@ function registryIntroductionLocks() {
   previous.trust = LOCAL_EDGE_TRUST;
   delete previous.releaseBom;
   delete previous.components.registry;
-  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, previous.trust);
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, previous.trust, undefined, { auxiliaryArtifacts: previous.auxiliaryArtifacts });
   const target = structuredClone(previous);
   target.releaseScope = RELEASE_SCOPE_COMPONENT;
   target.baseReleaseDigest = previous.releaseDigest;
@@ -144,7 +156,8 @@ function registryIntroductionLocks() {
     {
       releaseScope: target.releaseScope,
       baseReleaseDigest: target.baseReleaseDigest,
-      changedComponents: target.changedComponents
+      changedComponents: target.changedComponents,
+      auxiliaryArtifacts: target.auxiliaryArtifacts
     }
   );
   return { previous, target };
@@ -163,12 +176,12 @@ function agentIdentityCutoverLocks() {
       sourceRevision: previous.sourceRevision
     };
   }
-  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, previous.trust);
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, previous.trust, undefined, { auxiliaryArtifacts: previous.auxiliaryArtifacts });
 
   const canonicalBase = lock(previous.sourceRevision, 'a');
   canonicalBase.trust = LOCAL_EDGE_TRUST;
   delete canonicalBase.releaseBom;
-  canonicalBase.releaseDigest = calculateReleaseDigest('edge', canonicalBase.components, canonicalBase.trust);
+  canonicalBase.releaseDigest = calculateReleaseDigest('edge', canonicalBase.components, canonicalBase.trust, undefined, { auxiliaryArtifacts: canonicalBase.auxiliaryArtifacts });
   const target = componentTarget(canonicalBase, '2'.repeat(40), [
     'osaaGateway',
     'osaaGovernedAdapter'
@@ -182,7 +195,8 @@ function agentIdentityCutoverLocks() {
     {
       releaseScope: target.releaseScope,
       baseReleaseDigest: target.baseReleaseDigest,
-      changedComponents: target.changedComponents
+      changedComponents: target.changedComponents,
+      auxiliaryArtifacts: target.auxiliaryArtifacts
     }
   );
   return { previous, target };
@@ -288,12 +302,18 @@ test('upgrade prefetches target and rollback artifacts before target install', a
   assert.ok(events.includes('namespaces'));
 });
 
-test('component release is upgrade-only and keeps a complete rollback lock', async () => {
+test('current C_API component release is upgrade-only and keeps a complete rollback lock', async () => {
   const previous = lock('1'.repeat(40), 'a');
   previous.trust = LOCAL_EDGE_TRUST;
   delete previous.releaseBom;
-  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
-  const target = componentTarget(previous, '2'.repeat(40), ['backend']);
+  previous.releaseDigest = calculateReleaseDigest(
+    'edge',
+    previous.components,
+    LOCAL_EDGE_TRUST,
+    undefined,
+    { auxiliaryArtifacts: previous.auxiliaryArtifacts }
+  );
+  const target = componentTarget(previous, '2'.repeat(40), ['consoleApi']);
   const events = [];
   const result = await upgrade(previous, target, {
     runtime: runtime(previous, events, { recordedInventory: [{ name: 'complete-release' }] })
@@ -301,15 +321,13 @@ test('component release is upgrade-only and keeps a complete rollback lock', asy
   assert.equal(result.changed, true);
   assert.equal(result.lock.components.console.image, previous.components.console.image);
   assert.ok(events.includes(`record:${target.sourceRevision}`));
-  assert.ok(events.includes(`install-component:업그레이드:${target.sourceRevision}:backend:migrations=true`));
-  assert.ok(events.includes(`prepare-component:${target.sourceRevision}:backend:migrations=true`));
-  assert.ok(events.includes(`prepare-component:${previous.sourceRevision}:backend:migrations=false`));
+  assert.ok(events.some((event) =>
+    event.startsWith('install-component:') && event.includes(`:${target.sourceRevision}:consoleApi:migrations=true`)));
+  assert.ok(events.includes(`prepare-component:${target.sourceRevision}:consoleApi:migrations=true`));
+  assert.ok(events.includes(`prepare-component:${previous.sourceRevision}:consoleApi:migrations=false`));
   assert.equal(events.some((event) => event.startsWith('prepare:')), false);
-  assert.ok(events.includes('wait-component:backend'));
-  assert.ok(events.includes(`verify:${target.sourceRevision}:backend`));
-  assert.equal(events.some((event) => event.startsWith('install:')), false);
-  assert.equal(events.includes('wait'), false);
-  assert.ok(events.includes(`prune:release-${previous.sourceRevision}->release-${target.sourceRevision}`));
+  assert.ok(events.includes('wait-component:consoleApi'));
+  assert.ok(events.includes(`verify:${target.sourceRevision}:consoleApi`));
   assert.ok(events.includes(`inventory:${target.sourceRevision}`));
 
   await assert.rejects(
@@ -318,286 +336,111 @@ test('component release is upgrade-only and keeps a complete rollback lock', asy
   );
 });
 
-test('first Registry introduction has an exact add-only rollback without a fictional old image', async () => {
-  const { previous, target } = registryIntroductionLocks();
-  const events = [];
-  const result = await upgrade(previous, target, {
-    runtime: runtime(previous, events, { recordedInventory: [{ name: 'complete-release' }] })
-  });
-  assert.equal(result.lock, target);
-  assert.ok(events.includes(`prepare-component:${target.sourceRevision}:registry:migrations=true`));
-  assert.equal(events.some((event) => event.startsWith(
-    `prepare-component:${previous.sourceRevision}:registry`
-  )), false);
-  assert.ok(events.includes(`install-component:업그레이드:${target.sourceRevision}:registry:migrations=true`));
-  assert.equal(events.some((event) => event.includes('install-component:롤백')), false);
-  assert.ok(events.includes('prune:none->release-' + target.sourceRevision));
-  assert.ok(events.includes('wait-component:registry'));
-  assert.ok(events.includes(`verify:${target.sourceRevision}:registry`));
-});
-
-test('failed first Registry introduction removes only the newly staged Registry resources', async () => {
-  const { previous, target } = registryIntroductionLocks();
-  const events = [];
-  await assert.rejects(
-    upgrade(previous, target, {
-      runtime: runtime(previous, events, {
-        failTarget: true,
-        recordedInventory: [{ name: 'complete-release' }]
-      })
-    }),
-    /previous release was restored/u
-  );
-  assert.equal(events.some((event) => event.includes('install-component:롤백')), false);
-  assert.ok(events.includes(`prune:release-${target.sourceRevision}->none`));
-  assert.ok(events.includes(`record:${previous.sourceRevision}`));
-  assert.ok(events.includes(`verify:${previous.sourceRevision}:`));
-});
-
-test('OSAA identity cutover stages canonical workloads, commits migration once, and removes only legacy resources', async () => {
-  const { previous, target } = agentIdentityCutoverLocks();
-  const events = [];
-  const result = await upgrade(previous, target, {
-    runtime: runtime(previous, events, { recordedInventory: [{ name: 'complete-release' }] })
-  });
-  assert.equal(result.lock, target);
-  assert.ok(events.includes(
-    `prepare-component:${previous.sourceRevision}:oaaGateway,oaaGovernedAdapter:migrations=false`
-  ));
-  assert.ok(events.includes(
-    `install-component:업그레이드:${target.sourceRevision}:osaaGateway,osaaGovernedAdapter:migrations=false`
-  ));
-  assert.equal(events.filter((event) => event === 'migrate-agent-identity').length, 1);
-  assert.ok(events.includes(`wait-component:osaaGateway,osaaGovernedAdapter`));
-  assert.ok(events.includes(`verify:${target.sourceRevision}:osaaGateway,osaaGovernedAdapter`));
-  assert.ok(events.includes(`delete-namespace:${LEGACY_INSTALLED_AGENT_NAMESPACE}`));
-  assert.equal(events.includes(`delete-namespace:${CANONICAL_AGENT_NAMESPACE}`), false);
-  assert.equal(events.some((event) => event.includes('install-component:롤백')), false);
-});
-
-test('OSAA identity cutover failure before migration keeps the installed lock and removes staged canonical resources', async () => {
-  const { previous, target } = agentIdentityCutoverLocks();
-  const events = [];
-  await assert.rejects(
-    upgrade(previous, target, {
-      runtime: runtime(previous, events, {
-        failMigration: true,
-        recordedInventory: [{ name: 'complete-release' }]
-      })
-    }),
-    /failed before migration; previous installation retained/u
-  );
-  assert.ok(events.includes(`delete-namespace:${CANONICAL_AGENT_NAMESPACE}`));
-  assert.equal(events.includes(`delete-namespace:${LEGACY_INSTALLED_AGENT_NAMESPACE}`), false);
-  assert.equal(events.some((event) => event === `record:${target.sourceRevision}`), false);
-});
-
-test('OSAA identity cutover never performs a false legacy rollback after the one-way database migration', async () => {
-  const { previous, target } = agentIdentityCutoverLocks();
-  const events = [];
-  await assert.rejects(
-    upgrade(previous, target, {
-      runtime: runtime(previous, events, {
-        failTarget: true,
-        recordedInventory: [{ name: 'complete-release' }]
-      })
-    }),
-    /requires attention after its one-way database migration/u
-  );
-  assert.ok(events.includes(`record:${target.sourceRevision}`));
-  assert.equal(events.some((event) => event.includes('install-component:롤백')), false);
-  assert.equal(events.some((event) => event.startsWith(`verify:${previous.sourceRevision}:`)), false);
-});
-
-test('component release preparation selects only manifests that own changed images', () => {
+test('component release preparation selects only target-owned current manifests', () => {
   const previous = lock('1'.repeat(40), 'a');
-  const target = componentTarget(previous, '2'.repeat(40), ['dupaController']);
+  const target = componentTarget(previous, '2'.repeat(40), ['consoleApi']);
   const selected = componentReleaseManifestSpecs(target);
-  assert.deepEqual(selected.foundation, []);
-  assert.deepEqual(selected.base.map(({ path }) => path), [
-    'backend/dupa-control/ui-plugin-crds.yaml',
-    'backend/dupa-control/opensphere-console-dupa-controller.yaml'
-  ]);
-  assert.equal(selected.base[0].artifactSourceRevision, target.sourceRevision);
-  assert.equal(selected.base[1].artifactSourceRevision, target.sourceRevision);
+  assert.deepEqual(selected.foundation.map(({ path }) => path), ['apps/console-api/deploy.yaml']);
+  assert.deepEqual(selected.base, []);
 
-  const foundationTarget = componentTarget(previous, '3'.repeat(40), ['gitea', 'supabaseAuth']);
-  const foundationSelected = componentReleaseManifestSpecs(foundationTarget);
-  assert.deepEqual(foundationSelected.foundation.map(({ path }) => path), [
-    'backend/supabase/bootstrap/supabase.yaml',
-    'backend/gitea/bootstrap/gitea.yaml'
-  ]);
-  assert.deepEqual(foundationSelected.base, []);
-
-  const stacked = componentTarget(previous, '4'.repeat(40), ['console']);
-  const inherited = componentReleaseManifestSpecs(stacked, ['dupaController']);
-  assert.equal(inherited.base[0].artifactSourceRevision, previous.sourceRevision);
-
-  const recovery = componentReleaseManifestSpecs(stacked, ['recovery']).base[0];
-  const renderedRecovery = renderManifest(
-    stacked,
-    recovery,
-    [
-      'apiVersion: batch/v1',
-      'kind: Job',
-      'metadata: { name: recovery }',
-      'spec:',
-      '  template:',
-      '    spec:',
-      '      containers:',
-      '        - name: recovery',
-      '          image: __OPENSPHERE_RECOVERY_IMAGE__',
-      '          env:',
-      '            - name: RELEASE_REVISION',
-      '              value: __OPENSPHERE_RELEASE_REVISION__'
-    ].join('\n'),
-    'hostpath',
-    'https://localhost:1114',
-    'development',
-    { sourceRevision: recovery.artifactSourceRevision }
+  const optional = componentTarget(previous, '2'.repeat(40), ['osaaGateway']);
+  assert.throws(
+    () => componentReleaseManifestSpecs(optional),
+    /no governed manifest for: osaaGateway/
   );
-  assert.match(renderedRecovery, new RegExp(`value: ${previous.sourceRevision}`));
-  assert.doesNotMatch(renderedRecovery, new RegExp(`value: ${stacked.sourceRevision}`));
 });
 
-test('component rollout waits for every workload sharing the changed image', () => {
-  assert.deepEqual(COMPONENT_ROLLOUTS.backend.map(([, workload]) => workload), [
-    'deployment/opensphere-console-backend',
-    'deployment/foundation-bootstrap-reconciler',
-    'deployment/platform-release-reconciler'
+test('component rollout mapping contains current bootstrap workloads and excludes Console-activated modules', () => {
+  assert.deepEqual(COMPONENT_ROLLOUTS.consoleApi, [
+    ['opensphere-console', 'deployment/opensphere-console-api', '600s']
   ]);
-  assert.deepEqual(COMPONENT_ROLLOUTS.notificationDispatcher.map(([, workload]) => workload), [
-    'deployment/opensphere-notification-dispatcher',
-    'deployment/opensphere-external-channel-executor'
+  assert.deepEqual(COMPONENT_ROLLOUTS.extensionController, [
+    ['opensphere-console', 'deployment/opensphere-extension-controller', '600s']
   ]);
+  assert.deepEqual(COMPONENT_ROLLOUTS.beszelHub, [
+    ['opensphere-monitoring', 'statefulset/beszel-hub', '600s']
+  ]);
+  assert.deepEqual(COMPONENT_ROLLOUTS.beszelAgent, [
+    ['opensphere-monitoring', 'daemonset/beszel-agent', '600s']
+  ]);
+  assert.equal(Object.hasOwn(COMPONENT_ROLLOUTS, 'dupaController'), false);
+  assert.deepEqual(COMPONENT_ROLLOUTS.osaaGateway, []);
+  assert.equal(Object.hasOwn(COMPONENT_ROLLOUTS, 'backend'), false);
+});
+
+test('component release applies only documents containing the changed exact C_API image', () => {
+  const previous = lock('1'.repeat(40), 'a');
+  const target = componentTarget(previous, '2'.repeat(40), ['consoleApi']);
+  const image = target.components.consoleApi.image;
+  const selected = componentReleaseWorkloadManifests(target, {
+    foundation: {
+      release: [{
+        path: 'apps/console-api/deploy.yaml',
+        yaml: [
+          'apiVersion: v1',
+          'kind: Service',
+          'metadata: { name: opensphere-console-api }',
+          '---',
+          'apiVersion: apps/v1',
+          'kind: Deployment',
+          'metadata: { name: opensphere-console-api }',
+          'spec:',
+          '  template:',
+          '    spec:',
+          '      containers:',
+          '        - name: api',
+          `          image: ${image}`,
+          '---',
+          'apiVersion: apps/v1',
+          'kind: Deployment',
+          'metadata: { name: unrelated }',
+          'spec:',
+          '  template:',
+          '    spec:',
+          '      containers:',
+          `        - { name: other, image: ${previous.components.console.image} }`
+        ].join('\n')
+      }]
+    },
+    base: []
+  });
+  assert.equal(selected.length, 1);
+  assert.match(selected[0].yaml, /name: opensphere-console-api/);
+  assert.match(selected[0].yaml, new RegExp(image.replaceAll('.', '\\.')));
+  assert.doesNotMatch(selected[0].yaml, /name: unrelated/);
+  assert.doesNotMatch(selected[0].yaml, /kind: Service/);
 });
 
 test('component release refuses to overwrite a missing complete release inventory', async () => {
   const previous = lock('1'.repeat(40), 'a');
   previous.trust = LOCAL_EDGE_TRUST;
   delete previous.releaseBom;
-  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
-  const target = componentTarget(previous, '2'.repeat(40), ['backend']);
+  previous.releaseDigest = calculateReleaseDigest(
+    'edge',
+    previous.components,
+    LOCAL_EDGE_TRUST,
+    undefined,
+    { auxiliaryArtifacts: previous.auxiliaryArtifacts }
+  );
+  const target = componentTarget(previous, '2'.repeat(40), ['consoleApi']);
   await assert.rejects(
     upgrade(previous, target, { runtime: runtime(previous, []) }),
     /requires the existing complete release inventory/
   );
 });
 
-test('component release applies only workload documents that contain a changed exact image', () => {
+test('failed C_API component verification restores only the previous C_API release', async () => {
   const previous = lock('1'.repeat(40), 'a');
   previous.trust = LOCAL_EDGE_TRUST;
   delete previous.releaseBom;
-  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
-  const target = componentTarget(previous, '2'.repeat(40), ['backend']);
-  const selected = componentReleaseWorkloadManifests(target, {
-    foundation: { release: [] },
-    base: [{
-      path: 'combined.yaml',
-      yaml: [
-        'apiVersion: apps/v1',
-        'kind: Deployment',
-        'metadata: { name: opensphere-console-backend }',
-        'spec:',
-        '  template:',
-        '    spec:',
-        '      containers:',
-        `        - image: ${target.components.backend.image}`,
-        '---',
-        'apiVersion: apps/v1',
-        'kind: Deployment',
-        'metadata: { name: opensphere-console }',
-        'spec:',
-        '  template:',
-        '    spec:',
-        '      containers:',
-        `        - image: ${target.components.console.image}`
-      ].join('\n')
-    }]
-  });
-  assert.equal(selected.length, 1);
-  assert.match(selected[0].yaml, new RegExp(target.components.backend.image.replaceAll('.', '\\.')));
-  assert.doesNotMatch(selected[0].yaml, new RegExp(target.components.console.image.replaceAll('.', '\\.')));
-});
-
-test('a single-owner component manifest applies its RBAC and workload atomically', () => {
-  const previous = lock('1'.repeat(40), 'a');
-  previous.trust = LOCAL_EDGE_TRUST;
-  delete previous.releaseBom;
-  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
-  const target = componentTarget(previous, '2'.repeat(40), ['backend']);
-  const selected = componentReleaseWorkloadManifests(target, {
-    foundation: { release: [] },
-    base: [{
-      path: 'backend/opensphere-console-backend/deploy.yaml',
-      yaml: [
-        'apiVersion: rbac.authorization.k8s.io/v1',
-        'kind: Role',
-        'metadata: { name: opensphere-console-backend-installation-lock }',
-        '---',
-        'apiVersion: apps/v1',
-        'kind: Deployment',
-        'metadata: { name: opensphere-console-backend }',
-        'spec:',
-        '  template:',
-        '    spec:',
-        '      containers:',
-        `        - image: ${target.components.backend.image}`
-      ].join('\n')
-    }]
-  });
-  assert.equal(selected.length, 1);
-  assert.match(selected[0].yaml, /kind: Role/);
-  assert.match(selected[0].yaml, /opensphere-console-backend-installation-lock/);
-  assert.match(selected[0].yaml, new RegExp(target.components.backend.image.replaceAll('.', '\\.')));
-});
-
-test('a component release applies its explicitly owned static CRD before the DUPA workload', () => {
-  const previous = lock('1'.repeat(40), 'a');
-  previous.trust = LOCAL_EDGE_TRUST;
-  delete previous.releaseBom;
-  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
-  const target = componentTarget(previous, '2'.repeat(40), ['dupaController']);
-  const selected = componentReleaseWorkloadManifests(target, {
-    foundation: { release: [] },
-    base: [
-      {
-        path: 'backend/dupa-control/ui-plugin-crds.yaml',
-        yaml: [
-          'apiVersion: apiextensions.k8s.io/v1',
-          'kind: CustomResourceDefinition',
-          'metadata: { name: uipluginpackages.plugins.opensphere.io }'
-        ].join('\n')
-      },
-      {
-        path: 'backend/dupa-control/opensphere-console-dupa-controller.yaml',
-        yaml: [
-          'apiVersion: apps/v1',
-          'kind: Deployment',
-          'metadata: { name: opensphere-console-dupa-controller }',
-          'spec:',
-          '  template:',
-          '    spec:',
-          '      containers:',
-          `        - image: ${target.components.dupaController.image}`
-        ].join('\n')
-      }
-    ]
-  });
-  assert.deepEqual(selected.map(({ path }) => path), [
-    'backend/dupa-control/ui-plugin-crds.yaml#dupaController',
-    'backend/dupa-control/opensphere-console-dupa-controller.yaml#dupaController'
-  ]);
-  assert.match(selected[0].yaml, /kind: CustomResourceDefinition/);
-  assert.match(selected[1].yaml, new RegExp(target.components.dupaController.image.replaceAll('.', '\\.')));
-});
-
-test('failed component verification rolls back only the same changed workloads', async () => {
-  const previous = lock('1'.repeat(40), 'a');
-  previous.trust = LOCAL_EDGE_TRUST;
-  delete previous.releaseBom;
-  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST);
-  const target = componentTarget(previous, '2'.repeat(40), ['backend', 'console']);
+  previous.releaseDigest = calculateReleaseDigest(
+    'edge',
+    previous.components,
+    LOCAL_EDGE_TRUST,
+    undefined,
+    { auxiliaryArtifacts: previous.auxiliaryArtifacts }
+  );
+  const target = componentTarget(previous, '2'.repeat(40), ['consoleApi']);
   const events = [];
   await assert.rejects(
     upgrade(previous, target, {
@@ -608,21 +451,9 @@ test('failed component verification rolls back only the same changed workloads',
     }),
     /previous release was restored/
   );
-  assert.ok(events.includes(`install-component:업그레이드:${target.sourceRevision}:backend,console:migrations=true`));
-  assert.ok(events.includes(`install-component:롤백:${previous.sourceRevision}:backend,console:migrations=false`));
-  assert.ok(events.includes(`prepare-component:${target.sourceRevision}:backend,console:migrations=true`));
-  assert.ok(events.includes(`prepare-component:${previous.sourceRevision}:backend,console:migrations=false`));
-  assert.equal(events.some((event) => event.startsWith('install:')), false);
-  assert.ok(events.includes(`prune:release-${target.sourceRevision}->release-${previous.sourceRevision}`));
-});
-
-test('upgrade accepts an exact pre-recovery installed lock only for the verified rollback side', async () => {
-  const previous = preRecoveryLock('1'.repeat(40), 'a');
-  const target = lock('2'.repeat(40), 'b');
-  const events = [];
-  await upgrade(previous, target, { runtime: runtime(previous, events) });
-  assert.ok(events.includes(`supply:${previous.sourceRevision}:true`));
-  assert.ok(events.includes(`supply:${target.sourceRevision}:false`));
+  assert.ok(events.includes(`prepare-component:${target.sourceRevision}:consoleApi:migrations=true`));
+  assert.ok(events.includes(`prepare-component:${previous.sourceRevision}:consoleApi:migrations=false`));
+  assert.ok(events.includes(`verify:${previous.sourceRevision}:consoleApi`));
 });
 
 test('failed target verification restores and verifies the previous Supabase/Gitea release', async () => {

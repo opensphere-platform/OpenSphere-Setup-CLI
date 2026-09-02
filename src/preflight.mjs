@@ -1,5 +1,6 @@
 import { assertKubectl, kubectl } from './process.mjs';
 import { assertStorageProfile } from './storage-profile.mjs';
+import { BASELINE_OBSERVABILITY_REQUIREMENT } from './installation-contract.mjs';
 
 export const SUPPORTED_NODE_PLATFORMS = Object.freeze(new Set(['linux/amd64', 'linux/arm64']));
 export const REQUIRED_ADMISSION_RESOURCES = Object.freeze([
@@ -18,20 +19,55 @@ function atLeast(version, minimumMajor, minimumMinor) {
   return major > minimumMajor || (major === minimumMajor && minor >= minimumMinor);
 }
 
+
+const MONITORING_APPLY_RESOURCES = Object.freeze([
+  'serviceaccounts',
+  'roles.rbac.authorization.k8s.io',
+  'rolebindings.rbac.authorization.k8s.io',
+  'configmaps',
+  'secrets',
+  'services',
+  'persistentvolumeclaims',
+  'statefulsets.apps',
+  'daemonsets.apps',
+  'jobs.batch',
+  'networkpolicies.networking.k8s.io'
+]);
+
+export const REQUIRED_KUBERNETES_PERMISSIONS = Object.freeze([
+  ['create', 'namespaces'],
+  ['create', 'customresourcedefinitions.apiextensions.k8s.io'],
+  ['create', 'clusterroles.rbac.authorization.k8s.io'],
+  ['create', 'clusterrolebindings.rbac.authorization.k8s.io'],
+  ['create', 'validatingadmissionpolicies.admissionregistration.k8s.io'],
+  ['create', 'validatingadmissionpolicybindings.admissionregistration.k8s.io'],
+  ['create', 'deployments.apps', '--namespace', 'opensphere-console'],
+  ['create', 'statefulsets.apps', '--namespace', 'opensphere-console'],
+  ['create', 'secrets', '--namespace', 'opensphere-console'],
+  ['patch', 'secrets', '--namespace', 'opensphere-console'],
+  ['update', 'secrets', '--namespace', 'opensphere-console'],
+  ['create', 'persistentvolumeclaims', '--namespace', 'opensphere-console'],
+  ['patch', 'deployments.apps', '--namespace', 'opensphere-console'],
+  ['get', 'deployments.apps', '--namespace', 'opensphere-console'],
+  ...MONITORING_APPLY_RESOURCES.flatMap((resource) => [
+    ['create', resource, '--namespace', 'opensphere-monitoring'],
+    ['patch', resource, '--namespace', 'opensphere-monitoring'],
+    ['update', resource, '--namespace', 'opensphere-monitoring']
+  ]),
+  ['delete', 'jobs.batch', '--namespace', 'opensphere-monitoring'],
+  ['delete', 'services', '--namespace', 'opensphere-monitoring'],
+  ['get', 'secrets', '--namespace', 'opensphere-monitoring'],
+  ['get', 'configmaps', '--namespace', 'opensphere-monitoring'],
+  ['get', 'services', '--namespace', 'opensphere-monitoring'],
+  ['get', 'statefulsets.apps', '--namespace', 'opensphere-monitoring'],
+  ['get', 'daemonsets.apps', '--namespace', 'opensphere-monitoring'],
+  ['get', 'jobs.batch', '--namespace', 'opensphere-monitoring'],
+  ['get', 'ingresses.networking.k8s.io', '--namespace', 'opensphere-monitoring'],
+  ['list', 'ingresses.networking.k8s.io', '--namespace', 'opensphere-monitoring']
+].map((check) => Object.freeze(check)));
+
 function ensurePermissions() {
-  const checks = [
-    ['create', 'namespaces'],
-    ['create', 'customresourcedefinitions.apiextensions.k8s.io'],
-    ['create', 'clusterroles.rbac.authorization.k8s.io'],
-    ['create', 'clusterrolebindings.rbac.authorization.k8s.io'],
-    ['create', 'validatingadmissionpolicies.admissionregistration.k8s.io'],
-    ['create', 'validatingadmissionpolicybindings.admissionregistration.k8s.io'],
-    ['create', 'deployments.apps', '--namespace', 'opensphere-console'],
-    ['create', 'statefulsets.apps', '--namespace', 'opensphere-console'],
-    ['create', 'secrets', '--namespace', 'opensphere-console'],
-    ['create', 'persistentvolumeclaims', '--namespace', 'opensphere-console']
-  ];
-  for (const check of checks) {
+  for (const check of REQUIRED_KUBERNETES_PERMISSIONS) {
     const allowed = kubectl(['auth', 'can-i', ...check], { capture: true });
     if (allowed !== 'yes') throw new Error(`Kubernetes permission denied: ${check.join(' ')}`);
   }
@@ -83,15 +119,47 @@ export function assertSupportedNodePlatform(node) {
   return platform;
 }
 
-export function nodePlatforms(nodes) {
+function readyCondition(node) {
+  return node?.status?.conditions?.find((condition) => condition.type === 'Ready');
+}
+
+export function summarizeNodeHealth(nodes) {
   if (!Array.isArray(nodes) || nodes.length === 0) {
     throw new Error('Kubernetes cluster has no nodes');
   }
-  return [...new Set(nodes.map((node) => {
-    const ready = node.status.conditions?.find((condition) => condition.type === 'Ready');
-    if (ready?.status !== 'True') throw new Error(`Kubernetes node is not Ready: ${node.metadata.name}`);
-    return assertSupportedNodePlatform(node);
-  }))].sort();
+  const readyNodes = [];
+  const degradedNodes = [];
+  for (const node of nodes) {
+    const condition = readyCondition(node);
+    const schedulable = node?.spec?.unschedulable !== true;
+    if (condition?.status === 'True' && schedulable) {
+      readyNodes.push(node);
+      continue;
+    }
+    degradedNodes.push(Object.freeze({
+      name: String(node?.metadata?.name ?? 'unknown'),
+      ready: condition?.status === 'True',
+      schedulable,
+      reason: String(condition?.reason ?? (schedulable ? 'ReadyUnknown' : 'Unschedulable')),
+      message: String(condition?.message ?? '')
+    }));
+  }
+  const platforms = [...new Set(readyNodes.map(assertSupportedNodePlatform))].sort();
+  return Object.freeze({
+    totalCount: nodes.length,
+    readyCount: readyNodes.length,
+    readyNodes: Object.freeze(readyNodes),
+    degradedNodes: Object.freeze(degradedNodes),
+    platforms: Object.freeze(platforms)
+  });
+}
+
+export function nodePlatforms(nodes) {
+  const health = summarizeNodeHealth(nodes);
+  if (health.readyCount === 0) {
+    throw new Error(`Kubernetes cluster has no Ready schedulable nodes; degraded: ${health.degradedNodes.map(({ name }) => name).join(', ')}`);
+  }
+  return [...health.platforms];
 }
 
 export function readNodePlatforms() {
@@ -100,15 +168,42 @@ export function readNodePlatforms() {
 }
 
 export function assertAvailabilityNodeCount(nodes, channel = 'edge') {
-  if (!Array.isArray(nodes) || !nodes.length) throw new Error('Kubernetes cluster has no nodes');
-  // Edge remains intentionally usable on a developer's one-node cluster.
-  // Candidate/stable, however, ship PDBs and spread stateless control-plane
-  // replicas. Accepting fewer than three Ready nodes would make the published
-  // availability profile an assertion rather than an enforceable prerequisite.
-  if (channel !== 'edge' && nodes.length < 3) {
-    throw new Error(`${channel} requires at least 3 Ready Kubernetes nodes for the Console availability profile`);
+  const health = summarizeNodeHealth(nodes);
+  const minimum = channel === 'edge' ? 1 : 3;
+  if (health.readyCount < minimum) {
+    throw new Error(`${channel} requires at least ${minimum} Ready schedulable Kubernetes node${minimum === 1 ? '' : 's'}; found ${health.readyCount}/${health.totalCount}`);
   }
-  return nodes.length;
+  return health.readyCount;
+}
+
+export function baselineObservabilitySecurityProfile(channel = 'edge', labels = {}) {
+  const enforce = String(labels?.['pod-security.kubernetes.io/enforce'] ?? 'cluster-default');
+  if (['baseline', 'restricted'].includes(enforce)) {
+    throw new Error(
+      `opensphere-monitoring Pod Security enforce=${enforce} blocks the Beszel Agent root/read-only hostPath contract; `
+      + 'the Kubernetes operator must provide a compatible dedicated namespace because Setup will not lower Pod Security'
+    );
+  }
+  return Object.freeze({
+    ...BASELINE_OBSERVABILITY_REQUIREMENT,
+    hostAccess: BASELINE_OBSERVABILITY_REQUIREMENT.hostAccess,
+    podSecurityEnforce: enforce,
+    status: channel === 'edge'
+      ? 'accepted-local-edge-requirement'
+      : 'production-promotion-hold',
+    setupRepairsHost: false,
+    setupLowersPodSecurity: false
+  });
+}
+
+function readBaselineObservabilitySecurity(channel) {
+  const raw = kubectl([
+    'get', 'namespace', 'opensphere-monitoring', '--ignore-not-found=true', '-o', 'json'
+  ], { capture: true });
+  const labels = String(raw).trim()
+    ? JSON.parse(raw).metadata?.labels ?? {}
+    : {};
+  return baselineObservabilitySecurityProfile(channel, labels);
 }
 
 export function preflight({ storageClass, channel = 'edge' } = {}) {
@@ -119,14 +214,19 @@ export function preflight({ storageClass, channel = 'edge' } = {}) {
   }
   const nodes = JSON.parse(kubectl(['get', 'nodes', '-o', 'json'], { capture: true })).items;
   assertAvailabilityNodeCount(nodes, channel);
-  const platforms = nodePlatforms(nodes);
+  const nodeHealth = summarizeNodeHealth(nodes);
+  const platforms = [...nodeHealth.platforms];
   const admissionResources = ensureAdmissionPolicySupport();
   ensurePermissions();
+  const baselineObservabilitySecurity = readBaselineObservabilitySecurity(channel);
   return {
     versions,
     serverVersion,
-    nodeCount: nodes.length,
+    nodeCount: nodeHealth.totalCount,
+    readyNodeCount: nodeHealth.readyCount,
+    degradedNodes: nodeHealth.degradedNodes,
     nodePlatforms: platforms,
+    baselineObservabilitySecurity,
     admissionResources,
     storageClass: assertStorageProfile(selectStorageClass(storageClass), channel).name
   };

@@ -20,7 +20,7 @@ test('doctor validates all commands required before bootstrap mutates Kubernetes
   });
   assert.deepEqual(calls.map(([command]) => command), ['kubectl', 'pwsh', 'gh']);
   assert.match(formatLocalEnvironment(evidence), /darwin\/arm64/);
-  assert.equal(DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB, 88);
+  assert.equal(DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB, 98);
 });
 
 test('doctor checks the fresh loopback Console port and skips remote origins', async () => {

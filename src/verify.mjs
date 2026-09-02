@@ -2,58 +2,60 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
 import { kubectl } from './process.mjs';
-import { validateLock } from './release.mjs';
+import {
+  BOOTSTRAP_AUXILIARY_ARTIFACTS,
+  BOOTSTRAP_CORE_COMPONENTS,
+  releaseResponsibilityProfile,
+  validateLock
+} from './release.mjs';
+import {
+  BASELINE_OBSERVABILITY_REQUIREMENT,
+  MANAGED_CLUSTER_SCOPED_RESOURCES,
+  MANAGED_NAMESPACES
+} from './installation-contract.mjs';
 import {
   REGISTRY_PULL_SECRET,
   releaseNeedsRegistryCredentials,
   secretHasGhcrCredential
 } from './registry-pull-secret.mjs';
 
-const NAMESPACES = Object.freeze([
-  'opensphere-console-data',
-  'opensphere-console-change',
-  'opensphere-console-recovery',
-  'opensphere-console',
-  'opensphere-osaa-credentials',
-  'opensphere-foundation',
-  'opensphere-system'
-]);
-
 const REQUIRED_SECRETS = Object.freeze({
   'opensphere-console-data/opensphere-supabase-secrets': [
-    'postgres-password', 'backend-password', 'osaa-gateway-password',
-    'jwt-secret', 'anon-key', 'service-role-key'
+    'anon-key', 'jwt-secret', 'postgres-password', 's3-access-key-id',
+    's3-access-key-secret', 'service-role-key'
   ],
   'opensphere-console-change/opensphere-gitea-runtime': ['postgres-password', 'db-password'],
   'opensphere-console-change/opensphere-gitea-config': ['app.ini'],
   'opensphere-console-change/opensphere-gitea-signing': ['gitea-signing-key', 'gitea-signing-key.pub'],
-  'opensphere-console/shell-tls': ['tls.crt', 'tls.key'],
-  'opensphere-console/opensphere-supabase-runtime': ['jwt-secret', 'service-role-key'],
-  'opensphere-console/opensphere-osaa-runtime': [
-    'pg-password', 'observer-pg-user', 'observer-pg-password',
-    'relay-pg-user', 'relay-pg-password'
+  'opensphere-monitoring/beszel-runtime': [
+    'admin-email', 'admin-password', 'reader-email', 'reader-password', 'agent-token'
   ],
+  'opensphere-console/shell-tls': ['tls.crt', 'tls.key'],
+  'opensphere-console/opensphere-console-api-runtime': [
+    'database-url', 'session-encryption-key', 'supabase-service-role-key'
+  ],
+  'opensphere-console/opensphere-extension-controller-runtime': ['database-url'],
   'opensphere-console/opensphere-gitea-control-plane': [
     'token', 'review-token', 'webhook-secret', 'reconciler-token'
   ],
   'opensphere-console/opensphere-console-cli-runtime': ['jwt-secret'],
-  'opensphere-console/opensphere-notification-runtime': [
-    'encryption-key', 'internal-token', 'event-token'
-  ]
+  'opensphere-console/opensphere-baseline-monitoring-reader': ['email', 'password']
 });
 
-const OSDST_REQUIRED_SECRETS = Object.freeze({
-  'opensphere-console/opensphere-osaa-maintenance-runtime': [
-    'operational-pg-user', 'operational-pg-password',
-    'dialogue-pg-user', 'dialogue-pg-password'
-  ]
-});
+const EXACT_SECRET_REFERENCES = Object.freeze(new Set([
+  'opensphere-console-data/opensphere-supabase-secrets',
+  'opensphere-monitoring/beszel-runtime',
+  'opensphere-console/opensphere-console-api-runtime',
+  'opensphere-console/opensphere-extension-controller-runtime',
+  'opensphere-console/opensphere-baseline-monitoring-reader'
+]));
 
 const REQUIRED_PVCS = Object.freeze([
   ['opensphere-console-data', 'opensphere-supabase-postgres-data'],
   ['opensphere-console-data', 'opensphere-supabase-storage-data'],
   ['opensphere-console-change', 'opensphere-gitea-postgres-data'],
-  ['opensphere-console-change', 'opensphere-gitea-data']
+  ['opensphere-console-change', 'opensphere-gitea-data'],
+  ['opensphere-monitoring', 'data-beszel-hub-0']
 ]);
 
 const REQUIRED_SERVICES = Object.freeze([
@@ -63,15 +65,12 @@ const REQUIRED_SERVICES = Object.freeze([
   ['opensphere-console-data', 'opensphere-supabase-storage'],
   ['opensphere-console-change', 'opensphere-gitea-postgres'],
   ['opensphere-console-change', 'opensphere-gitea'],
-  ['opensphere-console', 'opensphere-console-backend'],
-  ['opensphere-console', 'opensphere-console-dupa-controller'],
-  ['opensphere-console', 'opensphere-notification-dispatcher'],
-  ['opensphere-console', 'opensphere-external-channel-executor'],
-  ['opensphere-console', 'opensphere-console-osaa-gateway'],
-  ['opensphere-console', 'opensphere-osdst'],
-  ['opensphere-console', 'osaa-governed-adapter'],
+  ['opensphere-monitoring', 'beszel-hub'],
+  ['opensphere-console', 'opensphere-console-api'],
+  ['opensphere-console', 'opensphere-registry'],
   ['opensphere-console', 'opensphere-console-ext']
 ]);
+
 const AUXILIARY_SERVICES = Object.freeze([
   ['opensphere-console', 'os-cli']
 ]);
@@ -83,17 +82,13 @@ const WORKLOADS = Object.freeze([
   { component: 'supabaseStorage', namespace: 'opensphere-console-data', kind: 'deployment', name: 'opensphere-supabase-storage', container: 'storage' },
   { component: 'giteaPostgres', namespace: 'opensphere-console-change', kind: 'deployment', name: 'opensphere-gitea-postgres', container: 'postgres' },
   { component: 'gitea', namespace: 'opensphere-console-change', kind: 'deployment', name: 'opensphere-gitea', container: 'gitea' },
-  { component: 'recovery', namespace: 'opensphere-console-data', kind: 'cronjob', name: 'opensphere-supabase-recovery-backup', container: 'recovery' },
-  { component: 'recovery', namespace: 'opensphere-console-change', kind: 'cronjob', name: 'opensphere-gitea-recovery-backup', container: 'recovery' },
-  { component: 'backend', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-backend', container: 'api' },
-  { component: 'dupaController', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-dupa-controller', container: 'controller' },
+  { component: 'consoleApi', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-api', container: 'api' },
+  { component: 'extensionController', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-extension-controller', container: 'controller' },
   { component: 'registry', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-registry', container: 'registry' },
-  { component: 'notificationDispatcher', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-notification-dispatcher', container: 'dispatcher' },
-  { component: 'notificationDispatcher', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-external-channel-executor', container: 'executor' },
-  { component: 'osaaGateway', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-osaa-gateway', container: 'gateway' },
-  { component: 'osdst', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-osdst', container: 'osdst' },
-  { component: 'osaaGovernedAdapter', namespace: 'opensphere-console', kind: 'deployment', name: 'osaa-governed-adapter', container: 'reconciler' },
   { artifact: 'cliArtifacts', namespace: 'opensphere-console', kind: 'deployment', name: 'os-cli', container: 'serve' },
+  { component: 'beszelHub', namespace: 'opensphere-monitoring', kind: 'statefulset', name: 'beszel-hub', container: 'hub' },
+  { component: 'beszelAgent', namespace: 'opensphere-monitoring', kind: 'daemonset', name: 'beszel-agent', container: 'agent' },
+  { component: 'beszelBootstrap', namespace: 'opensphere-monitoring', kind: 'job', name: 'beszel-bootstrap-v0187', container: 'configure' },
   { component: 'console', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console', container: 'shell' }
 ]);
 
@@ -144,16 +139,40 @@ function verifyInstallationLock(lock, { allowLegacyComponentSet = false } = {}) 
     throw new Error(`Cluster release lock differs from requested lock (${stored.releaseDigest} != ${lock.releaseDigest})`);
   }
   const config = JSON.parse(configMap.data?.['config.json'] ?? '{}');
-  if (config.releaseDigest !== lock.releaseDigest || config.channel !== lock.channel) {
-    throw new Error('Installation config differs from the release lock');
+  const expectedResponsibilityBoundary = releaseResponsibilityProfile(lock.components, lock.auxiliaryArtifacts);
+  const expectedObservabilityRequirement = {
+    ...BASELINE_OBSERVABILITY_REQUIREMENT,
+    hostAccess: [...BASELINE_OBSERVABILITY_REQUIREMENT.hostAccess]
+  };
+  if (config.releaseDigest !== lock.releaseDigest
+      || config.channel !== lock.channel
+      || JSON.stringify(config.responsibilityBoundary) !== JSON.stringify(expectedResponsibilityBoundary)
+      || JSON.stringify(config.baselineObservabilityRequirement) !== JSON.stringify(expectedObservabilityRequirement)) {
+    throw new Error('Installation config differs from the release lock or bootstrap responsibility contract');
   }
-  return config;
+  const state = JSON.parse(configMap.data?.['state.json'] ?? '{}');
+  const canonicalNamespaces = MANAGED_NAMESPACES;
+  if (state.apiVersion !== 'bootstrap.opensphere.io/v1alpha1'
+      || state.kind !== 'OpenSphereInstallationState'
+      || !['Installing', 'Ready'].includes(state.phase)
+      || state.releaseDigest !== lock.releaseDigest
+      || JSON.stringify(state.managedNamespaces) !== JSON.stringify(canonicalNamespaces)
+      || JSON.stringify(state.managedClusterScopedResources) !== JSON.stringify(MANAGED_CLUSTER_SCOPED_RESOURCES)
+      || JSON.stringify(state.baselineObservabilitySecurity?.hostAccess) !== JSON.stringify(BASELINE_OBSERVABILITY_REQUIREMENT.hostAccess)
+      || state.baselineObservabilitySecurity?.setupRepairsHost !== false
+      || state.baselineObservabilitySecurity?.setupLowersPodSecurity !== false) {
+    throw new Error('Installation lifecycle state is not verifiable for this release');
+  }
+  if (state.phase === 'Ready'
+      && (state.verification?.evidenceConfigMap !== 'opensphere-installation-evidence'
+        || !/^\d{4}-\d{2}-\d{2}T/u.test(state.verification?.verifiedAt ?? ''))) {
+    throw new Error('Ready installation state lacks completed verification evidence');
+  }
+  return { ...config, installationState: state };
 }
 
-export function requiredSecretsForLock(lock) {
-  return lock?.components?.osdst
-    ? { ...REQUIRED_SECRETS, ...OSDST_REQUIRED_SECRETS }
-    : { ...REQUIRED_SECRETS };
+export function requiredSecretsForLock(_lock) {
+  return { ...REQUIRED_SECRETS };
 }
 
 function verifySecrets(lock) {
@@ -164,13 +183,20 @@ function verifySecrets(lock) {
     for (const key of keys) {
       if (!secret.data?.[key]) throw new Error(`Required Secret key is missing: ${reference}/${key}`);
     }
+    if (EXACT_SECRET_REFERENCES.has(reference)) {
+      const actualKeys = Object.keys(secret.data ?? {}).sort();
+      const expectedKeys = [...keys].sort();
+      if (JSON.stringify(actualKeys) !== JSON.stringify(expectedKeys)) {
+        throw new Error(`Required Secret has keys outside its closed contract: ${reference}`);
+      }
+    }
   }
   return Object.keys(requiredSecrets).length;
 }
 
 function verifyRegistryPullPath(lock) {
   const credentialRequired = releaseNeedsRegistryCredentials(lock);
-  for (const namespace of NAMESPACES) {
+  for (const namespace of MANAGED_NAMESPACES) {
     const secret = getJson(['-n', namespace, 'get', 'secret', REGISTRY_PULL_SECRET]);
     if (secret.type !== 'kubernetes.io/dockerconfigjson') {
       throw new Error(`Registry pull Secret has the wrong type: ${namespace}/${REGISTRY_PULL_SECRET}`);
@@ -179,7 +205,7 @@ function verifyRegistryPullPath(lock) {
       throw new Error(`Private release has no GHCR credential: ${namespace}/${REGISTRY_PULL_SECRET}`);
     }
   }
-  return { secret: REGISTRY_PULL_SECRET, credentialRequired, namespaces: [...NAMESPACES] };
+  return { secret: REGISTRY_PULL_SECRET, credentialRequired, namespaces: [...MANAGED_NAMESPACES] };
 }
 
 function verifyPersistentStorage(expectedStorageClass) {
@@ -208,12 +234,9 @@ export function verifyRequiredServiceEndpoints(
     service
   ]));
   const evidence = [];
-  const baseRequired = includeOsdst
-    ? REQUIRED_SERVICES
-    : REQUIRED_SERVICES.filter(([, name]) => name !== 'opensphere-osdst');
   const required = includeCliArtifacts
-    ? [...baseRequired, ...AUXILIARY_SERVICES]
-    : baseRequired;
+    ? [...REQUIRED_SERVICES, ...AUXILIARY_SERVICES]
+    : REQUIRED_SERVICES;
   for (const [namespace, name] of required) {
     const reference = `${namespace}/${name}`;
     if (!serviceByReference.has(reference)) throw new Error(`Required Service is missing: ${reference}`);
@@ -233,8 +256,7 @@ function verifyServiceEndpoints(lock) {
   const services = getJson(['get', 'services', '-A']).items ?? [];
   const endpointSlices = getJson(['get', 'endpointslices.discovery.k8s.io', '-A']).items ?? [];
   return verifyRequiredServiceEndpoints(services, endpointSlices, {
-    includeCliArtifacts: Boolean(lock.auxiliaryArtifacts?.cliArtifacts),
-    includeOsdst: Boolean(lock.components?.osdst)
+    includeCliArtifacts: Boolean(lock.auxiliaryArtifacts?.cliArtifacts)
   });
 }
 
@@ -244,11 +266,31 @@ export function isRuntimeServicePod(pod) {
 }
 
 function workloadReady(resource) {
+  const generation = Number(resource.metadata?.generation ?? 0);
+  if (Number(resource.status?.observedGeneration ?? 0) < generation) return false;
+  const kind = String(resource.kind ?? '').toLowerCase();
+  if (kind === 'job') {
+    const completions = Number(resource.spec?.completions ?? 1);
+    return Number(resource.status?.failed ?? 0) === 0
+      && Number(resource.status?.succeeded ?? 0) >= completions;
+  }
+  if (kind === 'daemonset') {
+    const desired = Number(resource.status?.desiredNumberScheduled ?? 0);
+    return desired > 0
+      && Number(resource.status?.updatedNumberScheduled ?? 0) === desired
+      && Number(resource.status?.numberReady ?? 0) === desired
+      && Number(resource.status?.numberUnavailable ?? 0) === 0;
+  }
   const replicas = Number(resource.spec?.replicas ?? 1);
-  return Number(resource.status?.observedGeneration ?? 0) === Number(resource.metadata?.generation ?? 0)
-    && Number(resource.status?.updatedReplicas ?? 0) === replicas
-    && Number(resource.status?.readyReplicas ?? 0) === replicas
-    && Number(resource.status?.availableReplicas ?? 0) === replicas;
+  const ready = Number(resource.status?.readyReplicas ?? 0) === replicas
+    && Number(resource.status?.updatedReplicas ?? 0) === replicas;
+  if (!ready) return false;
+  if (kind === 'statefulset') {
+    return Number(resource.status?.currentReplicas ?? 0) === replicas
+      && resource.status?.currentRevision === resource.status?.updateRevision;
+  }
+  return Number(resource.status?.availableReplicas ?? 0) === replicas
+    && Number(resource.status?.unavailableReplicas ?? 0) === 0;
 }
 
 function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null }) {
@@ -285,8 +327,12 @@ function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null 
     }
   }
   const lockedImages = new Set([
-    ...Object.values(lock.components).map(({ image }) => image),
-    ...Object.values(lock.auxiliaryArtifacts ?? {}).map(({ image }) => image)
+    ...BOOTSTRAP_CORE_COMPONENTS
+      .map((component) => lock.components?.[component]?.image)
+      .filter(Boolean),
+    ...BOOTSTRAP_AUXILIARY_ARTIFACTS
+      .map((artifact) => lock.auxiliaryArtifacts?.[artifact]?.image)
+      .filter(Boolean)
   ]);
   const missing = [...lockedImages].filter((image) => !expected.has(image));
   if (missing.length) throw new Error(`Release components are not represented by base workloads: ${missing.join(', ')}`);
@@ -301,7 +347,7 @@ function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null 
       );
   }));
   for (const { spec, resource, expectedImage } of selectedWorkloads) {
-    if (spec.kind === 'cronjob') continue;
+    if (['cronjob', 'job'].includes(spec.kind)) continue;
     const labels = resource.spec?.selector?.matchLabels ?? {};
     const matching = pods.filter((pod) => (
       pod.metadata?.namespace === spec.namespace
@@ -310,7 +356,9 @@ function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null 
         ({ name, image }) => name === spec.container && image === expectedImage
       )
     ));
-    const replicas = Number(resource.spec?.replicas ?? 1);
+    const replicas = spec.kind === 'daemonset'
+      ? Number(resource.status?.desiredNumberScheduled ?? 0)
+      : Number(resource.spec?.replicas ?? 1);
     if (matching.length < replicas) {
       throw new Error(`Changed workload has no complete target Pod set: ${spec.namespace}/${spec.kind}/${spec.name}`);
     }
@@ -341,33 +389,68 @@ function postgresScalar(sql) {
   ], { capture: true }).trim();
 }
 
-function verifySupabaseDatabase() {
-  const schemas = postgresScalar("SELECT string_agg(schema_name, ',' ORDER BY schema_name) FROM information_schema.schemata WHERE schema_name IN ('auth','storage','console','audit','osaa');");
-  for (const name of ['auth', 'storage', 'console', 'audit', 'osaa']) {
+function verifySupabaseDatabase(lock) {
+  const schemas = postgresScalar(
+    "SELECT string_agg(schema_name, ',' ORDER BY schema_name) FROM information_schema.schemata "
+    + "WHERE schema_name IN ('auth','storage','console_identity','console_operation','console_audit','console_extension','console_migration');"
+  );
+  for (const name of [
+    'auth', 'storage', 'console_identity', 'console_operation',
+    'console_audit', 'console_extension', 'console_migration'
+  ]) {
     if (!schemas.split(',').includes(name)) throw new Error(`Supabase schema is missing: ${name}`);
   }
-  const roles = postgresScalar("SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname IN ('authenticator','supabase_auth_admin','supabase_storage_admin','opensphere_console_backend','opensphere_osaa_gateway');");
-  for (const name of ['authenticator', 'supabase_auth_admin', 'supabase_storage_admin', 'opensphere_console_backend', 'opensphere_osaa_gateway']) {
+
+  const roles = postgresScalar(
+    "SELECT string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles "
+    + "WHERE rolname IN ('authenticator','supabase_auth_admin','supabase_storage_admin',"
+    + "'console_api','console_extension_controller','opensphere_console_api_runtime','opensphere_console_extension_runtime');"
+  );
+  for (const name of [
+    'authenticator', 'supabase_auth_admin', 'supabase_storage_admin',
+    'console_api', 'console_extension_controller',
+    'opensphere_console_api_runtime', 'opensphere_console_extension_runtime'
+  ]) {
     if (!roles.split(',').includes(name)) throw new Error(`Supabase runtime role is missing: ${name}`);
   }
-  if (postgresScalar("SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='audit' AND c.relname='event';") !== '1') {
-    throw new Error('Supabase durable audit table is missing');
+
+  const ledger = postgresScalar([
+    "SELECT count(*)::text || '|' ||",
+    "(SELECT global_id FROM console_migration.applied_migration ORDER BY applied_sequence DESC LIMIT 1) || '|' ||",
+    "(SELECT migration_set_digest FROM console_migration.applied_migration ORDER BY applied_sequence DESC LIMIT 1) || '|' ||",
+    "(SELECT migration_set_size::text FROM console_migration.applied_migration ORDER BY applied_sequence DESC LIMIT 1)",
+    'FROM console_migration.applied_migration;'
+  ].join(' '));
+  const [countText, latestGlobalId, setDigest, setSizeText] = ledger.split('|');
+  const migrationCount = Number(countText);
+  if (!Number.isInteger(migrationCount) || migrationCount < 1
+      || migrationCount !== Number(setSizeText)
+      || !/^opensphere-console\/[0-9]{8}\/[0-9]{4}$/u.test(latestGlobalId)
+      || !/^sha256:[a-f0-9]{64}$/u.test(setDigest)) {
+    throw new Error('Fresh Console migration ledger is incomplete or malformed');
   }
-  if (postgresScalar("SELECT count(*) FROM pg_policies WHERE schemaname='console';") === '0') {
-    throw new Error('Supabase Console RLS policies are missing');
+  const expected = lock.releaseBom?.migrationManifest;
+  if (expected && (
+    expected.latestGlobalId !== latestGlobalId
+    || expected.setDigest !== setDigest
+    || expected.migrationCount !== migrationCount
+  )) {
+    throw new Error('Fresh Console migration ledger differs from the signed Release BOM');
   }
-  const requestId = randomUUID();
-  const eventHash = `verify-${randomUUID()}`;
-  const transaction = [
-    'BEGIN;',
-    `INSERT INTO audit.event(request_id,correlation_id,actor_type,action,target_type,target_id,reason,phase,result,event_hash) VALUES ('${requestId}','setup-verify','system','bootstrap.verify','installation','opensphere','Setup conformance verification','applied','ok','${eventHash}');`,
-    `SELECT count(*) FROM audit.event WHERE request_id='${requestId}' AND event_hash='${eventHash}';`,
-    'ROLLBACK;'
-  ].join(' ');
-  if (!postgresScalar(transaction).split(/\s+/).includes('1')) {
-    throw new Error('Supabase append/read transaction conformance failed');
+
+  if (postgresScalar(
+    "SELECT has_table_privilege('public','console_migration.applied_migration','UPDATE,DELETE,TRUNCATE')::text;"
+  ) !== 'false') {
+    throw new Error('Fresh Console migration ledger mutation privileges are not closed');
   }
-  return { schemas: schemas.split(','), roles: roles.split(','), rls: true, appendRead: true };
+  return {
+    schemas: schemas.split(','),
+    roles: roles.split(','),
+    migrationCount,
+    latestGlobalId,
+    setDigest,
+    appendOnly: true
+  };
 }
 
 function freePort() {
@@ -529,19 +612,59 @@ async function verifyGitea() {
   });
 }
 
-async function verifyConsoleBackend() {
-  return withService('opensphere-console', 'opensphere-console-backend', 8080, async (base) => {
-    const ready = await requireOk(await fetch(`${base}/readyz`), 'Console Backend readiness');
+async function verifyConsoleApi() {
+  return withService('opensphere-console', 'opensphere-console-api', 8080, async (base) => {
+    const ready = await requireOk(await fetch(`${base}/healthz`), 'Console API readiness');
     const readiness = await ready.json();
-    if (readiness.ready === false) throw new Error('Console Backend reports Supabase unavailable');
+    if (readiness.state !== 'Ready' || readiness.authority !== 'SupabasePostgreSQL') {
+      throw new Error('Console API health contract differs from the Supabase authority baseline');
+    }
     const bootstrap = await requireOk(
       await fetch(`${base}/api/identity/bootstrap/status`),
-      'Supabase initial operator bootstrap status'
+      'Supabase initial administrator bootstrap status'
     );
     const state = await bootstrap.json();
-    if (!['required', 'complete'].includes(state.state)) throw new Error(`Unsupported initial operator state: ${state.state}`);
-    return { ready: true, initialOperatorState: state.state };
+    if (!['required', 'complete'].includes(state.state)) {
+      throw new Error(`Unsupported initial administrator state: ${state.state}`);
+    }
+    return { ready: true, authority: readiness.authority, initialOperatorState: state.state };
   });
+}
+
+async function verifyBeszel() {
+  const service = getJson(['-n', 'opensphere-monitoring', 'get', 'service', 'beszel-hub']);
+  if (service.spec?.type !== 'ClusterIP' || service.spec?.clusterIP === 'None'
+      || (service.spec?.ports ?? []).some((port) => port.nodePort !== undefined)) {
+    throw new Error('Beszel Hub is not a private ClusterIP-only Service');
+  }
+  const ingresses = getJson(['get', 'ingresses.networking.k8s.io', '-A']).items ?? [];
+  const exposed = ingresses.some((ingress) => (ingress.spec?.rules ?? [])
+    .flatMap((rule) => rule.http?.paths ?? [])
+    .some((path) => path.backend?.service?.name === 'beszel-hub'));
+  if (exposed) throw new Error('Beszel Hub must not be referenced by an Ingress');
+
+  const bootstrap = getJson([
+    '-n', 'opensphere-monitoring', 'get', 'job', 'beszel-bootstrap-v0187'
+  ]);
+  if (Number(bootstrap.status?.failed ?? 0) > 0
+      || Number(bootstrap.status?.succeeded ?? 0) < Number(bootstrap.spec?.completions ?? 1)) {
+    throw new Error('Beszel bootstrap Job has not completed successfully');
+  }
+  const publicKey = getJson([
+    '-n', 'opensphere-monitoring', 'get', 'configmap', 'beszel-agent-public-key'
+  ]).data?.key;
+  if (!publicKey || publicKey === 'bootstrap-pending') {
+    throw new Error('Beszel bootstrap did not publish the Hub public key');
+  }
+  await withService('opensphere-monitoring', 'beszel-hub', 8090, async (base) => {
+    await requireOk(await fetch(`${base}/api/health`), 'Beszel Hub health');
+  });
+  return {
+    hubPrivate: true,
+    hubHealth: true,
+    bootstrapJobComplete: true,
+    agentPublicKeyPublished: true
+  };
 }
 
 export function recordInstallationEvidence(evidence, { apply = kubectl } = {}) {
@@ -586,10 +709,11 @@ export async function verifyInstallation(lock, {
     requireZeroRestarts,
     componentSelection
   }));
-  const postgresql = verifySupabaseDatabase();
+  const postgresql = verifySupabaseDatabase(lock);
   const supabase = await verifySupabaseServices();
   const gitea = await verifyGitea();
-  const backend = await verifyConsoleBackend();
+  const beszel = await verifyBeszel();
+  const consoleApi = await verifyConsoleApi();
   if (consoleUrl && config.consoleUrl !== consoleUrl) {
     throw new Error(`Verified Console URL differs from installation config (${consoleUrl} != ${config.consoleUrl})`);
   }
@@ -607,7 +731,8 @@ export async function verifyInstallation(lock, {
     postgresql,
     supabase,
     gitea,
-    backend
+    beszel,
+    consoleApi
   };
   recordInstallationEvidence(evidence);
   return evidence;

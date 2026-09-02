@@ -3,10 +3,22 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MANAGED_CLUSTER_POLICIES, MANAGED_CLUSTER_RBAC, MANAGED_CRDS, MANAGED_NAMESPACES, uninstallManagedInstallation } from '../src/bootstrap.mjs';
+import { MANAGED_CLUSTER_POLICIES, MANAGED_CLUSTER_RBAC, MANAGED_CRDS, MANAGED_NAMESPACES, existingManagedNamespaces, uninstallManagedInstallation } from '../src/bootstrap.mjs';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const CLI = join(ROOT, 'src', 'cli.mjs');
+
+function ownedInstallationState(releaseDigest = 'sha256:managed') {
+  return {
+    releaseDigest,
+    managedNamespaces: [...MANAGED_NAMESPACES],
+    managedClusterScopedResources: {
+      customResourceDefinitions: [...MANAGED_CRDS],
+      clusterRbac: [...MANAGED_CLUSTER_RBAC],
+      admissionPolicies: [...MANAGED_CLUSTER_POLICIES]
+    }
+  };
+}
 
 test('uninstall refuses to reach Kubernetes without the explicit destructive confirmation', () => {
   for (const args of [
@@ -21,16 +33,16 @@ test('uninstall refuses to reach Kubernetes without the explicit destructive con
   }
 });
 
-test('managed cluster RBAC retains OSAA environment-reader lifecycle ownership but drops the obsolete controlled-operator role', () => {
-  assert.equal(MANAGED_CLUSTER_RBAC.includes('clusterrolebinding/opensphere-console-osaa-gateway-environment-reader'), true);
-  assert.equal(MANAGED_CLUSTER_RBAC.includes('clusterrole/opensphere-console-osaa-gateway-environment-reader'), true);
-  assert.equal(MANAGED_CLUSTER_RBAC.some((resource) => resource.includes('controlled-operator')), false);
+test('managed cluster RBAC owns only the target Registry bootstrap resources', () => {
+  assert.deepEqual(MANAGED_CLUSTER_RBAC, [
+    'clusterrolebinding/opensphere-registry',
+    'clusterrole/opensphere-registry'
+  ]);
+  assert.equal(MANAGED_CLUSTER_RBAC.some((resource) => resource.includes('osaa') || resource.includes('backend')), false);
 });
 
-test('managed uninstall owns Console integrity and Foundation closed-catalog admission policies', () => {
+test('managed uninstall owns only Console bootstrap admission policies', () => {
   assert.deepEqual(MANAGED_CLUSTER_POLICIES, [
-    'validatingadmissionpolicybinding/foundation-bootstrap-closed-catalog',
-    'validatingadmissionpolicy/foundation-bootstrap-closed-catalog',
     'validatingadmissionpolicybinding/opensphere-console-manual-ui-contract',
     'validatingadmissionpolicy/opensphere-console-manual-ui-contract',
     'validatingadmissionpolicybinding/opensphere-console-image-integrity-workload',
@@ -45,7 +57,8 @@ test('managed uninstall deletes namespaces, retained PVs, then only OpenSphere C
   const result = await uninstallManagedInstallation({
     runtime: {
       readInstallationLock: () => ({ releaseDigest: 'sha256:managed' }),
-      existingOpenSphereNamespaces: () => [...MANAGED_NAMESPACES],
+      readInstallationState: () => ownedInstallationState(),
+      existingOpenSphereNamespaces: () => [...MANAGED_NAMESPACES, 'opensphere-developer', 'opensphere-www'],
       listManagedPersistentVolumes: () => ['pvc-retained-a', 'pvc-retained-b'],
       deleteManagedNamespace: (name) => events.push(`delete-ns:${name}`),
       waitForManagedNamespaceDeletion: (name) => events.push(`wait-ns:${name}`),
@@ -78,6 +91,7 @@ test('managed uninstall refuses an installation lock that does not own every nam
     uninstallManagedInstallation({
       runtime: {
         readInstallationLock: () => ({ releaseDigest: 'sha256:managed' }),
+        readInstallationState: () => ownedInstallationState(),
         existingOpenSphereNamespaces: () => ['opensphere-console']
       }
     }),
@@ -93,6 +107,17 @@ test('managed uninstall never purges a namespace without an installation lock', 
         existingOpenSphereNamespaces: () => ['opensphere-console']
       }
     }),
-    /Refusing to purge unmanaged OpenSphere namespaces/
+    /Refusing to purge unmanaged Setup namespaces/
   );
+});
+
+
+test('managed namespace discovery ignores other OpenSphere products', () => {
+  assert.deepEqual(existingManagedNamespaces([
+    'opensphere-www',
+    'opensphere-console',
+    'opensphere-developer',
+    'opensphere-console-data',
+    'opensphere-console',
+  ]), ['opensphere-console', 'opensphere-console-data']);
 });

@@ -85,4 +85,4 @@ export async function assertFreshConsolePortAvailable(consoleUrl, {
   return { checked: true, host, port, origin: url.origin };
 }
 
-export const DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB = 88;
+export const DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB = 98;
