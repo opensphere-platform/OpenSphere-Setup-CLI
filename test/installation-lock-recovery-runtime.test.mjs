@@ -166,11 +166,11 @@ function fixture(workspaceRoot, receiptDirectory, localState) {
   });
   const trust = {
     contract: 'opensphere.installation-lock.edge-trust-observation/v1',
-    namespace: 'opensphere-console', configMapName: 'dupa-trusted-keys',
+    namespace: 'opensphere-console', configMapName: 'opensphere-extension-trusted-keys',
     uid: 'trust-uid', resourceVersion: '4004', keyId: 'opensphere-edge-local-v1',
     publicKeySpkiBase64: 'fixture-spki', publicKeySpkiSha256: sha256('fixture-spki-bytes'),
   };
-  objects.set('configmap/opensphere-console/dupa-trusted-keys', {
+  objects.set('configmap/opensphere-console/opensphere-extension-trusted-keys', {
     apiVersion: 'v1', kind: 'ConfigMap',
     metadata: { uid: trust.uid, resourceVersion: trust.resourceVersion },
     data: { 'trusted-keys.json': JSON.stringify({ trustedKeys: { [trust.keyId]: trust.publicKeySpkiBase64 } }) },

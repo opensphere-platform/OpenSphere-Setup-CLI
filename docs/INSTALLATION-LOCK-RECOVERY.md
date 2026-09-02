@@ -25,7 +25,7 @@ or create a replacement ConfigMap by hand.
 
 The plan must already have passed the closed validator in
 `src/installation-lock-recovery.mjs`. Its ES256-P1363 approval is anchored to
-the observed `opensphere-edge-local-v1` key in `dupa-trusted-keys` and binds:
+the observed `opensphere-edge-local-v1` key in `opensphere-extension-trusted-keys` and binds:
 
 - incident raw bytes and digest;
 - Gitea commit, path, Git blob ID, and raw document digest;

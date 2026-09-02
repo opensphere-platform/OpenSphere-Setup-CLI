@@ -452,7 +452,7 @@ function validateTrustObservation(trust) {
   ], 'edge trust observation');
   if (trust.contract !== 'opensphere.installation-lock.edge-trust-observation/v1'
       || trust.namespace !== 'opensphere-console'
-      || trust.configMapName !== 'dupa-trusted-keys'
+      || trust.configMapName !== 'opensphere-extension-trusted-keys'
       || trust.keyId !== TRUST_KEY_ID
       || sha256(Buffer.from(base64(
         trust.publicKeySpkiBase64, 'edge trust public key'

@@ -94,7 +94,7 @@ function observationBundle() {
   const trustObservation = {
     contract: 'opensphere.installation-lock.edge-trust-observation/v1',
     namespace: 'opensphere-console',
-    configMapName: 'dupa-trusted-keys',
+    configMapName: 'opensphere-extension-trusted-keys',
     uid: 'trust-config-fixture-uid',
     resourceVersion: '13370001',
     keyId: 'opensphere-edge-local-v1',

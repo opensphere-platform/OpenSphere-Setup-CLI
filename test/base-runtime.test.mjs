@@ -135,7 +135,8 @@ test('Setup consumes the Console global migration manifest and materialized-rele
 
 test('base manifests contain only bootstrap-owned shared surfaces', () => {
   assert.deepEqual(BASE_MANIFESTS.map(({ path }) => path), [
-    'apps/extension-controller/runtime/ui-plugin-crds.yaml',
+    'apps/extension-controller/crds/ui-plugin-crds.yaml',
+    'apps/extension-controller/config/trusted-keys.yaml',
     'cmd/os-cli/deploy.yaml',
     'backend/registry/deploy/registry.yaml',
     'deploy/manual-ui-admission-policy.yaml',

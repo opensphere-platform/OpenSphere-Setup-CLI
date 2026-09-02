@@ -306,7 +306,7 @@ function observeTrust(plan, kubectlFn) {
   if (Object.keys(document).sort().join(',') !== 'trustedKeys'
       || !document.trustedKeys || typeof document.trustedKeys !== 'object'
       || Array.isArray(document.trustedKeys)) {
-    throw new Error('dupa-trusted-keys has a non-canonical nested document');
+    throw new Error('opensphere-extension-trusted-keys has a non-canonical nested document');
   }
   const actual = {
     ...expected,

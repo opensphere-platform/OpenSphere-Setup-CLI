@@ -160,7 +160,12 @@ export const HISTORICAL_MANAGED_CLUSTER_POLICIES = Object.freeze([
 
 export const BASE_MANIFESTS = Object.freeze([
   {
-    path: 'apps/extension-controller/runtime/ui-plugin-crds.yaml',
+    path: 'apps/extension-controller/crds/ui-plugin-crds.yaml',
+    componentOwners: ['extensionController'],
+    applyWholeForComponentRelease: true
+  },
+  {
+    path: 'apps/extension-controller/config/trusted-keys.yaml',
     componentOwners: ['extensionController'],
     applyWholeForComponentRelease: true
   },
@@ -1136,7 +1141,8 @@ async function materializeBaseRelease(lock, storageClass, consoleUrl, authEnviro
   })));
 }
 
-const TRUST_CONFIGMAP_PATH = 'backend/dupa-control/dupa-trusted-keys.yaml';
+const TRUST_CONFIGMAP_PATH = 'apps/extension-controller/config/trusted-keys.yaml';
+const TRUST_CONFIGMAP_NAME = 'opensphere-extension-trusted-keys';
 
 export function mergeTrustedKeySets(baseline = {}, existing = {}, { preserveEdgeLocal = false } = {}) {
   // Release-owned keys are authoritative. Only the constitution-defined,
@@ -1154,7 +1160,7 @@ export function mergeTrustedKeySets(baseline = {}, existing = {}, { preserveEdge
 function readTrustedKeySet() {
   try {
     const configMap = JSON.parse(kubectl([
-      '-n', 'opensphere-console', 'get', 'configmap', 'dupa-trusted-keys', '-o', 'json'
+      '-n', 'opensphere-console', 'get', 'configmap', TRUST_CONFIGMAP_NAME, '-o', 'json'
     ], { capture: true }));
     return JSON.parse(String(configMap?.data?.['trusted-keys.json'] || '{}')).trustedKeys || {};
   } catch {
@@ -1167,7 +1173,7 @@ function preserveHostLocalTrustedKeys(existing) {
   const merged = mergeTrustedKeySets(baseline, existing, { preserveEdgeLocal: true });
   if (JSON.stringify(merged) === JSON.stringify(baseline)) return;
   kubectl([
-    '-n', 'opensphere-console', 'patch', 'configmap', 'dupa-trusted-keys',
+    '-n', 'opensphere-console', 'patch', 'configmap', TRUST_CONFIGMAP_NAME,
     '--type', 'merge',
     '-p', JSON.stringify({
       data: {
