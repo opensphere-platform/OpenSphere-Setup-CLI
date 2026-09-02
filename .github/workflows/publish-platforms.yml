@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Public release tag, for example setup-v0.5.0-edge.17
+        description: Public release tag, for example setup-v0.5.0-edge.18
         required: true
         type: string
       prerelease:
@@ -97,6 +97,12 @@ jobs:
           node-version: '24.18.0'
           cache: npm
 
+      - uses: actions/setup-go@v5
+        if: matrix.platform == 'windows'
+        with:
+          go-version: '1.27.0'
+          cache: false
+
       - name: Resolve governed Console source
         id: console_source
         shell: pwsh
@@ -106,14 +112,6 @@ jobs:
           "repository=$($source.githubRepository)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "revision=$($source.revision)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Require governed Console source credential
-        shell: pwsh
-        env:
-          CONSOLE_SOURCE_TOKEN: ${{ secrets.OPENSPHERE_CONSOLE_SOURCE_TOKEN }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:CONSOLE_SOURCE_TOKEN)) {
-            throw 'OPENSPHERE_CONSOLE_SOURCE_TOKEN is required to read the governed private Console source.'
-          }
       - name: Checkout canonical Console manifests
         uses: actions/checkout@v4
         with:
@@ -121,7 +119,6 @@ jobs:
           ref: ${{ steps.console_source.outputs.revision }}
           fetch-depth: 0
           path: _fixtures/OpenSphere-console
-          token: ${{ secrets.OPENSPHERE_CONSOLE_SOURCE_TOKEN }}
           persist-credentials: false
 
       - name: Verify governed Console checkout
@@ -139,6 +136,34 @@ jobs:
         run: |
           $visibility = gh api "repos/$env:GITHUB_REPOSITORY" --jq .visibility
           if ($visibility -ne 'public') { throw "Refusing non-public Setup distribution: $visibility" }
+
+      - name: Require declared Setup CLI channel pointer
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          IS_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          $version = node -p "require('./package.json').version"
+          $channel = if ($version -match '-edge[.][0-9]+$') {
+            'edge'
+          } elseif ($version -match '-candidate[.][0-9]+$') {
+            'candidate'
+          } elseif ($version -match '^[0-9]+[.][0-9]+[.][0-9]+$') {
+            'stable'
+          } else {
+            throw "Package version has no supported Setup CLI channel: $version"
+          }
+          $pointer = (Get-Content -LiteralPath "channels/$channel" -Raw).Trim()
+          if ($pointer -ne $env:RELEASE_TAG) {
+            throw "Setup CLI channel $channel points to $pointer, expected $env:RELEASE_TAG"
+          }
+          $expectedPrerelease = $channel -ne 'stable'
+          if ([bool]::Parse($env:IS_PRERELEASE) -ne $expectedPrerelease) {
+            throw "Setup CLI channel $channel prerelease flag must be $expectedPrerelease"
+          }
+          if ($channel -ne 'edge') {
+            throw 'candidate/stable Setup publication remains on HOLD until trusted Windows Authenticode and Apple notarization gates are implemented.'
+          }
 
       - name: Install and test
         shell: pwsh
@@ -265,11 +290,41 @@ jobs:
           & $kubectl version --client -o json
           if ($LASTEXITCODE -ne 0) { throw 'Bundled kubectl smoke test failed' }
 
+      - name: Build Windows installer executable
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          $version = node -p "require('./package.json').version"
+          $expectedTag = "setup-v$version"
+          if ($env:RELEASE_TAG -ne $expectedTag) {
+            throw "Release tag must equal package version: $expectedTag"
+          }
+          go test ./installers/windows
+          go build -trimpath `
+            -ldflags "-s -w -X main.releaseTag=$env:RELEASE_TAG" `
+            -o dist/Install-OpenSphereSetup.exe `
+            ./installers/windows
+          $boundTag = (& dist/Install-OpenSphereSetup.exe --bootstrap-version).Trim()
+          if ($LASTEXITCODE -ne 0 -or $boundTag -ne $expectedTag) {
+            throw "Windows installer release binding failed: $boundTag"
+          }
+
       - name: Upload platform archive
         uses: actions/upload-artifact@v4
         with:
           name: setup-${{ matrix.platform }}-${{ matrix.architecture }}
           path: dist/${{ matrix.archive }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Windows installer executable
+        if: matrix.platform == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: setup-windows-installer
+          path: dist/Install-OpenSphereSetup.exe
           if-no-files-found: error
           retention-days: 30
 
@@ -298,19 +353,30 @@ jobs:
           expected="setup-v$version"
           test "$RELEASE_TAG" = "$expected"
           node --input-type=module - "$RELEASE_TAG" <<'NODE'
-          import { readFile, writeFile } from 'node:fs/promises';
+          import { chmod, readFile, writeFile } from 'node:fs/promises';
           const releaseTag = process.argv[2];
-          const source = await readFile('scripts/Install-OpenSphereSetupRelease.ps1', 'utf8');
-          const installer = source.replaceAll('__OPENSPHERE_SETUP_RELEASE_TAG__', releaseTag);
-          if (installer.includes('__OPENSPHERE_SETUP_RELEASE_TAG__')) {
-            throw new Error('Windows installer release tag materialization failed');
+          const assets = [
+            ['scripts/Install-OpenSphereSetupRelease.ps1', 'dist/Install-OpenSphereSetup.ps1'],
+            ['scripts/Install-OpenSphereSetupRelease.sh', 'dist/install-opensphere-setup.sh']
+          ];
+          for (const [sourcePath, destinationPath] of assets) {
+            const source = await readFile(sourcePath, 'utf8');
+            const installer = source.replaceAll('__OPENSPHERE_SETUP_RELEASE_TAG__', releaseTag);
+            if (installer.includes('__OPENSPHERE_SETUP_RELEASE_TAG__')) {
+              throw new Error(`Installer release tag materialization failed: ${sourcePath}`);
+            }
+            await writeFile(destinationPath, installer, 'utf8');
           }
-          await writeFile('dist/Install-OpenSphereSetup.ps1', installer, 'utf8');
+          await chmod('dist/install-opensphere-setup.sh', 0o755);
           NODE
+          sh -n dist/install-opensphere-setup.sh
+          dist/install-opensphere-setup.sh --help >/dev/null
           cd dist
-          sha256sum opensphere-setup-* Install-OpenSphereSetup.ps1 > SHA256SUMS
+          sha256sum opensphere-setup-* Install-OpenSphereSetup.exe Install-OpenSphereSetup.ps1 install-opensphere-setup.sh > SHA256SUMS
           test "$(find . -maxdepth 1 -type f -name 'opensphere-setup-*' | wc -l)" -eq 5
+          test -s Install-OpenSphereSetup.exe
           test -s Install-OpenSphereSetup.ps1
+          test -x install-opensphere-setup.sh
 
       - name: Publish public GitHub Release
         shell: bash
@@ -319,7 +385,9 @@ jobs:
           args=(
             "$RELEASE_TAG"
             dist/opensphere-setup-*
+            dist/Install-OpenSphereSetup.exe
             dist/Install-OpenSphereSetup.ps1
+            dist/install-opensphere-setup.sh
             dist/SHA256SUMS
             --repo "$GITHUB_REPOSITORY"
             --target "$GITHUB_SHA"
@@ -337,7 +405,7 @@ jobs:
             -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")"
           test "$(jq -r '.immutable' <<<"$release")" = "true"
-          for file in dist/opensphere-setup-* dist/Install-OpenSphereSetup.ps1 dist/SHA256SUMS; do
+          for file in dist/opensphere-setup-* dist/Install-OpenSphereSetup.exe dist/Install-OpenSphereSetup.ps1 dist/install-opensphere-setup.sh dist/SHA256SUMS; do
             name="$(basename "$file")"
             local_digest="sha256:$(sha256sum "$file" | awk '{print $1}')"
             remote_digest="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release")"

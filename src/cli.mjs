@@ -103,7 +103,7 @@ async function readLock(lockPath) {
 }
 
 function help() {
-  console.log(`OpenSphere Setup CLI 0.5.0-edge.17
+  console.log(`OpenSphere Setup CLI 0.5.0-edge.18
 
 Usage:
   opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
@@ -149,7 +149,7 @@ Usage:
 Fresh bootstrap resolves the selected channel at install time. Resume always uses the
 cluster installation lock. --lock is an explicit immutable input; it is never a cache hint.
 Kubernetes receives digest-pinned images only.
-Private Console source artifacts require OPENSPHERE_CONSOLE_SOURCE_TOKEN with GitHub Contents read authority.`);
+Canonical Console source artifacts are public; OPENSPHERE_CONSOLE_SOURCE_TOKEN is optional authenticated Contents API access and remains separate from GHCR credentials.`);
 }
 
 function readSecret(reference) {
@@ -181,7 +181,7 @@ async function main() {
   }
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
-  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.17');
+  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.18');
 
   if (command === 'recover-installation-lock') {
     if (hasOption('--workspace-root') || hasOption('--receipt-dir')) {

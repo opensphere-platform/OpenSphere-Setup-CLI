@@ -6,52 +6,33 @@
 
 ## 1. 준비
 
-필수 외부 도구:
+macOS 기본 `sh`, `curl`, `tar`, `mktemp`, `awk`, `shasum`만 사용한다. 공식 macOS 아카이브는
+Node.js, PowerShell과 kubectl을 포함하므로 Homebrew, Git 또는 별도 개발 도구를 요구하지 않는다.
 
-```bash
-brew install git
-git --version
-
-```
-
-공식 macOS 아카이브는 Node.js, PowerShell과 kubectl을 포함하므로 이 세 도구를 호스트에
-별도로 설치하지 않는다.
-
-Docker Desktop을 사용하는 경우 Settings → Kubernetes에서 Kubernetes를 활성화하고 적용한
-뒤 다음 상태를 확인한다.
-
-```bash
-kubectl config use-context docker-desktop
-kubectl get nodes
-kubectl get storageclass
-```
+Docker Desktop을 사용하는 경우 Settings → Kubernetes에서 Kubernetes를 활성화하고 적용한다.
+클러스터 연결과 상태는 Setup 설치 후 `doctor`가 포함된 kubectl로 확인한다.
 
 검증된 Docker Desktop 시작 프로필은 10 CPU와 16GiB RAM이다. 이는 최소값이 아니다.
 OpenSphere PVC 요청 합계는 98Gi이므로 Docker Desktop VM 디스크와 선택한 StorageClass가
 이를 provision할 수 있어야 한다.
 
-## 2. 공개 GitHub Setup 다운로드
+## 2. 공개 GitHub Setup 설치
 
-Setup 저장소와 Release는 공개이므로 GitHub 로그인이나 token이 필요하지 않다.
+Setup 저장소와 Release는 공개이므로 GitHub 로그인이나 token이 필요하지 않다. 운영체제와
+CPU 아키텍처는 공용 설치기가 자동 판별한다. 설치기 자체의 검증 절차는
+[`PLATFORM-INSTALL.md`](PLATFORM-INSTALL.md)를 따른다.
 
 ```bash
-set -euo pipefail
-release=setup-v0.5.0-edge.17
-architecture="$(test "$(uname -m)" = arm64 && echo arm64 || echo amd64)"
-repository=https://github.com/opensphere-platform/OpenSphere-Setup-CLI
+release=setup-v0.5.0-edge.18
+base="https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/$release"
 curl --fail --location --proto '=https' --tlsv1.2 \
-  "$repository/releases/download/$release/opensphere-setup-darwin-${architecture}.tar.gz" \
-  --output "opensphere-setup-darwin-${architecture}.tar.gz"
-curl --fail --location --proto '=https' --tlsv1.2 \
-  "$repository/releases/download/$release/SHA256SUMS" \
-  --output SHA256SUMS
-expected="$(grep " opensphere-setup-darwin-${architecture}.tar.gz$" SHA256SUMS | awk '{print $1}')"
-actual="$(shasum -a 256 "opensphere-setup-darwin-${architecture}.tar.gz" | awk '{print $1}')"
-test -n "$expected" && test "$actual" = "$expected"
-tar -xzf "opensphere-setup-darwin-${architecture}.tar.gz"
-SETUP="$PWD/opensphere-setup-darwin-${architecture}/opensphere-setup"
+  "$base/install-opensphere-setup.sh" --output install-opensphere-setup.sh
+chmod +x install-opensphere-setup.sh
+./install-opensphere-setup.sh --channel edge
+SETUP="${OPENSPHERE_SETUP_BIN_DIR:-$HOME/.local/bin}/opensphere-setup"
 "$SETUP" version
 ```
+
 ## 3. 무변경 진단
 
 ```bash

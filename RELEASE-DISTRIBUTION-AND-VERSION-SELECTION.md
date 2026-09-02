@@ -61,7 +61,9 @@ DUPA의 target control-plane 책임은 `extensionController`에 통합되었다.
 
 Console anchor는 어떤 채널에서도 마지막에 이동한다. Setup은 부분 발행 중 혼합 revision, edge-local 결과의 승격, retired edge workflow의 attestation을 승인하지 않는다. 과거 GitHub Actions edge lock은 정확한 rollback baseline으로만 읽을 수 있으며 새 target release, 재발행, 승격에는 사용할 수 없다.
 
-Setup CLI 자체는 OpenSphere OS image release와 분리된 공개 GitHub 저장소와 immutable GitHub Release에서 발행한다. `OpenSphere-Setup-CLI/.github/workflows/publish-platforms.yml`은 저장소 visibility가 `public`인지 확인하고 Windows amd64, Linux amd64/arm64, macOS amd64/arm64 자체 포함 아카이브, 공개 설치기와 `SHA256SUMS`를 발행한다. `package.json`의 `private: true`는 npm 오발행을 막으며 공식 배포 경로는 공개 GitHub Release 하나다. Setup 공개 여부와 Console GHCR 접근 정책은 분리한다.
+Setup CLI 자체는 OpenSphere OS image release와 분리된 공개 GitHub 저장소와 immutable GitHub Release에서 발행한다. `OpenSphere-Setup-CLI/.github/workflows/publish-platforms.yml`은 저장소 visibility가 `public`인지 확인하고 Windows amd64, Linux amd64/arm64, macOS amd64/arm64 자체 포함 아카이브와 `Install-OpenSphereSetup.exe`, 검토 가능한 PowerShell 대체 설치기, Linux/macOS 공용 `install-opensphere-setup.sh`, `SHA256SUMS`를 발행한다. `package.json`의 `private: true`는 npm 오발행을 막으며 공식 배포 경로는 공개 GitHub Release 하나다. Setup 공개 여부와 Console GHCR 접근 정책은 분리한다.
+
+Setup CLI package 설치 선택은 OCI image 채널과 별도다. `--version <semver>`는 `setup-v<semver>` immutable GitHub Release를 직접 선택한다. `--channel edge|candidate|stable`은 public `main`의 `channels/<channel>` 포인터를 한 번 읽고 그 exact immutable Release로 고정한다. `edge`는 `setup-v<semver>-edge.<sequence>`, `candidate`는 `setup-v<semver>-candidate.<sequence>`, `stable`은 prerelease suffix 없는 `setup-v<semver>`만 허용한다. 미준비 채널은 `HOLD`로 명시하며 fallback하지 않는다. Release workflow는 package version, channel pointer와 GitHub prerelease flag가 일치하지 않으면 발행을 거부한다. 이 package selector는 Console의 `--release` 또는 signed `--lock`을 대체하지 않는다.
 
 ## 소비
 

@@ -1,6 +1,8 @@
 [CmdletBinding()]
 param(
   [string]$ReleaseTag = '__OPENSPHERE_SETUP_RELEASE_TAG__',
+  [string]$Version,
+  [ValidateSet('edge', 'candidate', 'stable')][string]$Channel,
   [string]$Repository = 'opensphere-platform/OpenSphere-Setup-CLI',
   [string]$InstallRoot = (Join-Path $env:LOCALAPPDATA 'OpenSphere\Setup'),
   [string]$BinDirectory = (Join-Path $env:LOCALAPPDATA 'OpenSphere\bin'),
@@ -43,7 +45,7 @@ function Save-VerifiedReleaseAsset {
     [Parameter(Mandatory)]$Asset,
     [Parameter(Mandatory)][string]$Destination
   )
-  Invoke-WebRequest -Uri $Asset.browser_download_url -Headers $githubHeaders `
+  Invoke-WebRequest -UseBasicParsing -Uri $Asset.browser_download_url -Headers $githubHeaders `
     -MaximumRedirection 5 -OutFile $Destination
   $actual = 'sha256:' + (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLowerInvariant()
   if ($actual -ne $Asset.digest) {
@@ -56,6 +58,32 @@ if (-not $env:LOCALAPPDATA) {
 }
 if ($Repository -ne $canonicalRepository) {
   throw "Only the canonical public Setup repository is accepted: $canonicalRepository"
+}
+$selectorCount = [int]$PSBoundParameters.ContainsKey('ReleaseTag') +
+  [int]$PSBoundParameters.ContainsKey('Version') +
+  [int]$PSBoundParameters.ContainsKey('Channel')
+if ($selectorCount -gt 1) {
+  throw '-ReleaseTag, -Version and -Channel are mutually exclusive.'
+}
+if ($PSBoundParameters.ContainsKey('Version')) {
+  if ($Version -notmatch '^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$') {
+    throw "Invalid OpenSphere Setup version: $Version"
+  }
+  $ReleaseTag = "setup-v$Version"
+} elseif ($PSBoundParameters.ContainsKey('Channel')) {
+  $channelUrl = "https://raw.githubusercontent.com/$canonicalRepository/main/channels/$Channel"
+  $ReleaseTag = (Invoke-WebRequest -UseBasicParsing -Uri $channelUrl -Headers $githubHeaders -MaximumRedirection 5).Content.Trim()
+  if ($ReleaseTag -eq 'HOLD') {
+    throw "Setup CLI channel $Channel is on HOLD and has no installable release."
+  }
+  $channelPattern = switch ($Channel) {
+    'edge' { '^setup-v[0-9]+\.[0-9]+\.[0-9]+-edge\.[0-9]+$' }
+    'candidate' { '^setup-v[0-9]+\.[0-9]+\.[0-9]+-candidate\.[0-9]+$' }
+    'stable' { '^setup-v[0-9]+\.[0-9]+\.[0-9]+$' }
+  }
+  if ($ReleaseTag -notmatch $channelPattern) {
+    throw "Public Setup CLI channel $Channel has an invalid release pointer."
+  }
 }
 if ($ReleaseTag -notmatch '^setup-v(?<version>[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)$') {
   throw "Invalid OpenSphere Setup release tag: $ReleaseTag"

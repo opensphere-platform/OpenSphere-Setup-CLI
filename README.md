@@ -3,39 +3,43 @@
 OpenSphere OS Console의 신뢰 가능한 최초 설치, 재개, 검증, 업그레이드 및 제거를 담당한다.
 현재 정본은 **Supabase Data & Identity Backbone + 별도 Gitea Change Authority**이다.
 
-## 공식 설치 명령
+## 공개 Release에서 설치
 
-사용자·운영자에게 노출하는 유일한 진입점은 `opensphere-setup`이다. 저장소 위치:
+현재 공개 설치 버전은 `0.5.0-edge.18`이며 설치 진입점은 운영체제별로 두 개다.
 
-```text
-OpenSphere-Platform/OpenSphere-Setup-CLI
-```
+### Windows amd64
 
-Windows에서 명령 등록:
+[**Install-OpenSphereSetup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.18/Install-OpenSphereSetup.exe) 후 실행한다. 설치기는 exact immutable Release에 결속되어 있으며, 공개 GitHub API의 asset digest와 `SHA256SUMS`를 검증한 자체 포함 runtime을 사용자 경로에 설치한다.
 
 ```powershell
-cd OpenSphere-Setup-CLI
-.\Install-OpenSphereSetup.ps1
+.\Install-OpenSphereSetup.exe --channel edge
+# 또는 exact Setup CLI 버전 고정
+.\Install-OpenSphereSetup.exe --version 0.5.0-edge.18
 opensphere-setup version
 ```
 
-Linux/macOS에서 명령 등록:
+PowerShell 설치기가 필요한 환경에서는 같은 Release의 `Install-OpenSphereSetup.ps1`을 사용할 수 있다.
+
+### Linux amd64/arm64 · macOS Intel/Apple Silicon
+
+공통 설치 스크립트가 운영체제와 CPU 아키텍처를 판별하고 해당 아카이브를 내려받아 SHA-256을 검증한다.
 
 ```bash
-cd OpenSphere-Setup-CLI
-npm install --global . --no-audit --no-fund
+curl --fail --location --proto '=https' --tlsv1.2 \
+  https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.18/install-opensphere-setup.sh \
+  --output install-opensphere-setup.sh
+chmod +x install-opensphere-setup.sh
+./install-opensphere-setup.sh --channel edge
+# 또는 exact Setup CLI 버전 고정
+./install-opensphere-setup.sh --version 0.5.0-edge.18
 opensphere-setup version
 ```
 
-실제 관리 호스트에는 저장소 clone이나 개발 런타임 설치 대신 공개 GitHub Release의
-Windows amd64, Linux amd64/arm64, macOS amd64/arm64 자체 포함 아카이브를 사용한다.
-인증 없는 다운로드, GitHub immutable release·asset SHA-256 검증과 설치 절차는
-[`docs/PLATFORM-INSTALL.md`](docs/PLATFORM-INSTALL.md)가 정본이다. Setup 저장소가 public이
-아니면 platform Release 발행 workflow는 fail-closed한다. `package.json`의 `private: true`는
-공개 npm 발행을 막는 안전장치이며 GitHub 저장소와 Release는 공개한다.
+옵션을 생략하면 다운로드한 설치기가 자신을 발행한 exact Release를 설치한다. `--version`과 `--channel`은 함께 사용할 수 없다. `edge` 채널은 현재 `setup-v0.5.0-edge.18`을 가리키며 `candidate`와 `stable`은 발행 조건이 충족될 때까지 `HOLD`다.
 
-`node src/cli.mjs`와 저장소의 `opensphere-setup.cmd`는 내부 개발·진단용 구현 세부사항이며
-설치 문서나 운영 runbook의 사용자 명령으로 사용하지 않는다.
+상세 검증, 수동 설치와 PATH 정책은 [`docs/PLATFORM-INSTALL.md`](docs/PLATFORM-INSTALL.md)가 정본이다. 공개 아카이브는 Node.js, PowerShell, kubectl과 Linux의 libatomic을 포함하므로 관리 호스트에 개발 도구를 설치할 필요가 없다. `package.json`의 `private: true`는 npm 오발행만 막으며 GitHub 저장소와 Release는 공개한다.
+
+저장소 clone 후 `npm install --global .`을 사용하는 방식은 개발용이며 공식 운영 설치 경로가 아니다. `node src/cli.mjs`와 저장소의 `opensphere-setup.cmd`도 내부 개발·진단용 구현 세부사항이다.
 
 대화형 터미널에서 `bootstrap`, `doctor`, `upgrade` 같은 운영 명령을 시작하면 ANSI Shadow
 OpenSphere 배너를 표시한다. 파이프·CI 및 `version` 같은 기계 판독 출력에는 표시하지

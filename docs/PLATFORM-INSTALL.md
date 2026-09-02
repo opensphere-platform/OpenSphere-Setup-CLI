@@ -1,109 +1,105 @@
 # 공개 GitHub Release 기반 Setup CLI 설치
 
-OpenSphere Setup CLI는 공개 GitHub 저장소와 immutable GitHub Release를 통해 다음 5개 자체 포함 아카이브로 배포한다.
+OpenSphere Setup CLI는 공개 GitHub 저장소와 immutable GitHub Release로 배포한다. 일반 사용자는 운영체제별 설치기 하나로 시작하고, 설치기는 자체 포함 runtime 아카이브를 내려받아 검증한 뒤 사용자 경로에 설치한다.
 
-| 운영체제 | 아키텍처 | Release asset |
+## 1. Release 자산
+
+| 구분 | Release asset | 용도 |
 |---|---|---|
-| Windows | amd64 | `opensphere-setup-windows-amd64.zip` |
-| Linux | amd64 | `opensphere-setup-linux-amd64.tar.gz` |
-| Linux | arm64 | `opensphere-setup-linux-arm64.tar.gz` |
-| macOS | Intel | `opensphere-setup-darwin-amd64.tar.gz` |
-| macOS | Apple Silicon | `opensphere-setup-darwin-arm64.tar.gz` |
+| Windows 권장 설치기 | `Install-OpenSphereSetup.exe` | exact Release에 결속된 실행형 부트스트랩 |
+| Windows 대체 설치기 | `Install-OpenSphereSetup.ps1` | 검토 가능한 PowerShell 설치 경로 |
+| Linux/macOS 권장 설치기 | `install-opensphere-setup.sh` | OS와 아키텍처 자동 판별 |
+| Windows amd64 runtime | `opensphere-setup-windows-amd64.zip` | Node.js, PowerShell, kubectl 포함 |
+| Linux amd64 runtime | `opensphere-setup-linux-amd64.tar.gz` | Node.js, PowerShell, kubectl, `libatomic.so.1` 포함 |
+| Linux arm64 runtime | `opensphere-setup-linux-arm64.tar.gz` | Node.js, PowerShell, kubectl, `libatomic.so.1` 포함 |
+| macOS Intel runtime | `opensphere-setup-darwin-amd64.tar.gz` | Node.js, PowerShell, kubectl 포함 |
+| macOS Apple Silicon runtime | `opensphere-setup-darwin-arm64.tar.gz` | Node.js, PowerShell, kubectl 포함 |
+| 전체 체크섬 | `SHA256SUMS` | 설치기와 runtime 교차 검증 |
 
-아카이브에는 Setup 실행 runtime, PowerShell, kubectl과 필요한 라이브러리가 포함된다. Linux 패키지는
-`libatomic.so.1`도 포함한다. 대상 호스트에 Node.js, npm, PowerShell, kubectl, libatomic 또는
-GitHub CLI를 별도로 설치할 필요가 없다. Setup 저장소와 Setup release 다운로드에는 GitHub 인증이
-필요하지 않다.
+대상 호스트에 Node.js, npm, PowerShell, kubectl, libatomic 또는 GitHub CLI를 별도로 설치할 필요가 없다. Setup 저장소와 Setup Release 다운로드에도 GitHub 인증이 필요하지 않다.
 
-Setup CLI 공개 정책과 Console 배포물 접근 정책은 분리한다. Console GHCR package가 private이면
-`doctor`, `resolve`, `bootstrap`, `upgrade`에 read-only package credential을 표준 입력으로 전달한다.
-토큰은 URL, argv, release lock, ConfigMap 또는 로그에 기록하지 않는다.
+Setup CLI 공개 정책과 Console 배포물 접근 정책은 분리한다. Console GHCR package가 private이면 `doctor`, `resolve`, `bootstrap`, `upgrade`에 read-only package credential을 표준 입력으로 전달한다. 토큰은 URL, argv, release lock, ConfigMap 또는 로그에 기록하지 않는다.
 
-## 1. Windows amd64 자동 설치
+## 2. 설치
 
-공개 GitHub API에서 exact tag의 immutable release와 installer asset digest를 확인한 뒤 실행한다.
+설치기는 세 가지 선택 방식을 제공한다.
+
+| 선택 | 의미 |
+|---|---|
+| 옵션 없음 | 설치기 자체가 발행된 exact immutable Release 설치 |
+| `--version <semver>` | 지정한 Setup CLI 버전의 exact immutable Release 설치 |
+| `--channel <edge|candidate|stable>` | 공개 채널 포인터를 한 번 해석한 뒤 그 exact immutable Release 설치 |
+
+`--version`과 `--channel`은 상호 배타적이다. 채널 포인터는 Setup CLI package 배포 선택자이며 Console OCI 채널이나 설치 lock을 대신하지 않는다. 현재 `edge`는 `setup-v0.5.0-edge.18`, `candidate`와 `stable`은 `HOLD`다. 설치가 끝난 뒤 Console 배포 채널은 `opensphere-setup doctor/bootstrap --release ...`로 별도 선택하고, Console exact release는 검증된 `--lock`으로 고정한다.
+
+### 2.1 Windows amd64
+
+Release 페이지에서 `Install-OpenSphereSetup.exe`를 내려받아 실행한다.
 
 ```powershell
-$repository = 'opensphere-platform/OpenSphere-Setup-CLI'
-$release = 'setup-v0.5.0-edge.17'
-$headers = @{
-  Accept = 'application/vnd.github+json'
-  'X-GitHub-Api-Version' = '2026-03-10'
-  'User-Agent' = 'OpenSphere-Setup-Installer-Bootstrap'
-}
-$metadata = Invoke-RestMethod `
-  -Uri "https://api.github.com/repos/$repository/releases/tags/$release" `
-  -Headers $headers
-if ($metadata.immutable -ne $true -or $metadata.tag_name -ne $release -or $metadata.draft) {
-  throw 'Setup release is not the requested published immutable release.'
-}
-$asset = @($metadata.assets | Where-Object { $_.name -eq 'Install-OpenSphereSetup.ps1' })
-if ($asset.Count -ne 1 -or $asset[0].digest -notmatch '^sha256:[0-9a-f]{64}$') {
-  throw 'Canonical installer asset or digest is missing.'
-}
-$installer = Join-Path $env:TEMP 'Install-OpenSphereSetup.ps1'
-Invoke-WebRequest -Uri $asset[0].browser_download_url -OutFile $installer -MaximumRedirection 5
-$actual = 'sha256:' + (Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
-if ($actual -ne $asset[0].digest) { throw 'Installer asset digest mismatch.' }
-& $installer
+.\Install-OpenSphereSetup.exe --channel edge
+# 또는 exact Setup CLI 버전 고정
+.\Install-OpenSphereSetup.exe --version 0.5.0-edge.18
 opensphere-setup version
 ```
 
-version-bound installer는 동일 immutable release의 Windows archive와 `SHA256SUMS`를 내려받고,
-두 asset의 GitHub SHA-256 digest와 archive의 `SHA256SUMS` 항목을 교차 검증한다. 이후 자체 포함
-runtime을 `%LOCALAPPDATA%\OpenSphere\Setup\<version>`에 설치하고 사용자 PATH에
-`opensphere-setup` shim을 등록한 뒤 실제 `version`을 확인한다.
+체크섬까지 명시적으로 확인하려면 다음 절차를 사용한다.
 
-## 2. Linux
-
-아키텍처에 맞춰 `amd64` 또는 `arm64`를 선택한다.
-
-```bash
-set -euo pipefail
-release=setup-v0.5.0-edge.17
-architecture=amd64
-repository=https://github.com/opensphere-platform/OpenSphere-Setup-CLI
-target="$PWD/opensphere-setup-download"
-mkdir -p "$target"
-cd "$target"
-curl --fail --location --proto '=https' --tlsv1.2 \
-  "$repository/releases/download/$release/opensphere-setup-linux-${architecture}.tar.gz" \
-  --output "opensphere-setup-linux-${architecture}.tar.gz"
-curl --fail --location --proto '=https' --tlsv1.2 \
-  "$repository/releases/download/$release/SHA256SUMS" \
-  --output SHA256SUMS
-grep " opensphere-setup-linux-${architecture}.tar.gz$" SHA256SUMS | sha256sum --check
-tar -xzf "opensphere-setup-linux-${architecture}.tar.gz"
-SETUP="$PWD/opensphere-setup-linux-${architecture}/opensphere-setup"
-"$SETUP" version
+```powershell
+$release = 'setup-v0.5.0-edge.18'
+$base = "https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/$release"
+Invoke-WebRequest -UseBasicParsing "$base/Install-OpenSphereSetup.exe" -OutFile .\Install-OpenSphereSetup.exe
+Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS" -OutFile .\SHA256SUMS
+$expected = ((Get-Content .\SHA256SUMS | Where-Object { $_ -match ' Install-OpenSphereSetup[.]exe$' }) -split '\s+')[0]
+$actual = (Get-FileHash .\Install-OpenSphereSetup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($actual -ne $expected) { throw 'Windows installer checksum mismatch.' }
+.\Install-OpenSphereSetup.exe
 ```
 
-## 3. macOS
+EXE는 exact tag의 공개 GitHub Release가 published·immutable인지 확인하고, `Install-OpenSphereSetup.ps1`의 GitHub asset digest를 검증한 뒤 실행한다. PowerShell 설치기는 Windows runtime archive의 GitHub digest와 `SHA256SUMS`를 다시 교차 검증한다. 검증된 runtime은 `%LOCALAPPDATA%\OpenSphere\Setup\<version>`에 설치되고 `%LOCALAPPDATA%\OpenSphere\bin\opensphere-setup.cmd`가 사용자 PATH에 등록된다.
 
-Intel은 `amd64`, Apple Silicon은 `arm64`를 선택한다.
+현재 dge EXE는 Authenticode 서명 전 단계다. 조직 정책이나 SmartScreen이 실행을 차단하면 경고를 우회하지 말고, 위 SHA-256을 확인한 뒤 검토 가능한 PowerShell 대체 설치기를 사용한다. stable Windows 설치기 발행에는 신뢰 가능한 코드 서명 인증서와 서명 검증 gate가 필요하다. Visual Studio 설치 여부만으로 실행 파일의 게시자 신뢰가 생기지는 않는다.
+
+### 2.2 Linux amd64/arm64 · macOS Intel/Apple Silicon
+
+같은 셸 설치기가 OS와 CPU 아키텍처를 자동 판별한다. 실행 전에 설치기 자체의 체크섬을 확인한다.
 
 ```bash
-set -euo pipefail
-release=setup-v0.5.0-edge.17
-architecture="$(test "$(uname -m)" = arm64 && echo arm64 || echo amd64)"
-repository=https://github.com/opensphere-platform/OpenSphere-Setup-CLI
-target="$PWD/opensphere-setup-download"
-mkdir -p "$target"
-cd "$target"
+set -eu
+release=setup-v0.5.0-edge.18
+base="https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/$release"
 curl --fail --location --proto '=https' --tlsv1.2 \
-  "$repository/releases/download/$release/opensphere-setup-darwin-${architecture}.tar.gz" \
-  --output "opensphere-setup-darwin-${architecture}.tar.gz"
+  "$base/install-opensphere-setup.sh" --output install-opensphere-setup.sh
 curl --fail --location --proto '=https' --tlsv1.2 \
-  "$repository/releases/download/$release/SHA256SUMS" \
-  --output SHA256SUMS
-expected="$(grep " opensphere-setup-darwin-${architecture}.tar.gz$" SHA256SUMS | awk '{print $1}')"
-actual="$(shasum -a 256 "opensphere-setup-darwin-${architecture}.tar.gz" | awk '{print $1}')"
+  "$base/SHA256SUMS" --output SHA256SUMS
+expected="$(awk '$2 == "install-opensphere-setup.sh" { print $1 }' SHA256SUMS)"
+if command -v sha256sum >/dev/null 2>&1; then
+  actual="$(sha256sum install-opensphere-setup.sh | awk '{print $1}')"
+else
+  actual="$(shasum -a 256 install-opensphere-setup.sh | awk '{print $1}')"
+fi
 test -n "$expected" && test "$actual" = "$expected"
-tar -xzf "opensphere-setup-darwin-${architecture}.tar.gz"
-SETUP="$PWD/opensphere-setup-darwin-${architecture}/opensphere-setup"
-"$SETUP" version
+chmod +x install-opensphere-setup.sh
+./install-opensphere-setup.sh --channel edge
+# 또는 exact Setup CLI 버전 고정
+./install-opensphere-setup.sh --version 0.5.0-edge.18
+opensphere-setup version
 ```
 
+기본 설치 위치는 Linux에서 `${XDG_DATA_HOME:-$HOME/.local/share}/opensphere/setup/<version>`, macOS에서 `$HOME/Library/Application Support/OpenSphere/Setup/<version>`이다. 명령 링크는 `$HOME/.local/bin/opensphere-setup`에 만든다. 이 경로가 PATH에 없으면 설치기가 추가할 `export PATH=...` 명령을 출력하며 셸 설정 파일을 임의로 수정하지 않는다. 설치 위치는 `OPENSPHERE_SETUP_INSTALL_ROOT`, 명령 디렉터리는 `OPENSPHERE_SETUP_BIN_DIR`로 명시할 수 있다.
+
+### 2.3 Windows PowerShell 대체 경로
+
+EXE 실행이 정책상 허용되지 않는 관리 호스트에서는 같은 immutable Release의 `Install-OpenSphereSetup.ps1`을 내려받아 SHA-256을 확인한 뒤 실행한다. 이 스크립트는 EXE가 호출하는 것과 동일한 설치 구현이다.
+
+```powershell
+.\Install-OpenSphereSetup.ps1 -Channel edge
+# 또는 exact Setup CLI 버전 고정
+.\Install-OpenSphereSetup.ps1 -Version 0.5.0-edge.18
+opensphere-setup version
+```
+
+## 3. 무결성과 플랫폼 제약
 GitHub Immutable Releases가 tag와 asset 변경을 잠근다. macOS `edge` SEA는 생성 후 ad-hoc 서명하고
 아카이브를 다시 풀어 실행까지 검증한다. 이 서명은 Apple Developer ID notarization을 대체하지 않으며,
 운영 승격에서는 별도 Developer ID 서명·notarization gate가 필요하다.

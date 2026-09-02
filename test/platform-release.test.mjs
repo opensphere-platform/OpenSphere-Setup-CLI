@@ -29,11 +29,11 @@ test('public release publisher fails closed for a non-public repository', () => 
   assert.equal(pkg.private, true, 'npm publication remains deliberately disabled');
 });
 
-test('public publisher reads the governed private Console source through one scoped secret', () => {
-  assert.match(workflow, /OPENSPHERE_CONSOLE_SOURCE_TOKEN/);
-  assert.match(workflow, /token: [$][{][{] secrets[.]OPENSPHERE_CONSOLE_SOURCE_TOKEN [}][}]/);
+test('public publisher checks out the governed public Console source without a stored secret', () => {
+  assert.match(workflow, /Checkout canonical Console manifests/);
   assert.match(workflow, /persist-credentials: false/);
-  assert.doesNotMatch(workflow, /token:\s*[$][{][{]\s*github[.]token/);
+  assert.doesNotMatch(workflow, /OPENSPHERE_CONSOLE_SOURCE_TOKEN/);
+  assert.doesNotMatch(workflow, /token:\s*[$][{][{]\s*(?:github[.]token|secrets[.])/);
 });
 
 test('Linux release is a self-contained SEA with embedded certificate assets', () => {
@@ -61,7 +61,8 @@ test('portable archives bundle their required runtimes, including Linux libatomi
 
 test('public platform installation is unauthenticated and checksum verified', () => {
   assert.match(documentation, /공개 GitHub Release/);
-  assert.match(documentation, /api[.]github[.]com[/]repos[/][$]repository[/]releases[/]tags[/][$]release/);
+  assert.match(documentation, /Install-OpenSphereSetup[.]exe/);
+  assert.match(documentation, /install-opensphere-setup[.]sh/);
   assert.match(documentation, /Invoke-WebRequest/);
   assert.match(documentation, /curl --fail --location/);
   assert.match(documentation, /SHA256SUMS/);
