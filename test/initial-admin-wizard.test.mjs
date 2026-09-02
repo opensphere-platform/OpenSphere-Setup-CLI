@@ -29,10 +29,13 @@ test('Setup never prints or persists a credential-reset URL', () => {
 test('clean-cluster acceptance uses Supabase bootstrap and password login contracts', () => {
   assert.match(acceptance, /\/api\/identity\/bootstrap\/status/);
   assert.match(acceptance, /\/api\/identity\/bootstrap/);
-  assert.match(acceptance, /\/auth\/v1\/token\?grant_type=password/);
-  assert.match(acceptance, /identity\.users/);
-  assert.match(acceptance, /group\?\.name/);
+  assert.match(acceptance, /\/api\/identity\/session\/login/);
+  assert.match(acceptance, /set-cookie/);
+  assert.match(acceptance, /\/api\/identity\/session/);
+  assert.match(acceptance, /subjectId/);
   assert.match(acceptance, /console-admins/);
+  assert.doesNotMatch(acceptance, /\/auth\/v1\/token|authorization[^\n]*bearer/i);
+  assert.match(acceptance, /access_token\|refresh_token\|bearer/);
   assert.doesNotMatch(acceptance, /identity\.operators|operator\.roles/);
   assert.doesNotMatch(acceptance, /\/bff\/|\/oauth2\/openid\/|KANIDM/i);
   assert.doesNotMatch(acceptance, /console\.log\([^\n]*(password|secret)/i);

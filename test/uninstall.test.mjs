@@ -63,6 +63,7 @@ test('managed uninstall deletes namespaces, retained PVs, then only OpenSphere C
       deleteManagedNamespace: (name) => events.push(`delete-ns:${name}`),
       waitForManagedNamespaceDeletion: (name) => events.push(`wait-ns:${name}`),
       deleteManagedPersistentVolume: (name) => events.push(`delete-pv:${name}`),
+      listManagedCrdInstances: (name) => { events.push(`guard-crd:${name}`); return []; },
       deleteManagedCrd: (name) => events.push(`delete-crd:${name}`),
       deleteManagedClusterRbac: (name) => events.push(`delete-rbac:${name}`)
     }
@@ -80,10 +81,40 @@ test('managed uninstall deletes namespaces, retained PVs, then only OpenSphere C
     ...MANAGED_NAMESPACES.map((name) => `wait-ns:${name}`),
     'delete-pv:pvc-retained-a',
     'delete-pv:pvc-retained-b',
+    ...MANAGED_CRDS.map((name) => `guard-crd:${name}`),
     ...MANAGED_CRDS.map((name) => `delete-crd:${name}`),
     ...MANAGED_CLUSTER_POLICIES.map((name) => `delete-rbac:${name}`),
     ...MANAGED_CLUSTER_RBAC.map((name) => `delete-rbac:${name}`)
   ]);
+});
+
+test('managed uninstall preserves shared CRDs when any cluster-wide instance remains', async () => {
+  const events = [];
+  await assert.rejects(
+    uninstallManagedInstallation({
+      runtime: {
+        readInstallationLock: () => ({ releaseDigest: 'sha256:managed' }),
+        readInstallationState: () => ownedInstallationState(),
+        existingOpenSphereNamespaces: () => [...MANAGED_NAMESPACES, 'opensphere-developer'],
+        listManagedPersistentVolumes: () => [],
+        deleteManagedNamespace: (name) => events.push(`delete-ns:${name}`),
+        waitForManagedNamespaceDeletion: (name) => events.push(`wait-ns:${name}`),
+        listManagedCrdInstances: (name) => {
+          events.push(`guard-crd:${name}`);
+          return name === MANAGED_CRDS[0] ? ['opensphere-developer/developer-plugin'] : [];
+        },
+        deleteManagedCrd: (name) => events.push(`delete-crd:${name}`),
+        deleteManagedClusterRbac: (name) => events.push(`delete-rbac:${name}`)
+      }
+    }),
+    /Refusing to delete shared custom resource definition.*opensphere-developer\/developer-plugin/
+  );
+  assert.deepEqual(events, [
+    ...MANAGED_NAMESPACES.map((name) => `delete-ns:${name}`),
+    ...MANAGED_NAMESPACES.map((name) => `wait-ns:${name}`),
+    `guard-crd:${MANAGED_CRDS[0]}`
+  ]);
+  assert.equal(events.some((event) => event.startsWith('delete-crd:') || event.startsWith('delete-rbac:')), false);
 });
 
 test('managed uninstall refuses an installation lock that does not own every namespace', async () => {

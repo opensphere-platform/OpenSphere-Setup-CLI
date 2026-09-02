@@ -1,11 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Capture only release/runtime facts needed for a later independent audit.
+# Capture only target bootstrap release/runtime facts for independent audit.
 # Secret objects and their data are deliberately never queried or written.
 context="${1:?Kubernetes context is required}"
 output_dir="${2:?output directory is required}"
 mkdir -p "$output_dir"
+
+namespaces=(
+  opensphere-console-data
+  opensphere-console-change
+  opensphere-monitoring
+  opensphere-console
+  opensphere-system
+)
 
 capture() {
   local file="$1"
@@ -25,37 +33,45 @@ capture() {
 
 capture kubernetes-version.json kubectl --context "$context" version -o json
 capture namespaces.yaml kubectl --context "$context" get namespace \
-  opensphere-console-data \
-  opensphere-console-change \
-  opensphere-console \
-  opensphere-osaa-credentials \
-  opensphere-foundation \
-  opensphere-system \
+  "${namespaces[@]}" -o yaml
+
+for namespace in "${namespaces[@]}"; do
+  capture "workloads-$namespace.yaml" kubectl --context "$context" -n "$namespace" get \
+    deployment,statefulset,daemonset,job,cronjob -o yaml
+  capture "services-$namespace.yaml" kubectl --context "$context" -n "$namespace" get \
+    service,endpointslice -o yaml
+  capture "network-policies-$namespace.yaml" kubectl --context "$context" -n "$namespace" get \
+    networkpolicy -o yaml
+  capture "recent-events-$namespace.txt" kubectl --context "$context" -n "$namespace" get \
+    events --sort-by=.lastTimestamp
+done
+
+capture installation-lock.yaml kubectl --context "$context" -n opensphere-console get \
+  configmap/opensphere-installation-lock -o yaml
+capture installation-state.yaml kubectl --context "$context" -n opensphere-console get \
+  configmap/opensphere-installation-state -o yaml
+capture installation-evidence.yaml kubectl --context "$context" -n opensphere-console get \
+  configmap/opensphere-installation-evidence -o yaml
+capture release-inventory.yaml kubectl --context "$context" -n opensphere-console get \
+  configmap/opensphere-release-inventory -o yaml
+
+capture target-crds.yaml kubectl --context "$context" get \
+  customresourcedefinition/uipluginpackages.plugins.opensphere.io \
+  customresourcedefinition/uipluginregistrations.plugins.opensphere.io \
   -o yaml
-capture pods-wide.txt kubectl --context "$context" get pods -A -o wide
-capture services.yaml kubectl --context "$context" get service -A -o yaml
-capture endpoint-slices.yaml kubectl --context "$context" get endpointslice -A -o yaml
-capture installation-lock.yaml kubectl --context "$context" -n opensphere-console get configmap opensphere-installation-lock -o yaml
-capture release-inventory.yaml kubectl --context "$context" -n opensphere-console get configmap opensphere-release-inventory -o yaml
-capture network-policies.yaml kubectl --context "$context" get networkpolicy -A -o yaml
-# The base manifests do not share a cosmetic common label on cluster-scoped
-# RBAC. Capture the exact managed names instead of silently producing an empty
-# label-filtered List.
-capture opensphere-cluster-rbac.yaml kubectl --context "$context" get \
-  clusterrole/dupa-module-profile-installer \
-  clusterrole/dupa-console-evidence-reader \
-  clusterrole/dupa-clidownload-reader \
-  clusterrole/opensphere-console-backend \
-  clusterrole/opensphere-console-osaa-gateway-environment-reader \
-  clusterrole/opensphere-module-cluster-observer-v1 \
-  clusterrole/opensphere-module-cluster-his-manager-v1 \
-  clusterrole/opensphere-module-cluster-infrastructure-manager-v1 \
-  clusterrolebinding/dupa-module-profile-installer \
-  clusterrolebinding/dupa-console-evidence-reader \
-  clusterrolebinding/dupa-clidownload-reader \
-  clusterrolebinding/opensphere-console-backend \
-  clusterrolebinding/opensphere-console-osaa-gateway-environment-reader \
+capture target-cluster-rbac.yaml kubectl --context "$context" get \
+  clusterrole/opensphere-registry \
+  clusterrolebinding/opensphere-registry \
   -o yaml
-capture recent-events.txt kubectl --context "$context" get events -A --sort-by=.lastTimestamp
-capture audit-runtime-boundary.txt kubectl --context "$context" -n opensphere-console-data exec statefulset/opensphere-supabase-postgres -- \
-  psql -U supabase_admin -d postgres -Atc "SELECT rolname || '|superuser=' || rolsuper || '|bypassrls=' || rolbypassrls FROM pg_roles WHERE rolname IN ('opensphere_console_backend','opensphere_osaa_gateway','supabase_auth_admin','supabase_storage_admin') ORDER BY rolname; SELECT 'audit_event_rls=' || relrowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='audit' AND c.relname='event';"
+capture target-admission.yaml kubectl --context "$context" get \
+  validatingadmissionpolicy/opensphere-console-manual-ui-contract \
+  validatingadmissionpolicy/opensphere-console-image-integrity-workload \
+  validatingadmissionpolicy/opensphere-console-image-integrity-cronjob \
+  validatingadmissionpolicybinding/opensphere-console-manual-ui-contract \
+  validatingadmissionpolicybinding/opensphere-console-image-integrity-workload \
+  validatingadmissionpolicybinding/opensphere-console-image-integrity-cronjob \
+  -o yaml
+
+capture audit-runtime-boundary.txt kubectl --context "$context" -n opensphere-console-data exec \
+  statefulset/opensphere-supabase-postgres -- psql -U supabase_admin -d postgres -Atc \
+  "SELECT rolname || '|superuser=' || rolsuper || '|bypassrls=' || rolbypassrls FROM pg_roles WHERE rolname IN ('console_api','console_extension_controller','opensphere_console_api_runtime','opensphere_console_extension_runtime','supabase_auth_admin','supabase_storage_admin') ORDER BY rolname; SELECT 'console_audit_event_rls=' || relrowsecurity || '|forced=' || relforcerowsecurity FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='console_audit' AND c.relname='event';"

@@ -8,7 +8,7 @@ OpenSphere OS Console의 신뢰 가능한 최초 설치, 재개, 검증, 업그�
 사용자·운영자에게 노출하는 유일한 진입점은 `opensphere-setup`이다. 저장소 위치:
 
 ```text
-OpenSphere-Platform-V2/OpenSphere-Setup-CLI
+OpenSphere-Platform/OpenSphere-Setup-CLI
 ```
 
 Windows에서 명령 등록:
@@ -52,71 +52,65 @@ OpenSphere 배너를 표시한다. 파이프·CI 및 `version` 같은 기계 판
 | Setup 실행 호스트 | Windows amd64, Linux amd64/arm64, macOS amd64/arm64 |
 | Kubernetes | v1.30 이상 |
 | Kubernetes 노드 | linux/amd64, linux/arm64 |
-| 영속 볼륨 요청 | Supabase 70Gi + Gitea 18Gi = 총 88Gi |
+| 영속 볼륨 요청 | Supabase 70Gi + Gitea 18Gi + Beszel 10Gi = 총 98Gi |
 | Docker Desktop 검증 시작 프로필 | 10 CPU, 16GiB RAM; 최소값이 아니라 검증된 시작점 |
 
-StorageClass가 88Gi를 provision할 수 있는지와 실제 물리 디스크 여유 공간은 운영자가 확인한다.
+StorageClass가 98Gi를 provision할 수 있는지와 실제 물리 디스크 여유 공간은 운영자가 확인한다.
 macOS 준비·설치·인증서 신뢰 절차는
 [`docs/MACOS-INSTALL.md`](docs/MACOS-INSTALL.md)를 따른다.
 
 ## 현재 설치 방법론
 
+클러스터 운영자는 지원 버전의 건강한 Kubernetes, Ready 노드, StorageClass와 필요한 권한을 제공한다. Setup은 Docker Desktop이나 kubelet을 재시작하지 않고 Pod Security를 낮추지 않는다. node health 또는 Beszel Agent의 root/read-only hostPath 계약이 admission 정책과 충돌하면 변경 전에 원인을 표시하고 중단한다.
+
 Setup은 태그를 그대로 설치하지 않는다.
 
-1. 선택한 채널의 Release BOM 또는 local-edge release lock을 조회한다.
-2. GitHub Actions provenance, SPDX SBOM, 소스 revision, 13개 이미지 digest를 검증한다.
-3. 검증된 immutable release lock을 로컬과 클러스터에 기록한다.
-4. 정확히 그 소스 revision의 설치 스크립트, SQL migration, Kubernetes manifest를 받는다.
-5. 모든 이미지 슬롯을 BOM의 `ghcr.io/...@sha256:...` 값으로 치환한다.
-6. Supabase와 Gitea를 먼저 설치하고 migration/control-plane seed를 완료한다.
-7. Backend, DUPA, Notification, OAA, Main Shell을 설치한다.
-8. 데이터 경계, 서비스 endpoint, 이미지 digest, Storage/Gitea 쓰기 왕복까지 검증한다.
-9. Console이 제공하는 `os` CLI artifact를 digest 검증 후 설치한다.
-10. 사람 관리자는 Console의 Supabase 최초 접속 Wizard에서 직접 생성한다.
+1. 선택 채널의 Release BOM 또는 local-edge release lock을 조회한다.
+2. canonical 18개와 auxiliary 3개의 source revision, repository, exact image digest, release scope를 검증한다.
+3. installation 상태를 `Preparing`으로 만들고 immutable lock과 materialized source를 준비한다.
+4. Supabase, Gitea, Beszel bootstrap core를 설치하고 migration, control-plane seed, monitoring bootstrap Job을 완료한다.
+5. Console API(C_API), Extension Controller(C_EXT), Registry, OS CLI와 Main Shell을 digest-pinned image로 설치한다.
+6. 데이터 경계, rollout, endpoint, image digest, Storage/Gitea/Beszel 동작을 검증한다.
+7. 검증 증거를 기록한 뒤에만 installation 상태를 `Ready`로 전이한다.
+8. 이후 optional module과 OS Shell 활성화는 Console 설정 기능이 담당한다.
 
-설치 중 생성한 암호·키는 argv나 release lock에 넣지 않는다. 기존 Secret이 있으면 누락된
-키만 보완하며 정상 재개에서 암묵적으로 회전하지 않는다.
+설치 중 생성한 암호와 키는 argv나 release lock에 넣지 않는다. 기존 Secret이 있으면 누락된 키만 보완하며 정상 재개에서 암묵적으로 회전하지 않는다.
 
 ## 기본 런타임
 
-Release BOM/lock의 필수 13개 컴포넌트:
+Release BOM의 canonical component는 18개다. 이 중 Setup이 fresh bootstrap에서 배포하는 core는 13개다.
 
-| 컴포넌트 | 역할 |
+| bootstrap core | 역할 |
 |---|---|
 | `console` | Main Shell UI |
-| `backend` | Console API, RBAC, bootstrap |
-| `dupaController` | 플랫폼·플러그인 control plane |
-| `oaaGateway` | OAA Gateway |
-| `oaaGovernedAdapter` | OAA governed adapter |
-| `notificationDispatcher` | 외부 알림 전달 |
-| `supabasePostgres` | Console 데이터·감사·Auth·Storage DB |
-| `supabaseAuth` | 사용자 인증과 canonical subject |
-| `supabaseRest` | PostgREST |
-| `supabaseStorage` | Console object storage |
-| `gitea` | 선언 변경·이력 권위 |
-| `giteaPostgres` | Gitea 전용 DB |
-| `recovery` | 암호화된 S3 archive와 격리 restore drill 전용 executor |
+| `consoleApi` | Console API(C_API), identity와 operation 경계 |
+| `extensionController` | Extension Controller(C_EXT), 플러그인 control plane |
+| `registry` | extension registry |
+| `supabasePostgres`, `supabaseAuth`, `supabaseRest`, `supabaseStorage` | 데이터와 identity backbone |
+| `gitea`, `giteaPostgres` | 선언 변경, review와 이력 권위 |
+| `beszelHub`, `beszelAgent`, `beszelBootstrap` | baseline host observability |
 
-권위 경계:
+나머지 canonical 5개는 lock에 exact digest를 보존하되 Setup이 암묵 배포하지 않는다. Console이 설치 후 `osaaGateway`, `osdst`, `osaaGovernedAdapter`, `notificationDispatcher`, `recovery`를 활성화한다.
 
-- Supabase Auth의 `auth.users.id`가 사용자 canonical subject이다.
-- Supabase PostgreSQL이 Console state, RBAC, audit, OAA ledger를 소유한다.
-- Supabase Storage가 Console object storage를 소유한다.
-- Gitea는 선언형 desired state, review, signed change history를 소유한다.
-- Kubernetes Secret은 런타임 자격증명 전달 수단이지 사용자 identity authority가 아니다.
+Auxiliary artifact는 `cliArtifacts`, `osShellControl`, `osShellRuntime` 3개다. Setup은 bootstrap 완료 후 `cliArtifacts`를 설치한다. OS Shell 2개는 Console 활성화에 필요한 digest를 lock에서 제공하며 bootstrap core에는 포함하지 않는다.
+
+Supabase Auth의 `auth.users.id`가 사용자 canonical subject다. Supabase PostgreSQL은 Console state, RBAC와 audit을 소유하고 Supabase Storage는 object storage를 소유한다. Gitea는 선언형 desired state, review와 signed change history를 소유한다. Kubernetes Secret은 runtime credential 전달 수단이며 사용자 identity authority가 아니다.
+
+DUPA control-plane 책임은 C_EXT에 통합되었다. `backend`와 `dupaController`는 legacy lock 복구에서만 해석하며 target canonical component가 아니다.
 
 ## 네임스페이스와 영속 볼륨
 
-Setup이 소유하는 네임스페이스:
+Setup이 소유하는 namespace는 정확히 다음 5개다.
 
 ```text
 opensphere-console-data
 opensphere-console-change
+opensphere-monitoring
 opensphere-console
-opensphere-oaa-credentials
-opensphere-foundation
 opensphere-system
 ```
+
+`opensphere-developer*`, `opensphere-www`, Foundation, Recovery와 optional module namespace는 다른 owner의 영역이다. bootstrap, verify, E2E cleanup과 uninstall은 이들을 prefix로 추정하거나 삭제하지 않는다.
 
 필수 PVC:
 
@@ -125,11 +119,10 @@ opensphere-console-data/opensphere-supabase-postgres-data
 opensphere-console-data/opensphere-supabase-storage-data
 opensphere-console-change/opensphere-gitea-postgres-data
 opensphere-console-change/opensphere-gitea-data
+opensphere-monitoring/beszel-hub-data
 ```
 
-각 네임스페이스에는 `opensphere-ghcr-pull`이 생성되고 모든 workload가 이를 명시한다.
-공개 package는 anonymous docker config를, 비공개 package는 stdin으로 받은 GHCR credential을
-사용한다.
+총 요청량은 98Gi다. 각 Setup 소유 namespace에는 `opensphere-ghcr-pull`이 생성되고 모든 workload가 이를 명시한다. 공개 package는 anonymous docker config를, 비공개 package는 stdin으로 받은 GHCR credential을 사용한다.
 
 ## Fresh bootstrap
 
@@ -145,13 +138,14 @@ opensphere-setup doctor `
 
 `doctor`는 Setup 호스트 플랫폼, Node runtime, `kubectl`·`pwsh`·`gh`, Kubernetes
 v1.30+, Ready 노드와 권한, StorageClass, 신규 설치 포트와 채널별 공급망 정책을
-확인한 뒤 46개 필수 manifest·migration·installer를 실제 source revision에서 모두
-다운로드·렌더링한다. 이 단계가 실패하면 namespace, installation lock과 Secret을 만들지
-않는다. PVC 88Gi는 요청량으로 보고하며 실제 provisioner 용량을 대신 보증하지 않는다.
+확인한 뒤 target manifest, migration과 installer를 실제 source revision에서 모두
+다운로드하고 렌더링한다. 이 단계가 실패하면 namespace, installation lock과 Secret을 만들지
+않는다. PVC 98Gi는 요청량으로 보고하며 실제 provisioner 용량을 대신 보증하지 않는다.
 
 `edge`는 개발 클러스터의 Linux 노드 아키텍처만 포함한 host-native 이미지도 허용한다.
 로컬 발행본은 `localhost`, `pre-ga`, `ga-eligible=false`, 날짜 태그와 전체 source
-revision 라벨 및 `local-<commit12>` immutable tag가 13개 이미지에서 모두 일치해야 한다.
+revision 라벨 및 immutable release tag가 canonical 18개와 auxiliary 3개에서 일치해야 한다.
+각 artifact의 `io.opensphere.release-scope`도 canonical 또는 auxiliary 역할과 일치해야 한다.
 local-edge lock은 서명된 Release BOM이라고 주장하지 않는다. 따라서 Supabase migration
 manifest는 exact source revision과 per-file SHA-256, manifest set digest, v2 predecessor
 lineage를 모두 검증해 결속하며 독립 BOM 서명은 GitHub release/GA 경로에서만 성립한다.
@@ -197,7 +191,7 @@ opensphere-setup bootstrap --release edge --context docker-desktop
 
 다음 경우에는 fail-closed한다.
 
-- release lock 없이 `opensphere-*` 네임스페이스가 이미 존재
+- installation lock의 소유권과 5개 Setup target namespace가 불일치
 - 설치된 release와 다른 digest를 bootstrap으로 덮어쓰려는 경우
 - 설치된 StorageClass 또는 Console origin을 즉석에서 변경하려는 경우
 - 서명 BOM과 이미지·source revision이 불일치
@@ -212,16 +206,15 @@ opensphere-setup verify --context docker-desktop --console https://localhost:111
 
 검증 범위:
 
-- 13개 release 이미지(2개 suspended recovery CronJob 포함)가 release lock digest와 정확히 일치
-- rollout, Pod Ready, 필요 시 restart 0
-- 12개 Service의 ready EndpointSlice
-- 필수 Secret key 존재와 4개 PVC `Bound`
-- Supabase schema, role, RLS 및 트랜잭션 append/read/rollback
-- Supabase Auth/REST health
-- Supabase Storage `put → get/byte compare → delete`
-- Gitea private repository, protected `main`, signed commit 정책
-- Gitea 임시 branch `commit → read → delete/revert → branch cleanup`
-- Backend readiness와 최초 관리자 상태
+- 13개 bootstrap core와 배포된 OS CLI image가 release lock의 exact digest와 일치
+- Console API, Extension Controller, Registry, Supabase, Gitea, Beszel Hub/Agent rollout과 Pod Ready
+- 필수 Service의 ready EndpointSlice, Secret key와 5개 PVC `Bound`
+- Supabase target schema, role, RLS와 트랜잭션 round trip
+- Supabase Auth/REST health와 Storage `put → get/byte compare → delete`
+- Gitea private repository, protected `main`, signed commit 정책과 임시 branch round trip
+- Beszel bootstrap Job 완료, Hub public key, private ClusterIP-only Hub와 Agent 연결
+- C_API readiness, cookie 기반 최초 관리자 상태
+- installation state의 ownership, `verification.completed=true`, 그리고 `Ready` phase
 
 검증 결과는 `opensphere-installation-evidence` ConfigMap에 비밀값 없이 기록한다.
 
@@ -245,13 +238,11 @@ lock 기록 전후, workload 일부 적용, Console 완료 후 `os` CLI 설치 �
 등의 복구 판단은
 [`docs/PARTIAL-FAILURE-RECOVERY.md`](docs/PARTIAL-FAILURE-RECOVERY.md)를 따른다.
 
-## OAA 기능 준비 상태
+## 설치 후 모듈 활성화
 
-기본 설치는 OAA schema와 PostgreSQL lexical search를 제공한다. 별도 OpenAI-compatible
-embedding provider, API key와 1536차원 모델이 검증되기 전에는 semantic vector search가
-`Degraded`이고 lexical fallback이 사용된다. 이는 플랫폼 bootstrap 실패가 아니지만 OAA의
-`fullyOperational` 조건은 아니다. 설치 후 OAA 관리 화면에서 provider를 등록하고 실제
-`/embeddings` probe가 성공해 `semanticSearch.ready=true`인지 확인한다.
+Setup은 available module을 자동으로 배포하거나 provider 설정을 추정하지 않는다. 관리자는 Console 설정에서 OAA, notification, recovery와 OS Shell을 활성화한다. Console은 최초 installation lock에 보존된 exact digest만 사용해야 하며 mutable `:edge`를 다시 해석하지 않는다.
+
+OAA semantic search는 별도 OpenAI-compatible embedding provider, API key와 승인된 model이 검증되기 전까지 `Degraded`일 수 있다. 이 상태는 bootstrap core 실패가 아니다. provider credential과 기능 준비 상태는 설치 후 Console이 관리한다.
 
 ## 채널 상태
 
@@ -274,7 +265,9 @@ opensphere-setup uninstall `
 ```
 
 Setup은 installation lock이 소유권을 증명한 네임스페이스, 관리 CRD/RBAC, 관련 retained PV만
-대상으로 삼는다. lock이 없거나 소유 네임스페이스가 불완전하면 제거를 거부한다.
+대상으로 삼는다. lock이 없거나 소유 네임스페이스가 불완전하면 제거를 거부한다. 관리 namespace가
+종료된 뒤 namespaced CRD의 cluster-wide 인스턴스를 다시 조회하며, 하나라도 남아 있으면 다른 제품의
+리소스로 간주해 CRD와 후속 cluster-scoped 삭제를 중단한다.
 
 개발 E2E 전체 초기화:
 
@@ -282,7 +275,9 @@ Setup은 installation lock이 소유권을 증명한 네임스페이스, 관리 
 npm run test:e2e:edge
 ```
 
-이 명령의 Docker Desktop cluster reset은 로컬 개발 전용이다.
+이 명령은 정확한 5개 Setup target namespace와 target-owned cluster-scoped resource만
+정리한다. `opensphere-developer*`, `opensphere-www` 등 다른 OpenSphere 제품 namespace의
+UID가 유지되는지 전후로 검증하며 cluster-wide reset은 수행하지 않는다.
 
 ## 폐기된 아키텍처
 
@@ -305,24 +300,25 @@ npm run test:e2e:edge
 ```text
 Install-OpenSphereSetup.ps1     Windows 사용자 명령 등록
 src/cli.mjs                    명령 진입점
-src/release.mjs                서명 BOM·attestation·digest lock
-src/bootstrap.mjs              설치·재개·업그레이드·rollback·제거
-src/verify.mjs                 설치 후 데이터/서비스/이미지 검증
-src/doctor.mjs                 무변경 로컬·클러스터 설치 사전진단
-src/reset-initial-admin.mjs    edge 개발용 Supabase 관리자 초기화
-scripts/e2e-clean-install.ps1  Docker Desktop clean-install 반복 검증
-scripts/e2e-first-admin.mjs    Supabase 최초 관리자 Wizard E2E
+src/installation-contract.mjs  Setup ownership와 installation phase 계약
+src/release.mjs                서명 BOM, attestation과 digest lock
+src/bootstrap.mjs              설치, 재개, 업그레이드, rollback과 제거
+src/verify.mjs                 설치 후 데이터, 서비스와 image 검증
+src/doctor.mjs                 무변경 로컬, 클러스터 설치 사전진단
+scripts/e2e-clean-install.ps1  target-scoped clean-install 반복 검증
+scripts/e2e-first-admin.mjs    C_API cookie 기반 최초 관리자 E2E
 ```
 
-실제 runtime 정본은 같은 release revision의 `OpenSphere-console`에 있다.
+실제 runtime 정본은 같은 release revision의 `OpenSphere-Console`에 있다.
 
 ```text
-backend/supabase/
-backend/gitea/
-backend/notification-dispatcher/
-backend/opensphere-console-backend/
-backend/opensphere-console-oaa-gateway/
-backend/oaa-governed-adapter/
-backend/dupa-control/
+migrations/
+backend/supabase/target/
+backend/gitea/bootstrap/
+deploy/baseline-monitoring/
+apps/console-api/
+apps/extension-controller/
+backend/registry/
+cmd/os-cli/
 deploy/opensphere-console.yaml
 ```

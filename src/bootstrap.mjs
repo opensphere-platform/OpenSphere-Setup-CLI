@@ -1700,6 +1700,43 @@ function listManagedPersistentVolumes() {
     .filter(Boolean);
 }
 
+export function listClusterWideCustomResourceInstances(crd) {
+  const definitionText = kubectl([
+    'get', 'customresourcedefinition', crd, '--ignore-not-found', '-o', 'json'
+  ], { capture: true }).trim();
+  if (!definitionText) return [];
+
+  let definition;
+  try {
+    definition = JSON.parse(definitionText);
+  } catch {
+    throw new Error(`Cannot verify custom resource definition before deletion: ${crd}`);
+  }
+  if (definition.metadata?.name !== crd || definition.spec?.scope !== 'Namespaced') {
+    throw new Error(`Refusing to delete custom resource definition with an unexpected identity or scope: ${crd}`);
+  }
+
+  let inventory;
+  try {
+    inventory = JSON.parse(kubectl([
+      'get', crd, '--all-namespaces', '-o', 'json'
+    ], { capture: true }));
+  } catch {
+    throw new Error(`Cannot verify cluster-wide custom resource instances before deletion: ${crd}`);
+  }
+  if (!Array.isArray(inventory?.items)) {
+    throw new Error(`Custom resource inventory is not an exact Kubernetes List: ${crd}`);
+  }
+  return inventory.items.map((item) => {
+    const namespace = String(item.metadata?.namespace ?? '');
+    const name = String(item.metadata?.name ?? '');
+    if (!namespace || !name) {
+      throw new Error(`Custom resource inventory contains an unscoped item: ${crd}`);
+    }
+    return `${namespace}/${name}`;
+  }).sort();
+}
+
 export async function uninstallManagedInstallation({ runtime = {} } = {}) {
   const operations = {
     readInstallationLock,
@@ -1707,6 +1744,7 @@ export async function uninstallManagedInstallation({ runtime = {} } = {}) {
     existingOpenSphereNamespaces,
     existingManagedNamespaces,
     listManagedPersistentVolumes,
+    listManagedCrdInstances: listClusterWideCustomResourceInstances,
     deleteManagedNamespace: (namespace) =>
       kubectl(['delete', 'namespace', namespace, '--ignore-not-found', '--wait=false']),
     waitForManagedNamespaceDeletion: (namespace) =>
@@ -1745,6 +1783,15 @@ export async function uninstallManagedInstallation({ runtime = {} } = {}) {
   for (const namespace of MANAGED_NAMESPACES) operations.waitForManagedNamespaceDeletion(namespace);
   for (const volume of persistentVolumes) operations.deleteManagedPersistentVolume(volume);
   const ownedClusterScoped = state.managedClusterScopedResources;
+  for (const crd of ownedClusterScoped.customResourceDefinitions) {
+    const instances = operations.listManagedCrdInstances(crd);
+    if (!Array.isArray(instances)) {
+      throw new Error(`Custom resource deletion guard returned an invalid inventory: ${crd}`);
+    }
+    if (instances.length) {
+      throw new Error(`Refusing to delete shared custom resource definition ${crd}; cluster-wide instances remain: ${instances.join(', ')}`);
+    }
+  }
   for (const crd of ownedClusterScoped.customResourceDefinitions) operations.deleteManagedCrd(crd);
   for (const resource of ownedClusterScoped.admissionPolicies) operations.deleteManagedClusterRbac(resource);
   for (const resource of ownedClusterScoped.clusterRbac) operations.deleteManagedClusterRbac(resource);

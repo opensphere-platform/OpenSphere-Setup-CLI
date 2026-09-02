@@ -1,5 +1,7 @@
 # Installation lock explicit-preservation recovery
 
+> **Historical incident contract:** this runbook preserves a reviewed legacy release. The workload and component counts below describe that historical lock, not the current 18-canonical + 3-auxiliary target catalog.
+
 This runbook is only for incident
 `2026-08-15-installation-lock-accidental-delete`. It reconstructs a missing
 `opensphere-console/opensphere-installation-lock` ConfigMap without treating
@@ -29,9 +31,9 @@ the observed `opensphere-edge-local-v1` key in `dupa-trusted-keys` and binds:
 - Gitea commit, path, Git blob ID, and raw document digest;
 - Applied request, operation, merge revision, and database receipt digest;
 - installation-evidence and release-inventory UID/resourceVersion;
-- all 15 canonical workload identities, digest-pinned images, Ready Pod
-  imageIDs, the two suspended-safe recovery CronJobs, and the 13-component
-  source mapping;
+- the historical 15 workload identities, digest-pinned images, Ready Pod
+  imageIDs, two suspended-safe recovery CronJobs, and historical 13-component
+  source mapping recorded by this incident plan;
 - the four Bound `hostpath` CBS PVCs, initial-admin ConfigMap, Backend URL,
   managed `shell-tls` metadata/type/key names, and trust ConfigMap identity;
 - semantic configuration reconstruction digest and approval reason;

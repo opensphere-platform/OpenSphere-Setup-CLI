@@ -63,4 +63,5 @@ opensphere-setup uninstall \
 ```
 
 이 명령은 유효한 installation lock이 소유권을 증명할 때만 동작한다. lock이 없는 namespace를
-추측으로 삭제하지 않는다.
+추측으로 삭제하지 않는다. 관리 namespace 종료 뒤에도 target CRD의 cluster-wide 인스턴스가 남아
+있으면 공유 중인 리소스로 보고 CRD 삭제를 거부한다.

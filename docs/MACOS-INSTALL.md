@@ -27,7 +27,7 @@ kubectl get storageclass
 ```
 
 검증된 Docker Desktop 시작 프로필은 10 CPU와 16GiB RAM이다. 이는 최소값이 아니다.
-OpenSphere PVC 요청 합계는 88Gi이므로 Docker Desktop VM 디스크와 선택한 StorageClass가
+OpenSphere PVC 요청 합계는 98Gi이므로 Docker Desktop VM 디스크와 선택한 StorageClass가
 이를 provision할 수 있어야 한다.
 
 ## 2. 비공개 GitHub 인증과 Setup 다운로드

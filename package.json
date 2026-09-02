@@ -12,7 +12,7 @@
     "test": "node --test --test-isolation=none test/*.test.mjs",
     "test:r2d2-transition": "node scripts/verify-r2d2-migration-transition.mjs",
     "pretest:e2e:edge": "npm install --global . --no-audit --no-fund",
-    "test:e2e:edge": "pwsh -NoProfile -File scripts/e2e-clean-install.ps1 -Channel edge -FullClusterReset"
+    "test:e2e:edge": "pwsh -NoProfile -File scripts/e2e-clean-install.ps1 -Channel edge"
   },
   "engines": {
     "node": ">=24"
