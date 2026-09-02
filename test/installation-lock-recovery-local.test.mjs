@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   link, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, unlink, writeFile,
 } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { sha256 } from '../src/installation-lock-recovery.mjs';
@@ -21,8 +21,9 @@ const mockCustody = {
   ensureDirectoryCustodyFn: async () => {},
   assertDirectoryCustodyFn: async () => {},
 };
+const windowsOnlyTest = process.platform === 'win32' ? test : test.skip;
 async function recoveryTemp(prefix) {
-  const testTempParent = join(dirname(tmpdir()), 'opensphere-installation-lock-recovery-tests');
+  const testTempParent = join(tmpdir(), 'opensphere-installation-lock-recovery-tests');
   await mkdir(testTempParent, { recursive: true });
   return mkdtemp(join(await realpath(testTempParent), prefix));
 }
@@ -97,7 +98,7 @@ test('actual Windows atomic move never overwrites an existing destination', asyn
   assert.equal(await readFile(destination, 'utf8'), 'DESTINATION');
 });
 
-test('explicit local operation quarantines exact bytes with no-overwrite journal and replay', async (t) => {
+windowsOnlyTest('explicit local operation quarantines exact bytes with no-overwrite journal and replay', async (t) => {
   const state = await layout();
   t.after(() => rm(state.root, { recursive: true, force: true }));
   const localState = await quarantineStaleInstallationLock({
@@ -127,7 +128,7 @@ test('explicit local operation quarantines exact bytes with no-overwrite journal
   assert.equal(journal.completedAt, '2026-08-16T02:01:00.000Z');
 });
 
-test('atomic rename response loss resumes from exact destination without pathname unlink', async (t) => {
+windowsOnlyTest('atomic rename response loss resumes from exact destination without pathname unlink', async (t) => {
   const state = await layout();
   t.after(() => rm(state.root, { recursive: true, force: true }));
   let renameCalls = 0;
@@ -154,7 +155,7 @@ test('atomic rename response loss resumes from exact destination without pathnam
   assert.deepEqual(replay, result);
 });
 
-test('confirmation, wrong bytes, existing destination drift, and hard links are fail closed', async (t) => {
+windowsOnlyTest('confirmation, wrong bytes, existing destination drift, and hard links are fail closed', async (t) => {
   const first = await layout();
   const second = await layout();
   const third = await layout();
@@ -179,7 +180,7 @@ test('confirmation, wrong bytes, existing destination drift, and hard links are 
   }), /hard-link ambiguity/u);
 });
 
-test('immutable intent wrapper rejects intent mutation before any source move', async (t) => {
+windowsOnlyTest('immutable intent wrapper rejects intent mutation before any source move', async (t) => {
   const state = await layout();
   t.after(() => rm(state.root, { recursive: true, force: true }));
   const intentPath = join(state.root, 'quarantine-intent.json');
@@ -192,7 +193,7 @@ test('immutable intent wrapper rejects intent mutation before any source move', 
   assert.deepEqual(await readFile(state.sourcePath), state.bytes);
 });
 
-test('quarantine rejects a junction-backed workspace before atomic rename', async (t) => {
+windowsOnlyTest('quarantine rejects a junction-backed workspace before atomic rename', async (t) => {
   const state = await layout();
   t.after(() => rm(state.root, { recursive: true, force: true }));
   const junction = join(state.root, 'workspace-junction');
@@ -205,7 +206,7 @@ test('quarantine rejects a junction-backed workspace before atomic rename', asyn
   assert.deepEqual(await readFile(state.sourcePath), state.bytes);
 });
 
-test('quarantine rejects a destination directory junction swap before atomic rename', async (t) => {
+windowsOnlyTest('quarantine rejects a destination directory junction swap before atomic rename', async (t) => {
   const state = await layout();
   t.after(() => rm(state.root, { recursive: true, force: true }));
   let checks = 0;

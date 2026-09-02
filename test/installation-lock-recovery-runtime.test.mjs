@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   link, lstat, mkdtemp, mkdir, readFile, readdir, realpath, rename, rm, symlink, unlink, writeFile,
 } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import {
@@ -35,7 +35,7 @@ const mockCustody = {
   },
 };
 async function recoveryTemp(prefix) {
-  const testTempParent = join(dirname(tmpdir()), 'opensphere-installation-lock-recovery-tests');
+  const testTempParent = join(tmpdir(), 'opensphere-installation-lock-recovery-tests');
   await mkdir(testTempParent, { recursive: true });
   return mkdtemp(join(await realpath(testTempParent), prefix));
 }
