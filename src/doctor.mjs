@@ -39,7 +39,8 @@ export function inspectLocalEnvironment({
   platform = process.platform,
   arch = process.arch,
   nodeVersion = process.versions.node,
-  inspect = inspectCommand
+  inspect = inspectCommand,
+  requireGh = true
 } = {}) {
   const host = `${platform}/${arch}`;
   if (!SUPPORTED_SETUP_HOSTS.has(host)) {
@@ -49,19 +50,16 @@ export function inspectLocalEnvironment({
   if (!Number.isInteger(nodeMajor) || nodeMajor < REQUIRED_NODE_MAJOR) {
     throw new Error(`OpenSphere Setup requires Node.js ${REQUIRED_NODE_MAJOR} or newer; found ${nodeVersion}`);
   }
-  return {
-    host,
-    node: `v${nodeVersion}`,
-    tools: {
-      kubectl: inspect('kubectl', ['version', '--client', '-o', 'json']),
-      pwsh: inspect('pwsh', ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()']),
-      gh: inspect('gh', ['--version'])
-    }
+  const tools = {
+    kubectl: inspect('kubectl', ['version', '--client', '-o', 'json']),
+    pwsh: inspect('pwsh', ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()'])
   };
+  if (requireGh) tools.gh = inspect('gh', ['--version']);
+  return { host, node: `v${nodeVersion}`, tools };
 }
 
 export function formatLocalEnvironment(evidence) {
-  return `${evidence.host}, Node ${evidence.node}, kubectl/pwsh/gh 확인`;
+  return `${evidence.host}, Node ${evidence.node}, ${Object.keys(evidence.tools).join('/')} 확인`;
 }
 
 export async function assertFreshConsolePortAvailable(consoleUrl, {

@@ -9,18 +9,53 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+$canonicalRepository = 'opensphere-platform/OpenSphere-Setup-CLI'
+$githubHeaders = @{
+  Accept = 'application/vnd.github+json'
+  'X-GitHub-Api-Version' = '2026-03-10'
+  'User-Agent' = 'OpenSphere-Setup-Installer'
+}
 
-function Invoke-GitHubCli {
-  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
-  $output = & gh @Arguments
-  if ($LASTEXITCODE -ne 0) {
-    throw "GitHub CLI failed: gh $($Arguments -join ' ')"
+function Get-ReleaseAsset {
+  param(
+    [Parameter(Mandatory)]$Release,
+    [Parameter(Mandatory)][string]$Name
+  )
+  $matches = @($Release.assets | Where-Object { $_.name -eq $Name })
+  if ($matches.Count -ne 1) {
+    throw "Public release must contain exactly one $Name asset; found $($matches.Count)."
   }
-  return $output
+  $asset = $matches[0]
+  if ($asset.digest -notmatch '^sha256:[0-9a-f]{64}$') {
+    throw "GitHub release asset $Name has no canonical SHA-256 digest."
+  }
+  $url = [Uri]$asset.browser_download_url
+  $expectedPrefix = "/$canonicalRepository/releases/download/$ReleaseTag/"
+  if ($url.Scheme -ne 'https' -or $url.Host -ne 'github.com' -or
+      -not $url.AbsolutePath.StartsWith($expectedPrefix, [StringComparison]::Ordinal)) {
+    throw "GitHub release asset URL is outside the canonical public release path: $Name"
+  }
+  return $asset
+}
+
+function Save-VerifiedReleaseAsset {
+  param(
+    [Parameter(Mandatory)]$Asset,
+    [Parameter(Mandatory)][string]$Destination
+  )
+  Invoke-WebRequest -Uri $Asset.browser_download_url -Headers $githubHeaders `
+    -MaximumRedirection 5 -OutFile $Destination
+  $actual = 'sha256:' + (Get-FileHash -LiteralPath $Destination -Algorithm SHA256).Hash.ToLowerInvariant()
+  if ($actual -ne $Asset.digest) {
+    throw "GitHub release asset digest mismatch for $($Asset.name): $actual"
+  }
 }
 
 if (-not $env:LOCALAPPDATA) {
   throw 'LOCALAPPDATA is required for the per-user OpenSphere installation.'
+}
+if ($Repository -ne $canonicalRepository) {
+  throw "Only the canonical public Setup repository is accepted: $canonicalRepository"
 }
 if ($ReleaseTag -notmatch '^setup-v(?<version>[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?)$') {
   throw "Invalid OpenSphere Setup release tag: $ReleaseTag"
@@ -29,13 +64,17 @@ $version = $Matches.version
 if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -notmatch 'AMD64') {
   throw "This installer supports Windows amd64 only: $env:PROCESSOR_ARCHITECTURE"
 }
-if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-  throw 'GitHub CLI (gh) is required. Install gh, then run gh auth login.'
+
+$releaseApi = "https://api.github.com/repos/$canonicalRepository/releases/tags/$ReleaseTag"
+Write-Host "[단계 01] 공개 OpenSphere Setup immutable release 조회 — $ReleaseTag"
+$release = Invoke-RestMethod -Uri $releaseApi -Headers $githubHeaders -MaximumRedirection 0
+if ($release.tag_name -ne $ReleaseTag -or $release.immutable -ne $true -or $release.draft -eq $true) {
+  throw 'GitHub release is not the requested published immutable Setup release.'
 }
 
-Invoke-GitHubCli auth status | Out-Host
-
 $archiveName = 'opensphere-setup-windows-amd64.zip'
+$archiveAsset = Get-ReleaseAsset -Release $release -Name $archiveName
+$checksumsAsset = Get-ReleaseAsset -Release $release -Name 'SHA256SUMS'
 $expectedVersion = "opensphere-setup $version"
 $temporaryBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath())
 $temporary = Join-Path $temporaryBase "opensphere-setup-install-$([Guid]::NewGuid().ToString('N'))"
@@ -48,22 +87,13 @@ $BinDirectory = [System.IO.Path]::GetFullPath($BinDirectory)
 New-Item -ItemType Directory -Force $download, $expanded | Out-Null
 
 try {
-  Write-Host "[단계 01] 비공개 OpenSphere Setup release 다운로드 — $ReleaseTag"
-  Invoke-GitHubCli release download $ReleaseTag `
-    --repo $Repository `
-    --pattern $archiveName `
-    --pattern 'SHA256SUMS' `
-    --dir $download | Out-Host
-
+  Write-Host '[단계 02] 공개 release asset 다운로드와 GitHub digest 검증'
   $archive = Join-Path $download $archiveName
   $checksums = Join-Path $download 'SHA256SUMS'
-  if (-not (Test-Path -LiteralPath $archive) -or -not (Test-Path -LiteralPath $checksums)) {
-    throw 'The private release did not contain the Windows archive and SHA256SUMS.'
-  }
+  Save-VerifiedReleaseAsset -Asset $archiveAsset -Destination $archive
+  Save-VerifiedReleaseAsset -Asset $checksumsAsset -Destination $checksums
 
-  Write-Host '[단계 02] Immutable release, attestation 및 SHA-256 검증'
-  Invoke-GitHubCli release verify $ReleaseTag --repo $Repository | Out-Host
-  Invoke-GitHubCli release verify-asset $ReleaseTag $archive --repo $Repository | Out-Host
+  Write-Host '[단계 03] SHA256SUMS 교차 검증'
   $checksumLine = Get-Content -LiteralPath $checksums |
     Where-Object { $_ -match " $([regex]::Escape($archiveName))$" } |
     Select-Object -First 1
@@ -76,7 +106,7 @@ try {
     throw "OpenSphere Setup archive checksum mismatch: $actualDigest"
   }
 
-  Write-Host '[단계 03] 자체 포함 runtime 압축 해제와 실행 검증'
+  Write-Host '[단계 04] 자체 포함 runtime 압축 해제와 실행 검증'
   Expand-Archive -LiteralPath $archive -DestinationPath $expanded
   $stagedRoot = Join-Path $expanded 'opensphere-setup-windows-amd64'
   $stagedSetup = Join-Path $stagedRoot 'opensphere-setup.exe'
@@ -88,7 +118,7 @@ try {
     throw "Staged Setup version check failed: expected '$expectedVersion', got '$stagedVersion'"
   }
 
-  Write-Host "[단계 04] 사용자 전용 경로에 설치 — $installDirectory"
+  Write-Host "[단계 05] 사용자 전용 경로에 설치 — $installDirectory"
   if (Test-Path -LiteralPath $installDirectory) {
     $existingSetup = Join-Path $installDirectory 'opensphere-setup.exe'
     $existingVersion = if (Test-Path -LiteralPath $existingSetup -PathType Leaf) {
@@ -101,10 +131,6 @@ try {
     }
   } else {
     New-Item -ItemType Directory -Force (Split-Path -Parent $installDirectory) | Out-Null
-    # The staged executable was just smoke-tested. Windows security scanners can
-    # briefly retain a handle to it, which makes moving that directory fail even
-    # after the child process exits. Copy into an unexecuted sibling first, then
-    # atomically rename that sibling into the versioned installation directory.
     Copy-Item -LiteralPath $stagedRoot -Destination $installationStaging -Recurse -Force
     $copiedSetup = Join-Path $installationStaging 'opensphere-setup.exe'
     if (-not (Test-Path -LiteralPath $copiedSetup -PathType Leaf)) {
@@ -113,9 +139,9 @@ try {
     Move-Item -LiteralPath $installationStaging -Destination $installDirectory
   }
 
-  New-Item -ItemType Directory -Force $binDirectory | Out-Null
+  New-Item -ItemType Directory -Force $BinDirectory | Out-Null
   $installedSetup = Join-Path $installDirectory 'opensphere-setup.exe'
-  $shim = Join-Path $binDirectory 'opensphere-setup.cmd'
+  $shim = Join-Path $BinDirectory 'opensphere-setup.cmd'
   [System.IO.File]::WriteAllText(
     $shim,
     "@echo off`r`n`"$installedSetup`" %*`r`n",
@@ -128,16 +154,16 @@ try {
     $hasBin = @($userPath -split ';' | Where-Object {
       $_ -and [string]::Equals(
         [System.IO.Path]::GetFullPath($_),
-        [System.IO.Path]::GetFullPath($binDirectory),
+        [System.IO.Path]::GetFullPath($BinDirectory),
         [StringComparison]::OrdinalIgnoreCase
       )
     }).Count -gt 0
     if (-not $hasBin) {
-      $pathEntries = @($userPath.TrimEnd(';'), $binDirectory) | Where-Object { $_ }
+      $pathEntries = @($userPath.TrimEnd(';'), $BinDirectory) | Where-Object { $_ }
       $nextPath = [string]::Join(';', $pathEntries)
       [Environment]::SetEnvironmentVariable('Path', $nextPath, 'User')
     }
-    $env:PATH = "$binDirectory;$env:PATH"
+    $env:PATH = "$BinDirectory;$env:PATH"
   }
 
   $finalVersion = (& $shim version).Trim()

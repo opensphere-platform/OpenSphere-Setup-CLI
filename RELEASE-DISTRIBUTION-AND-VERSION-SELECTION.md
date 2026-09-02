@@ -61,7 +61,7 @@ DUPA의 target control-plane 책임은 `extensionController`에 통합되었다.
 
 Console anchor는 어떤 채널에서도 마지막에 이동한다. Setup은 부분 발행 중 혼합 revision, edge-local 결과의 승격, retired edge workflow의 attestation을 승인하지 않는다. 과거 GitHub Actions edge lock은 정확한 rollback baseline으로만 읽을 수 있으며 새 target release, 재발행, 승격에는 사용할 수 없다.
 
-Setup CLI 자체는 OpenSphere OS image release와 별도로 비공개 GitHub Release에서 발행한다. `OpenSphere-Setup-CLI/.github/workflows/publish-private-platforms.yml`은 저장소 visibility가 `private`인지 확인하고 Windows amd64, Linux amd64/arm64, macOS amd64/arm64 자체 포함 아카이브와 `SHA256SUMS`를 발행한다. 공개 npm 발행과 공개 download URL은 사용하지 않는다.
+Setup CLI 자체는 OpenSphere OS image release와 분리된 공개 GitHub 저장소와 immutable GitHub Release에서 발행한다. `OpenSphere-Setup-CLI/.github/workflows/publish-platforms.yml`은 저장소 visibility가 `public`인지 확인하고 Windows amd64, Linux amd64/arm64, macOS amd64/arm64 자체 포함 아카이브, 공개 설치기와 `SHA256SUMS`를 발행한다. `package.json`의 `private: true`는 npm 오발행을 막으며 공식 배포 경로는 공개 GitHub Release 하나다. Setup 공개 여부와 Console GHCR 접근 정책은 분리한다.
 
 ## 소비
 

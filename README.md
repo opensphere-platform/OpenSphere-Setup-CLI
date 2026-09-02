@@ -27,11 +27,12 @@ npm install --global . --no-audit --no-fund
 opensphere-setup version
 ```
 
-비공개 실제 관리 호스트에는 저장소 clone이나 개발 런타임 설치 대신 GitHub Release의
+실제 관리 호스트에는 저장소 clone이나 개발 런타임 설치 대신 공개 GitHub Release의
 Windows amd64, Linux amd64/arm64, macOS amd64/arm64 자체 포함 아카이브를 사용한다.
-인증 다운로드, SHA-256·immutable release attestation 검증과 설치 절차는
-[`docs/PRIVATE-PLATFORM-INSTALL.md`](docs/PRIVATE-PLATFORM-INSTALL.md)가 정본이다. Setup
-저장소가 public이면 platform Release 발행 workflow는 fail-closed한다.
+인증 없는 다운로드, GitHub immutable release·asset SHA-256 검증과 설치 절차는
+[`docs/PLATFORM-INSTALL.md`](docs/PLATFORM-INSTALL.md)가 정본이다. Setup 저장소가 public이
+아니면 platform Release 발행 workflow는 fail-closed한다. `package.json`의 `private: true`는
+공개 npm 발행을 막는 안전장치이며 GitHub 저장소와 Release는 공개한다.
 
 `node src/cli.mjs`와 저장소의 `opensphere-setup.cmd`는 내부 개발·진단용 구현 세부사항이며
 설치 문서나 운영 runbook의 사용자 명령으로 사용하지 않는다.
@@ -40,10 +41,11 @@ Windows amd64, Linux amd64/arm64, macOS amd64/arm64 자체 포함 아카이브�
 OpenSphere 배너를 표시한다. 파이프·CI 및 `version` 같은 기계 판독 출력에는 표시하지
 않는다. 제한된 터미널에서는 `OPENSPHERE_NO_BANNER=1`로 끌 수 있다.
 
-소스 설치 요구 사항은 Node.js 24 이상, PowerShell 7(`pwsh`), GitHub CLI(`gh`),
-`kubectl`, Kubernetes Ready 노드, 기본 또는 명시한 동적 StorageClass이다. 비공개 platform
-아카이브는 Node.js, PowerShell, kubectl과 Linux의 libatomic을 포함한다. 대상 호스트에
-필요한 외부 도구는 Git, 인증된 GitHub CLI(`gh`), 접근 가능한 Kubernetes cluster뿐이다.
+소스 설치 요구 사항은 Node.js 24 이상, PowerShell 7(`pwsh`), `kubectl`, Kubernetes Ready
+노드, 기본 또는 명시한 동적 StorageClass이다. 공개 platform 아카이브는 Node.js,
+PowerShell, kubectl과 Linux의 libatomic을 포함한다. 공개 `edge` 설치에는 GitHub CLI가
+필요하지 않으며, `candidate`/`stable` OCI attestation 검증에서만 `gh`를 요구한다. Console
+GHCR package가 private이면 별도의 read-only package credential을 stdin으로 전달한다.
 
 지원 계약:
 

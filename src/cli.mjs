@@ -278,7 +278,7 @@ async function main() {
     validateChannel(channel);
     const sourceArtifactCredential = takeSourceArtifactCredential();
     const registryCredentials = await registryCredentialsOption();
-    const local = inspectLocalEnvironment();
+    const local = inspectLocalEnvironment({ requireGh: channel !== 'edge' });
     progress.done(formatLocalEnvironment(local));
 
     progress.step('Kubernetes API·노드·권한·StorageClass 확인');
@@ -349,7 +349,7 @@ async function main() {
     });
     progress.done(`auth=${selectedAuthEnvironment}, registry=${registryCredentials ? 'explicit' : 'automatic'}`);
     progress.step('로컬 실행 환경 fail-fast 검증');
-    const localEnvironment = inspectLocalEnvironment();
+    const localEnvironment = inspectLocalEnvironment({ requireGh: channel !== 'edge' });
     progress.done(formatLocalEnvironment(localEnvironment));
     // Validate user input before touching the cluster. Besides providing a
     // clearer error, this keeps invalid bootstrap attempts side-effect free.

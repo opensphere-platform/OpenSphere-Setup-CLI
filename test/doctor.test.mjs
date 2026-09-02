@@ -23,6 +23,23 @@ test('doctor validates all commands required before bootstrap mutates Kubernetes
   assert.equal(DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB, 98);
 });
 
+test('edge doctor and bootstrap do not require GitHub CLI for public Setup distribution', () => {
+  const calls = [];
+  const evidence = inspectLocalEnvironment({
+    platform: 'win32',
+    arch: 'x64',
+    nodeVersion: '24.4.0',
+    requireGh: false,
+    inspect(command) {
+      calls.push(command);
+      return `${command}-version`;
+    }
+  });
+  assert.deepEqual(calls, ['kubectl', 'pwsh']);
+  assert.deepEqual(Object.keys(evidence.tools), ['kubectl', 'pwsh']);
+  assert.doesNotMatch(formatLocalEnvironment(evidence), /gh/u);
+});
+
 test('doctor checks the fresh loopback Console port and skips remote origins', async () => {
   let listened;
   const createServer = () => ({

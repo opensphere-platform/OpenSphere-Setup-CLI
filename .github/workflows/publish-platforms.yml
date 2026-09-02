@@ -1,10 +1,10 @@
-name: Publish private platform Setup CLI
+name: Publish public platform Setup CLI
 
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Private release tag, for example setup-v0.5.0-edge.6
+        description: Public release tag, for example setup-v0.5.0-edge.17
         required: true
         type: string
       prerelease:
@@ -17,7 +17,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: private-platform-setup-${{ inputs.tag || github.ref_name }}
+  group: public-platform-setup-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -79,7 +79,7 @@ jobs:
           BOUND_SHA: ${{ github.sha }}
         run: |
           if ($env:BOUND_REF -ne 'refs/heads/main') {
-            throw "Private Setup publication requires refs/heads/main, got $env:BOUND_REF"
+            throw "Setup publication requires refs/heads/main, got $env:BOUND_REF"
           }
           $head = (git rev-parse HEAD).Trim()
           if ($LASTEXITCODE -ne 0 -or $head -ne $env:BOUND_SHA) {
@@ -89,7 +89,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Failed to fetch canonical Setup origin/main' }
           $originMain = (git rev-parse refs/remotes/origin/main).Trim()
           if ($LASTEXITCODE -ne 0 -or $head -ne $originMain) {
-            throw 'Private Setup publication requires fresh canonical origin/main'
+            throw 'Setup publication requires fresh canonical origin/main'
           }
 
       - uses: actions/setup-node@v4
@@ -106,6 +106,14 @@ jobs:
           "repository=$($source.githubRepository)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "revision=$($source.revision)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+      - name: Require governed Console source credential
+        shell: pwsh
+        env:
+          CONSOLE_SOURCE_TOKEN: ${{ secrets.OPENSPHERE_CONSOLE_SOURCE_TOKEN }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:CONSOLE_SOURCE_TOKEN)) {
+            throw 'OPENSPHERE_CONSOLE_SOURCE_TOKEN is required to read the governed private Console source.'
+          }
       - name: Checkout canonical Console manifests
         uses: actions/checkout@v4
         with:
@@ -113,6 +121,8 @@ jobs:
           ref: ${{ steps.console_source.outputs.revision }}
           fetch-depth: 0
           path: _fixtures/OpenSphere-console
+          token: ${{ secrets.OPENSPHERE_CONSOLE_SOURCE_TOKEN }}
+          persist-credentials: false
 
       - name: Verify governed Console checkout
         shell: pwsh
@@ -122,13 +132,13 @@ jobs:
             --current-only
           if ($LASTEXITCODE -ne 0) { throw 'Console source checkout verification failed' }
 
-      - name: Refuse public distribution
+      - name: Require public distribution
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           $visibility = gh api "repos/$env:GITHUB_REPOSITORY" --jq .visibility
-          if ($visibility -ne 'private') { throw "Refusing public Setup distribution: $visibility" }
+          if ($visibility -ne 'public') { throw "Refusing non-public Setup distribution: $visibility" }
 
       - name: Install and test
         shell: pwsh
@@ -302,7 +312,7 @@ jobs:
           test "$(find . -maxdepth 1 -type f -name 'opensphere-setup-*' | wc -l)" -eq 5
           test -s Install-OpenSphereSetup.ps1
 
-      - name: Publish authenticated private GitHub Release
+      - name: Publish public GitHub Release
         shell: bash
         run: |
           set -euo pipefail
@@ -314,7 +324,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY"
             --target "$GITHUB_SHA"
             --title "OpenSphere Setup CLI ${RELEASE_TAG#setup-v}"
-            --notes-file docs/PRIVATE-PLATFORM-RELEASE-NOTES.md
+            --notes-file docs/PLATFORM-RELEASE-NOTES.md
           )
           if [[ "$IS_PRERELEASE" == "true" ]]; then args+=(--prerelease); fi
           gh release create "${args[@]}"

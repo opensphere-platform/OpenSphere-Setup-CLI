@@ -1,6 +1,6 @@
-# macOS private 설치 Runbook
+# macOS 공개 Setup 설치 Runbook
 
-이 문서는 Apple Silicon과 Intel macOS 관리 호스트에서 비공개 OpenSphere Setup 저장소를
+이 문서는 Apple Silicon과 Intel macOS 관리 호스트에서 공개 OpenSphere Setup Release를
 사용해 Docker Desktop Kubernetes 또는 원격 Kubernetes에 설치하는 절차다. Kubernetes
 노드는 macOS가 아니라 `linux/amd64` 또는 `linux/arm64`여야 한다.
 
@@ -9,9 +9,9 @@
 필수 외부 도구:
 
 ```bash
-brew install git gh
+brew install git
 git --version
-gh --version
+
 ```
 
 공식 macOS 아카이브는 Node.js, PowerShell과 kubectl을 포함하므로 이 세 도구를 호스트에
@@ -30,31 +30,28 @@ kubectl get storageclass
 OpenSphere PVC 요청 합계는 98Gi이므로 Docker Desktop VM 디스크와 선택한 StorageClass가
 이를 provision할 수 있어야 한다.
 
-## 2. 비공개 GitHub 인증과 Setup 다운로드
+## 2. 공개 GitHub Setup 다운로드
 
-GitHub 기기 코드는 메일로 발송되는 값이 아니라 `gh auth login`을 실행한 터미널에 표시된다.
-저장소 `Contents: read` 권한이 있는 계정 또는 토큰을 사용한다.
+Setup 저장소와 Release는 공개이므로 GitHub 로그인이나 token이 필요하지 않다.
 
 ```bash
-gh auth login --hostname github.com --git-protocol https --web
-gh auth status
-gh repo view opensphere-platform/OpenSphere-Setup-CLI \
-  --json visibility,viewerPermission
-
+set -euo pipefail
 release=setup-v0.5.0-edge.17
 architecture="$(test "$(uname -m)" = arm64 && echo arm64 || echo amd64)"
-gh release download "$release" \
-  --repo opensphere-platform/OpenSphere-Setup-CLI \
-  --pattern "opensphere-setup-darwin-${architecture}.tar.gz" \
-  --pattern SHA256SUMS
-gh release verify "$release" --repo opensphere-platform/OpenSphere-Setup-CLI
-gh release verify-asset "$release" "opensphere-setup-darwin-${architecture}.tar.gz" \
-  --repo opensphere-platform/OpenSphere-Setup-CLI
+repository=https://github.com/opensphere-platform/OpenSphere-Setup-CLI
+curl --fail --location --proto '=https' --tlsv1.2 \
+  "$repository/releases/download/$release/opensphere-setup-darwin-${architecture}.tar.gz" \
+  --output "opensphere-setup-darwin-${architecture}.tar.gz"
+curl --fail --location --proto '=https' --tlsv1.2 \
+  "$repository/releases/download/$release/SHA256SUMS" \
+  --output SHA256SUMS
+expected="$(grep " opensphere-setup-darwin-${architecture}.tar.gz$" SHA256SUMS | awk '{print $1}')"
+actual="$(shasum -a 256 "opensphere-setup-darwin-${architecture}.tar.gz" | awk '{print $1}')"
+test -n "$expected" && test "$actual" = "$expected"
 tar -xzf "opensphere-setup-darwin-${architecture}.tar.gz"
 SETUP="$PWD/opensphere-setup-darwin-${architecture}/opensphere-setup"
 "$SETUP" version
 ```
-
 ## 3. 무변경 진단
 
 ```bash
@@ -66,7 +63,7 @@ SETUP="$PWD/opensphere-setup-darwin-${architecture}/opensphere-setup"
 ```
 
 진단이 실패하면 bootstrap을 실행하지 않는다. `doctor`는 Kubernetes를 변경하지 않으며
-로컬 필수 명령, Kubernetes v1.30+, 노드 플랫폼·Ready·권한, StorageClass, localhost
+로컬 필수 명령(`edge`는 `gh` 불필요), Kubernetes v1.30+, 노드 플랫폼·Ready·권한, StorageClass, localhost
 포트 1114, GitHub/GHCR 공급망 경로와 41개 필수 manifest·migration·installer의 실제
 다운로드·렌더링을 한 번에 검사한다.
 

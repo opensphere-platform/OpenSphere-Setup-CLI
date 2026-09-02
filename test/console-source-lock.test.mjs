@@ -127,10 +127,10 @@ test('Console source lock resolver emits only the canonical closed document', ()
   );
 });
 
-test('CI and private packaging use the governed Console revision instead of floating main', () => {
+test('CI and public packaging use the governed Console revision instead of floating main', () => {
   for (const path of [
     '../.github/workflows/ci.yml',
-    '../.github/workflows/publish-private-platforms.yml',
+    '../.github/workflows/publish-platforms.yml',
   ]) {
     const workflow = readFileSync(new URL(path, import.meta.url), 'utf8');
     const steps = workflow.split(/(?=^      - (?:name|uses):)/mu);
@@ -151,15 +151,15 @@ test('CI and private packaging use the governed Console revision instead of floa
     `${path} must not rewrite the verified Console fixture`);
     assert.doesNotMatch(workflow, /^\s+repository: opensphere-platform\/OpenSphere-console\s*$/mu);
   }
-  const privateWorkflow = readFileSync(
-    new URL('../.github/workflows/publish-private-platforms.yml', import.meta.url), 'utf8'
+  const platformWorkflow = readFileSync(
+    new URL('../.github/workflows/publish-platforms.yml', import.meta.url), 'utf8'
   );
-  assert.match(privateWorkflow, /name: Require canonical Setup main release source/u);
-  assert.match(privateWorkflow, /BOUND_REF: \$\{\{ github[.]ref \}\}/u);
-  assert.match(privateWorkflow, /BOUND_SHA: \$\{\{ github[.]sha \}\}/u);
-  assert.match(privateWorkflow, /refs\/heads\/main/u);
-  assert.match(privateWorkflow, /rev-parse refs\/remotes\/origin\/main/u);
-  assert.doesNotMatch(privateWorkflow, /github[.]event[.]pull_request[.]base[.]sha/u);
+  assert.match(platformWorkflow, /name: Require canonical Setup main release source/u);
+  assert.match(platformWorkflow, /BOUND_REF: \$\{\{ github[.]ref \}\}/u);
+  assert.match(platformWorkflow, /BOUND_SHA: \$\{\{ github[.]sha \}\}/u);
+  assert.match(platformWorkflow, /refs\/heads\/main/u);
+  assert.match(platformWorkflow, /rev-parse refs\/remotes\/origin\/main/u);
+  assert.doesNotMatch(platformWorkflow, /github[.]event[.]pull_request[.]base[.]sha/u);
 });
 
 test('CODEOWNERS protects every Console source authority input', () => {
