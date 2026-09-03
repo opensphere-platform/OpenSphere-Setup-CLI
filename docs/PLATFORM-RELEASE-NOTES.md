@@ -1,46 +1,29 @@
-# OpenSphere Setup CLI public platform release
+# OpenSphere Setup CLI — portable execution
 
-Public, self-contained administrator packages:
+Setup is an occasional standalone administration tool, not an installed host application.
 
-- Windows amd64
-- Linux amd64 and arm64
-- macOS Intel and Apple Silicon
+- Windows: download `opensphere-setup.exe` and run directly.
+- Linux/macOS, or pre-downloaded Windows runtime: extract the platform archive and run in place.
+- No Setup installation directory, global npm package, PATH registration, service, or permanent runtime cache.
+- Windows launcher verifies immutable GitHub metadata, asset size, SHA-256 and SHA256SUMS, extracts the runtime to a unique temporary directory, executes it and cleans up.
+- Each operational command downloads the full runtime archive. Internal Node is still about 99 MiB; this release changes lifecycle, not runtime size.
+- bootstrap/upgrade no longer install the host os CLI. Use the separate explicit `install-cli` command.
+- Windows localhost CA trust requires explicit `bootstrap --trust-local-ca`.
+- Old installer assets are no longer published. Immutable older releases remain unchanged.
+- Runtimes without `hostInstallation: explicit-only` are refused by the new launcher.
 
-Each archive contains the OpenSphere Setup executable or bundled Node runtime,
-PowerShell, kubectl, runtime assets and third-party notices. Linux archives also
-contain libatomic. Setup source and Setup release downloads require no GitHub
-account or token.
+```powershell
+.\opensphere-setup.exe version
+.\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop
+.\opensphere-setup.exe --version 0.5.0-edge.19 bootstrap --release edge --context docker-desktop
+```
 
-Every archive is extracted on its native build runner and smoke-tested by running
-OpenSphere Setup, bundled PowerShell and bundled kubectl. GitHub Immutable Releases
-and per-asset SHA-256 digests bind the public tag and bytes. `SHA256SUMS` provides an
-additional cross-check before extraction.
+Setup selectors precede the command; Console `--release` and `--lock` remain independent.
+Caller cwd, stdin, stdout/stderr and exit status are preserved.
+Operation outputs and Kubernetes resources are not removed with the temporary runtime.
 
-Windows users can start with `Install-OpenSphereSetup.exe`. The executable is bound
-to this exact release, validates the public metadata and PowerShell installer asset
-digest, and invokes the same reviewable `Install-OpenSphereSetup.ps1` implementation.
-That installer verifies the runtime archive against both its GitHub digest and
-`SHA256SUMS`, installs under the current user's LocalAppData, and registers the
-`opensphere-setup` command.
+Five platform archives contain Node.js, PowerShell and kubectl (plus libatomic on Linux).
+Every platform runs native runtime smoke tests; publication verifies all remote digests.
 
-Linux and macOS users can start with `install-opensphere-setup.sh`. It selects the
-native archive, verifies SHA-256, installs it under the current user's data directory,
-and creates the command link without editing shell profile files. GitHub CLI is not required for public edge installation.
-
-All three installers accept an exact Setup CLI `version` or a public distribution
-`channel`. Exact versions map directly to immutable `setup-v<semver>` releases. A
-channel resolves `channels/edge`, `channels/candidate`, or `channels/stable` once and
-then installs the returned immutable release. Edge points to this release; candidate
-and stable remain `HOLD` until their gates are satisfied. Setup package selection is
-separate from the Console release selected later by `opensphere-setup bootstrap`.
-
-Setup distribution and Console artifact authorization are independent. A private
-Console GHCR package still requires a read-only package credential supplied to
-`doctor`, `resolve`, `bootstrap` or `upgrade` through stdin. Candidate and stable
-OCI attestation verification continues to require GitHub CLI.
-
-The edge Windows bootstrap executable is not yet Authenticode signed. A trusted
-code-signing certificate and verification gate are required before stable Windows
-publication; Visual Studio alone does not establish publisher trust.
-The edge macOS signature is ad hoc and does not replace Apple Developer ID
-notarization required for a stable enterprise release.
+Edge Windows executables are not Authenticode signed. Do not bypass organization controls.
+macOS ad-hoc signatures are not Apple notarization. Candidate/stable remain HOLD.

@@ -107,6 +107,7 @@ exec "$root/runtime/bin/node" "$root/runtime/setup/index.mjs" "$@"
     version,
     platform,
     architecture,
+    hostInstallation: 'explicit-only',
     bundled: platform === 'linux'
       ? ['node', 'powershell', 'kubectl', 'libatomic']
       : ['node', 'powershell', 'kubectl']

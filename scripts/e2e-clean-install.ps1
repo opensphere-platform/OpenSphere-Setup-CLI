@@ -173,7 +173,7 @@ function Get-SecretFingerprint {
 function Invoke-Setup {
   Push-Location $RepoRoot
   try {
-    & opensphere-setup bootstrap --release $Channel --context $Context `
+    & node (Join-Path $RepoRoot 'src/cli.mjs') bootstrap --release $Channel --context $Context `
       --admin-username e2e-admin --admin-display-name 'OpenSphere E2E Administrator' `
       --admin-email 'e2e-admin@opensphere.local' --no-open-browser
     if ($LASTEXITCODE -ne 0) { throw "OpenSphere Setup bootstrap failed for $Channel" }

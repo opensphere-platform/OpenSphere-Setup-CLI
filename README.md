@@ -3,43 +3,35 @@
 OpenSphere OS Console의 신뢰 가능한 최초 설치, 재개, 검증, 업그레이드 및 제거를 담당한다.
 현재 정본은 **Supabase Data & Identity Backbone + 별도 Gitea Change Authority**이다.
 
-## 공개 Release에서 설치
+## 다운로드 후 바로 실행
 
-현재 공개 설치 버전은 `0.5.0-edge.18`이며 설치 진입점은 운영체제별로 두 개다.
+Setup CLI는 Windows에 설치해 상시 사용하는 프로그램이 아니다. 필요한 때 실행해 Kubernetes의 Console을 준비·설치·검증하고 종료한다. **Setup 설치, PATH 등록, 서비스 등록은 하지 않는다.**
 
-### Windows amd64
+현재 버전은 `0.5.0-edge.19`다.
 
-[**Install-OpenSphereSetup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.18/Install-OpenSphereSetup.exe) 후 실행한다. 설치기는 exact immutable Release에 결속되어 있으며, 공개 GitHub API의 asset digest와 `SHA256SUMS`를 검증한 자체 포함 runtime을 사용자 경로에 설치한다.
+### Windows amd64 — 단일 온라인 실행 파일
+
+[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.19/opensphere-setup.exe)
 
 ```powershell
-.\Install-OpenSphereSetup.exe --channel edge
-# 또는 exact Setup CLI 버전 고정
-.\Install-OpenSphereSetup.exe --version 0.5.0-edge.18
-opensphere-setup version
+.\opensphere-setup.exe version
+.\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --storage-class hostpath
+.\opensphere-setup.exe --version 0.5.0-edge.19 bootstrap --release edge --context docker-desktop --storage-class hostpath
 ```
 
-PowerShell 설치기가 필요한 환경에서는 같은 Release의 `Install-OpenSphereSetup.ps1`을 사용할 수 있다.
+버전·채널 선택자는 명령 앞에 두며 상호 배타적이다. 옵션을 생략하면 EXE가 발행된 exact Release를 사용한다. `--release`와 `--lock`은 Console 배포 선택자다.
 
-### Linux amd64/arm64 · macOS Intel/Apple Silicon
+실행기는 공개 immutable Release의 runtime ZIP을 임시 다운로드하고 GitHub asset digest와 SHA256SUMS를 검증한 뒤 실행한다. 정상 종료·명령 실패 시 임시 파일을 정리한다. 영구 설치·캐시는 없다. **작은 실행 파일이지만 작업할 때 약 170MB를 내려받으며 내부 Node CLI는 여전히 약 99MiB다.** 완전 오프라인 단일 EXE라고 주장하지 않는다.
 
-공통 설치 스크립트가 운영체제와 CPU 아키텍처를 판별하고 해당 아카이브를 내려받아 SHA-256을 검증한다.
+### 압축형 포터블 패키지 — Windows/Linux/macOS
 
-```bash
-curl --fail --location --proto '=https' --tlsv1.2 \
-  https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.18/install-opensphere-setup.sh \
-  --output install-opensphere-setup.sh
-chmod +x install-opensphere-setup.sh
-./install-opensphere-setup.sh --channel edge
-# 또는 exact Setup CLI 버전 고정
-./install-opensphere-setup.sh --version 0.5.0-edge.18
-opensphere-setup version
-```
+해당 OS·CPU 아카이브를 검증해 원하는 폴더에 풀고 그 자리에서 실행한다. Windows는 `.\opensphere-setup.exe`, Linux/macOS는 `./opensphere-setup`을 사용하며 `runtime` 폴더를 함께 보존한다. 호스트에 Node.js, PowerShell, kubectl을 별도 설치할 필요는 없다.
 
-옵션을 생략하면 다운로드한 설치기가 자신을 발행한 exact Release를 설치한다. `--version`과 `--channel`은 함께 사용할 수 없다. `edge` 채널은 현재 `setup-v0.5.0-edge.18`을 가리키며 `candidate`와 `stable`은 발행 조건이 충족될 때까지 `HOLD`다.
+이후 `opensphere-setup` 예제는 위 실행 파일의 경로로 대체한다. 전역 PATH 등록을 전제하지 않는다.
 
-상세 검증, 수동 설치와 PATH 정책은 [`docs/PLATFORM-INSTALL.md`](docs/PLATFORM-INSTALL.md)가 정본이다. 공개 아카이브는 Node.js, PowerShell, kubectl과 Linux의 libatomic을 포함하므로 관리 호스트에 개발 도구를 설치할 필요가 없다. `package.json`의 `private: true`는 npm 오발행만 막으며 GitHub 저장소와 Release는 공개한다.
+실행·체크섬 절차는 [`docs/PLATFORM-INSTALL.md`](docs/PLATFORM-INSTALL.md), 제품 기준은 [`docs/PORTABLE-EXECUTION-CONTRACT.md`](docs/PORTABLE-EXECUTION-CONTRACT.md)를 따른다. 이전 `Install-OpenSphereSetup.exe` 설치기는 사용하지 않는다. candidate/stable은 서명·공증 전까지 HOLD다.
 
-저장소 clone 후 `npm install --global .`을 사용하는 방식은 개발용이며 공식 운영 설치 경로가 아니다. `node src/cli.mjs`와 저장소의 `opensphere-setup.cmd`도 내부 개발·진단용 구현 세부사항이다.
+`bootstrap`과 `upgrade`는 호스트 `os` CLI를 자동 설치하지 않는다. 필요하면 `install-cli`를 별도로 실행한다. Windows 개발 CA 신뢰 등록도 `bootstrap --trust-local-ca`를 명시한 경우에만 수행한다.
 
 대화형 터미널에서 `bootstrap`, `doctor`, `upgrade` 같은 운영 명령을 시작하면 ANSI Shadow
 OpenSphere 배너를 표시한다. 파이프·CI 및 `version` 같은 기계 판독 출력에는 표시하지
@@ -98,7 +90,7 @@ Release BOM의 canonical component는 18개다. 이 중 Setup이 fresh bootstrap
 
 나머지 canonical 5개는 lock에 exact digest를 보존하되 Setup이 암묵 배포하지 않는다. Console이 설치 후 `osaaGateway`, `osdst`, `osaaGovernedAdapter`, `notificationDispatcher`, `recovery`를 활성화한다.
 
-Auxiliary artifact는 `cliArtifacts`, `osShellControl`, `osShellRuntime` 3개다. Setup은 bootstrap 완료 후 `cliArtifacts`를 설치한다. OS Shell 2개는 Console 활성화에 필요한 digest를 lock에서 제공하며 bootstrap core에는 포함하지 않는다.
+Auxiliary artifact는 `cliArtifacts`, `osShellControl`, `osShellRuntime` 3개다. Setup은 `cliArtifacts`를 lock에서 검증하지만 호스트에는 자동 설치하지 않는다. `install-cli`를 명시한 경우에만 내려받는다. OS Shell 2개는 Console 활성화에 필요한 digest를 lock에서 제공하며 bootstrap core에는 포함하지 않는다.
 
 Supabase Auth의 `auth.users.id`가 사용자 canonical subject다. Supabase PostgreSQL은 Console state, RBAC와 audit을 소유하고 Supabase Storage는 object storage를 소유한다. Gitea는 선언형 desired state, review와 signed change history를 소유한다. Kubernetes Secret은 runtime credential 전달 수단이며 사용자 identity authority가 아니다.
 
@@ -304,7 +296,7 @@ UID가 유지되는지 전후로 검증하며 cluster-wide reset은 수행하지
 ## 주요 소스
 
 ```text
-Install-OpenSphereSetup.ps1     Windows 사용자 명령 등록
+launchers/windows/             Windows 무설치 온라인 실행기
 src/cli.mjs                    명령 진입점
 src/installation-contract.mjs  Setup ownership와 installation phase 계약
 src/release.mjs                서명 BOM, attestation과 digest lock

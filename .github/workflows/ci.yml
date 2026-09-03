@@ -75,11 +75,11 @@ jobs:
           }
           node scripts/verify-console-source-checkout.mjs @arguments
           if ($LASTEXITCODE -ne 0) { throw 'Console source checkout verification failed' }
-      - name: Install and smoke-test canonical Setup command
+      - name: Smoke-test portable source command without installation
         shell: pwsh
         run: |
-          ./Install-OpenSphereSetup.ps1
-          $version = opensphere-setup version
+          npm ci
+          $version = node src/cli.mjs version
           $packageVersion = node -p "require('./package.json').version"
           $expected = "opensphere-setup $packageVersion"
           if ($version -ne $expected) { throw "Unexpected command version: $version (expected $expected)" }

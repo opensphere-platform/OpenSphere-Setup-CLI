@@ -2006,6 +2006,7 @@ export async function bootstrap(lock, {
   storageClass,
   consoleUrl,
   openOnboarding = true,
+  trustLocalCa = false,
   authEnvironment,
   shellTlsSecret,
   registryCredentials,
@@ -2171,7 +2172,8 @@ export async function bootstrap(lock, {
 
     const hostname = new URL(effectiveConsoleUrl).hostname;
     if (
-      !externalShellTls
+      trustLocalCa
+      && !externalShellTls
       && ['localhost', '127.0.0.1', '[::1]'].includes(hostname)
       && lock.channel === 'edge'
       && effectiveAuthEnvironment === 'development'

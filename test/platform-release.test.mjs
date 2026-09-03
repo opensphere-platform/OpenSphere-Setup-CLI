@@ -61,8 +61,8 @@ test('portable archives bundle their required runtimes, including Linux libatomi
 
 test('public platform installation is unauthenticated and checksum verified', () => {
   assert.match(documentation, /공개 GitHub Release/);
-  assert.match(documentation, /Install-OpenSphereSetup[.]exe/);
-  assert.match(documentation, /install-opensphere-setup[.]sh/);
+  assert.match(documentation, /단일 온라인 실행기/);
+  assert.match(documentation, /호스트의 `os` CLI를 자동 설치하지 않는다/);
   assert.match(documentation, /Invoke-WebRequest/);
   assert.match(documentation, /curl --fail --location/);
   assert.match(documentation, /SHA256SUMS/);

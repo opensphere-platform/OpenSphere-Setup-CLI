@@ -12,6 +12,8 @@ test('Windows local CA trust is narrowly scoped to the managed localhost develop
   assert.match(bootstrap, /!externalShellTls[\s\S]{0,180}lock\.channel === 'edge'[\s\S]{0,120}effectiveAuthEnvironment === 'development'/);
   assert.match(bootstrap, /process\.platform === 'win32'/);
   assert.match(bootstrap, /Install-LocalDevelopmentCa\.ps1/);
+  assert.match(bootstrap, /trustLocalCa = false/);
+  assert.match(bootstrap, /trustLocalCa\s*&& !externalShellTls/);
 });
 
 test('local CA installer validates the exact CA identity and writes only CurrentUser Root', async () => {

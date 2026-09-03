@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Public release tag, for example setup-v0.5.0-edge.18
+        description: Public release tag, for example setup-v0.5.0-edge.19
         required: true
         type: string
       prerelease:
@@ -290,7 +290,7 @@ jobs:
           & $kubectl version --client -o json
           if ($LASTEXITCODE -ne 0) { throw 'Bundled kubectl smoke test failed' }
 
-      - name: Build Windows installer executable
+      - name: Build Windows portable launcher
         if: matrix.platform == 'windows'
         shell: pwsh
         env:
@@ -301,14 +301,16 @@ jobs:
           if ($env:RELEASE_TAG -ne $expectedTag) {
             throw "Release tag must equal package version: $expectedTag"
           }
-          go test ./installers/windows
+          go test ./launchers/windows
+          if ($LASTEXITCODE -ne 0) { throw 'Portable launcher tests failed' }
           go build -trimpath `
             -ldflags "-s -w -X main.releaseTag=$env:RELEASE_TAG" `
-            -o dist/Install-OpenSphereSetup.exe `
-            ./installers/windows
-          $boundTag = (& dist/Install-OpenSphereSetup.exe --bootstrap-version).Trim()
+            -o dist/opensphere-setup.exe `
+            ./launchers/windows
+          if ($LASTEXITCODE -ne 0) { throw 'Portable launcher build failed' }
+          $boundTag = (& dist/opensphere-setup.exe --bootstrap-version).Trim()
           if ($LASTEXITCODE -ne 0 -or $boundTag -ne $expectedTag) {
-            throw "Windows installer release binding failed: $boundTag"
+            throw "Windows portable launcher release binding failed: $boundTag"
           }
 
       - name: Upload platform archive
@@ -319,12 +321,12 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload Windows installer executable
+      - name: Upload Windows portable launcher
         if: matrix.platform == 'windows'
         uses: actions/upload-artifact@v4
         with:
-          name: setup-windows-installer
-          path: dist/Install-OpenSphereSetup.exe
+          name: setup-windows-launcher
+          path: dist/opensphere-setup.exe
           if-no-files-found: error
           retention-days: 30
 
@@ -352,31 +354,10 @@ jobs:
           version="$(node -p "require('./package.json').version")"
           expected="setup-v$version"
           test "$RELEASE_TAG" = "$expected"
-          node --input-type=module - "$RELEASE_TAG" <<'NODE'
-          import { chmod, readFile, writeFile } from 'node:fs/promises';
-          const releaseTag = process.argv[2];
-          const assets = [
-            ['scripts/Install-OpenSphereSetupRelease.ps1', 'dist/Install-OpenSphereSetup.ps1'],
-            ['scripts/Install-OpenSphereSetupRelease.sh', 'dist/install-opensphere-setup.sh']
-          ];
-          for (const [sourcePath, destinationPath] of assets) {
-            const source = await readFile(sourcePath, 'utf8');
-            const installer = source.replaceAll('__OPENSPHERE_SETUP_RELEASE_TAG__', releaseTag);
-            if (installer.includes('__OPENSPHERE_SETUP_RELEASE_TAG__')) {
-              throw new Error(`Installer release tag materialization failed: ${sourcePath}`);
-            }
-            await writeFile(destinationPath, installer, 'utf8');
-          }
-          await chmod('dist/install-opensphere-setup.sh', 0o755);
-          NODE
-          sh -n dist/install-opensphere-setup.sh
-          dist/install-opensphere-setup.sh --help >/dev/null
           cd dist
-          sha256sum opensphere-setup-* Install-OpenSphereSetup.exe Install-OpenSphereSetup.ps1 install-opensphere-setup.sh > SHA256SUMS
+          sha256sum opensphere-setup-* opensphere-setup.exe > SHA256SUMS
           test "$(find . -maxdepth 1 -type f -name 'opensphere-setup-*' | wc -l)" -eq 5
-          test -s Install-OpenSphereSetup.exe
-          test -s Install-OpenSphereSetup.ps1
-          test -x install-opensphere-setup.sh
+          test -s opensphere-setup.exe
 
       - name: Publish public GitHub Release
         shell: bash
@@ -385,9 +366,7 @@ jobs:
           args=(
             "$RELEASE_TAG"
             dist/opensphere-setup-*
-            dist/Install-OpenSphereSetup.exe
-            dist/Install-OpenSphereSetup.ps1
-            dist/install-opensphere-setup.sh
+            dist/opensphere-setup.exe
             dist/SHA256SUMS
             --repo "$GITHUB_REPOSITORY"
             --target "$GITHUB_SHA"
@@ -405,7 +384,7 @@ jobs:
             -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")"
           test "$(jq -r '.immutable' <<<"$release")" = "true"
-          for file in dist/opensphere-setup-* dist/Install-OpenSphereSetup.exe dist/Install-OpenSphereSetup.ps1 dist/install-opensphere-setup.sh dist/SHA256SUMS; do
+          for file in dist/opensphere-setup-* dist/opensphere-setup.exe dist/SHA256SUMS; do
             name="$(basename "$file")"
             local_digest="sha256:$(sha256sum "$file" | awk '{print $1}')"
             remote_digest="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release")"

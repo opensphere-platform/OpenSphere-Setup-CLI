@@ -125,3 +125,18 @@ test('registry credentials are accepted only through the paired token-stdin cont
   assert.notEqual(missingUsername.status, 0);
   assert.match(missingUsername.stderr, /--registry-token-stdin requires --registry-username/);
 });
+
+test('host install flags are rejected before any Kubernetes work outside install-cli', () => {
+  for (const command of ['bootstrap', 'upgrade', 'doctor']) {
+    for (const flag of ['--add-to-path', '--install-dir']) {
+      const result = spawnSync(process.execPath, [CLI, command, flag, 'unused'], { encoding: 'utf8', cwd: ROOT, windowsHide: true });
+      assert.notEqual(result.status, 0);
+      assert.match(result.stderr, /separate explicit install-cli command/);
+    }
+  }
+});
+test('host CA trust option is explicit and restricted to bootstrap', () => {
+  const result = spawnSync(process.execPath, [CLI, 'doctor', '--trust-local-ca'], { encoding: 'utf8', cwd: ROOT, windowsHide: true });
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /explicit host trust change/);
+});

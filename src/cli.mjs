@@ -12,7 +12,6 @@ import {
   upgrade
 } from './bootstrap.mjs';
 import { installConsoleCli } from './install-cli.mjs';
-import { installConsoleCliFromCluster } from './cluster-cli-install.mjs';
 import { normalizeRegistryCredentials, resolveChannel, validateChannel, validateLock } from './release.mjs';
 import { takeSourceArtifactCredential } from './source-artifact-credential.mjs';
 import { assertKubectl, kubectl } from './process.mjs';
@@ -103,7 +102,7 @@ async function readLock(lockPath) {
 }
 
 function help() {
-  console.log(`OpenSphere Setup CLI 0.5.0-edge.18
+  console.log(`OpenSphere Setup CLI 0.5.0-edge.19
 
 Usage:
   opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
@@ -123,10 +122,10 @@ Usage:
        [--auth-environment <development|production>]
        [--shell-tls-secret <namespace/name>]
        [--registry-username <github-login> --registry-token-stdin]
-       [--no-open-browser] [--add-to-path]
+       [--no-open-browser] [--trust-local-ca]
   opensphere-setup upgrade --release <edge|candidate|stable> [--lock <verified-lock-file>]
       [--context <kube-context>] [--storage-class <name>] [--console <https-origin>]
-      [--add-to-path] [--registry-username <github-login> --registry-token-stdin]
+      [--registry-username <github-login> --registry-token-stdin]
   opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
   opensphere-setup recovery-drill --component <supabase|gitea> --manifest-key <s3-object-key>
       --confirm ISOLATED-RECOVERY-DRILL [--context <kube-context>]
@@ -172,6 +171,12 @@ async function main() {
   const context = option('--context', '');
   const suppliedConsoleUrl = hasOption('--console') ? normalizeConsoleUrl(option('--console', '')) : undefined;
   const authEnvironment = hasOption('--auth-environment') ? option('--auth-environment', '') : undefined;
+  if (command !== 'install-cli' && (hasOption('--install-dir') || hasOption('--add-to-path'))) {
+    throw new Error('--install-dir and --add-to-path require the separate explicit install-cli command');
+  }
+  if (hasOption('--trust-local-ca') && command !== 'bootstrap') {
+    throw new Error('--trust-local-ca is accepted only by bootstrap as an explicit host trust change');
+  }
   if (context) process.env.OPENSPHERE_KUBE_CONTEXT = context;
   if (hasOption('--backup-target-secret')) {
     throw new Error('The retired --backup-target-secret option is not accepted; recovery readiness is checked only by the preflight command');
@@ -181,7 +186,7 @@ async function main() {
   }
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
-  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.18');
+  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.19');
 
   if (command === 'recover-installation-lock') {
     if (hasOption('--workspace-root') || hasOption('--receipt-dir')) {
@@ -415,19 +420,13 @@ async function main() {
       authEnvironment: selectedAuthEnvironment,
       shellTlsSecret: requestedShellTlsSecret,
       openOnboarding: !hasOption('--no-open-browser'),
+      trustLocalCa: hasOption('--trust-local-ca'),
       registryCredentials,
       sourceArtifactCredential,
       requiredPlatforms: targetPlatforms,
       progress,
     });
-    progress.step('Console-native os CLI 다운로드·무결성 검증·설치');
-    const installedCli = await installConsoleCliFromCluster({
-      consoleUrl: bootstrapResult.consoleUrl,
-      installDirectory: option('--install-dir', undefined),
-      updatePath: hasOption('--add-to-path')
-    });
-    progress.done(`${installedCli.version} → ${installedCli.target}`);
-    if (!installedCli.pathUpdated) progress.item('안내', '현재 PATH는 변경하지 않았습니다. 원하면 다음 설치에서 --add-to-path를 지정하세요.');
+    progress.item('안내', '호스트에 프로그램을 설치하지 않았습니다. os CLI가 필요하면 install-cli를 별도로 실행하세요.');
     progress.finish('OpenSphere bootstrap 완료', bootstrapResult.consoleUrl);
     return;
   }
@@ -459,13 +458,8 @@ async function main() {
       sourceArtifactCredential,
       requiredPlatforms: targetPlatforms
     });
-    const installedCli = await installConsoleCliFromCluster({
-      installDirectory: option('--install-dir', undefined),
-      updatePath: hasOption('--add-to-path')
-    });
     console.log(result.changed ? '[완료] release upgrade 트랜잭션 검증' : '[재사용] 이미 요청 release가 설치됨');
-    console.log(`[완료] Console-native os ${installedCli.version} 설치 (${installedCli.target})`);
-    if (!installedCli.pathUpdated) console.log('[안내] 현재 PATH는 변경하지 않았습니다. 원하면 --add-to-path를 지정하세요.');
+    console.log('[안내] 호스트 os CLI는 변경하지 않았습니다. 필요하면 install-cli를 별도로 실행하세요.');
     return;
   }
 

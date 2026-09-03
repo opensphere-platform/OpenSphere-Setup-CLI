@@ -9,25 +9,20 @@ const ci = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url),
 const entrypoint = readFileSync(new URL('../src/cli.mjs', import.meta.url), 'utf8');
 const bootstrap = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
 
-test('opensphere-setup is the canonical installed package command', () => {
+test('source command remains available without a global installation', () => {
   assert.deepEqual(pkg.bin, { 'opensphere-setup': 'src/cli.mjs' });
-  assert.match(entrypoint, /^#!\/usr\/bin\/env node/);
-  assert.match(installer, /npm install --global \$repoRoot --no-audit --no-fund/);
-  assert.match(installer, /Get-Command opensphere-setup/);
-  assert.match(installer, /\$expectedVersion = "opensphere-setup \$\(\$package\.version\)"/);
+  assert.match(installer, /retired/);
+  assert.doesNotMatch(installer, /npm install --global|SetEnvironmentVariable|New-Item/);
+  assert.equal(pkg.scripts['install:command'], undefined);
+  assert.equal(pkg.scripts['pretest:e2e:edge'], undefined);
 });
 
-test('operator documentation and CI smoke test use the canonical command', () => {
-  assert.match(readme, /opensphere-setup bootstrap/);
-  assert.match(readme, /opensphere-setup verify/);
-  assert.match(readme, /opensphere-setup upgrade/);
-  assert.doesNotMatch(readme, /node \.?[\\/]+src[\\/]+cli\.mjs/);
-  assert.doesNotMatch(readme, /\\opensphere-setup\.cmd/);
-  assert.match(ci, /Install-OpenSphereSetup\.ps1/);
-  assert.match(ci, /opensphere-setup version/);
+test('operator documentation and CI use in-place execution', () => {
+  assert.match(readme, /opensphere-setup[.]exe --channel edge doctor/);
+  assert.match(ci, /node src[/]cli[.]mjs version/);
+  assert.doesNotMatch(ci, /Install-OpenSphereSetup[.]ps1|npm install --global/);
   assert.doesNotMatch(ci, /opensphere-setup (?:bootstrap|verify|upgrade)/);
 });
-
 test('upgrade preflight accepts historical installed component sets only as baselines', () => {
   const migrationGuard = bootstrap.match(
     /export async function migrateLegacyInstallationLock\(\)[\s\S]*?\r?\n}\r?\n/

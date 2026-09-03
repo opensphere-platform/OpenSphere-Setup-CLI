@@ -206,17 +206,15 @@ test('rollout order establishes authorities, C_API/C_EXT, Beszel and CLI before 
   assert.deepEqual(coreRolloutsForLock(localReleaseLock()), [...CORE_ROLLOUTS]);
 });
 
-test('fresh install downloads os only after core rollout and verification', () => {
+test('bootstrap verifies core without installing the host os CLI', () => {
   const cli = readFileSync(new URL('../src/cli.mjs', import.meta.url), 'utf8');
-  const bootstrapCall = cli.indexOf('const bootstrapResult = await bootstrap(lock');
-  const cliInstall = cli.indexOf('const installedCli = await installConsoleCliFromCluster', bootstrapCall);
-  assert.ok(bootstrapCall >= 0 && cliInstall > bootstrapCall);
+  assert.doesNotMatch(cli, /installConsoleCliFromCluster/);
+  assert.match(cli, /command === 'install-cli'/);
   const bootstrap = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
   const waitCall = bootstrap.indexOf('waitForCoreRollouts(lock, progress)');
   const verifyCall = bootstrap.indexOf('const evidence = await verifyInstallation(lock', waitCall);
   assert.ok(waitCall >= 0 && verifyCall > waitCall);
 });
-
 test('every target workload references the Setup-managed GHCR pull Secret', () => {
   const files = [
     SUPABASE_MANIFEST.path,
