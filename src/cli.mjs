@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import {createGitHubRegistryAuth} from './github-registry-auth.mjs';
+import {GITHUB_OAUTH_CLIENT_ID} from './github-oauth-app.mjs';
 import './portable-runtime.mjs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
@@ -12,7 +14,7 @@ import {
   upgrade
 } from './bootstrap.mjs';
 import { installConsoleCli } from './install-cli.mjs';
-import { normalizeRegistryCredentials, resolveChannel, validateChannel, validateLock } from './release.mjs';
+import { normalizeRegistryCredentials, hostRegistryCredentials, resolveChannel, validateChannel, validateLock } from './release.mjs';
 import { takeSourceArtifactCredential } from './source-artifact-credential.mjs';
 import { assertKubectl, kubectl } from './process.mjs';
 import { verifyInstallation } from './verify.mjs';
@@ -62,22 +64,35 @@ function hasOption(name) {
 }
 
 async function registryCredentialsOption() {
-  const fromStdin = hasOption('--registry-token-stdin');
-  const hasUsername = hasOption('--registry-username');
-  if (!fromStdin) {
-    if (hasUsername) throw new Error('--registry-username requires --registry-token-stdin');
-    return undefined;
+  const provider=createGitHubRegistryAuth();
+  const mode=option('--registry-auth','auto');
+  if(!['auto','oauth','pat','anonymous'].includes(mode))throw new Error('--registry-auth must be auto, oauth, pat, or anonymous');
+  const fromStdin=hasOption('--registry-token-stdin');
+  const hasUsername=hasOption('--registry-username');
+  if(mode==='oauth'){
+    if(fromStdin || hasUsername)throw new Error('OAuth and stdin token options cannot be combined');
+    const clientId=option('--github-client-id',process.env.OPENSPHERE_GITHUB_OAUTH_CLIENT_ID || GITHUB_OAUTH_CLIENT_ID);
+    if(!clientId)throw new Error('OpenSphere OAuth App is not configured. Set its public Client ID with --github-client-id; a PAT is not a Client ID.');
+    console.error('[인증] OpenSphere 전용 GitHub OAuth 앱으로 read:packages 권한을 요청합니다. 실제 GHCR 접근이 검증되어야 설치할 수 있습니다.');
+    return provider.login(clientId,{onCode:({userCode,verificationUri,expiresAt})=>{
+      console.error('[인증] '+verificationUri+' 에서 코드 '+userCode+' 를 입력하세요. 만료: '+expiresAt);
+    }});
   }
-  if (!hasUsername) throw new Error('--registry-token-stdin requires --registry-username');
-  if (process.stdin.isTTY) {
-    throw new Error('--registry-token-stdin requires a pipe; do not enter a registry token as a visible command argument');
+  if(mode==='anonymous'){
+    if(fromStdin || hasUsername)throw new Error('Anonymous mode cannot include registry credentials');
+    return null;
   }
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  return normalizeRegistryCredentials({
-    username: option('--registry-username', ''),
-    token: Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString('utf8')
-  });
+  if(!fromStdin){
+    if(hasUsername)throw new Error('--registry-username requires --registry-token-stdin');
+    const existing=hostRegistryCredentials();
+    if(mode==='pat' && !existing)throw new Error('Provide a dedicated read:packages token through stdin');
+    return existing ? provider.pat(existing) : null;
+  }
+  if(!hasUsername)throw new Error('--registry-token-stdin requires --registry-username');
+  if(process.stdin.isTTY)throw new Error('--registry-token-stdin requires a pipe; never enter tokens as visible arguments');
+  const chunks=[];let size=0;
+  for await(const chunk of process.stdin){size+=Buffer.byteLength(chunk);if(size>8192)throw new Error('Registry credential input is too large');chunks.push(Buffer.from(chunk));}
+  return provider.pat(normalizeRegistryCredentials({username:option('--registry-username',''),token:Buffer.concat(chunks).toString('utf8')}));
 }
 
 function validateInitialAdmin(initialAdmin) {
@@ -102,7 +117,7 @@ async function readLock(lockPath) {
 }
 
 function help() {
-  console.log(`OpenSphere Setup CLI 0.5.0-edge.20
+  console.log(`OpenSphere Setup CLI 0.5.0-edge.21
 
 Usage:
   opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
@@ -148,6 +163,7 @@ Usage:
 Fresh bootstrap resolves the selected channel at install time. Resume always uses the
 cluster installation lock. --lock is an explicit immutable input; it is never a cache hint.
 Kubernetes receives digest-pinned images only.
+Registry authentication: --registry-auth auto|oauth|pat|anonymous; OAuth uses the bundled OpenSphere App; --github-client-id overrides its public Client ID. OAuth credentials stay in memory until bootstrap handoff. PAT tokens require read:packages only; broad gh login tokens are rejected.
 Canonical Console source artifacts are public; OPENSPHERE_CONSOLE_SOURCE_TOKEN is optional authenticated Contents API access and remains separate from GHCR credentials.`);
 }
 
@@ -186,7 +202,14 @@ async function main() {
   }
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
-  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.20');
+  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.21');
+  if (['--registry-auth','--github-client-id'].some(hasOption) && !['resolve','doctor','bootstrap','upgrade'].includes(command)) {
+    throw new Error('Registry authentication options are accepted only by resolve, doctor, bootstrap and upgrade; status queries Kubernetes only');
+  }
+  if (hasOption('--github-client-id') && option('--registry-auth','auto') !== 'oauth') {
+    throw new Error('--github-client-id requires --registry-auth oauth');
+  }
+
 
   if (command === 'recover-installation-lock') {
     if (hasOption('--workspace-root') || hasOption('--receipt-dir')) {

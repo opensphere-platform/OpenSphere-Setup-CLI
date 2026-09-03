@@ -7,16 +7,18 @@ OpenSphere OS Console의 신뢰 가능한 최초 설치, 재개, 검증, 업그�
 
 Setup CLI는 Windows에 설치해 상시 사용하는 프로그램이 아니다. 필요한 때 실행해 Kubernetes의 Console을 준비·설치·검증하고 종료한다. **Setup 설치, PATH 등록, 서비스 등록은 하지 않는다.**
 
-현재 버전은 `0.5.0-edge.20`다. 사용자 요청으로 이전 GitHub 릴리스 18개를 삭제하고 이 버전만 남겼다. [공개 실행·재사용·삭제 검증 결과](docs/PORTABLE-RUNTIME-REUSE-VERIFICATION.md)를 참고한다.
+현재 소스 버전은 `0.5.0-edge.21`이며 OpenSphere 전용 OAuth App의 Device Flow를 포함한다. 실제 공개 상태와 검증 근거는 [OAuth 발행 기록](docs/OAUTH-EDGE21-PUBLICATION-STATUS.md)을 참고한다.
+
+**현재 검증 한계:** 등록 앱의 실제 OAuth 로그인·토큰 갱신·이전 토큰 무효화는 확인했다. 그러나 `opensphere-console:edge` manifest 조회는 갱신 전후 모두 HTTP 404(`MANIFEST_UNKNOWN`)였다. OAuth는 opt-in 시험 기능이며 private GHCR 다운로드 또는 Console 설치 완료가 검증된 버전은 아니다. 404만으로 패키지 부재와 접근 제한을 구분할 수 없다.
 
 ### Windows amd64 — 한 번 다운로드하고 재사용하는 포터블 실행 파일
 
-[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.20/opensphere-setup.exe)
+[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.21/opensphere-setup.exe)
 
 ```powershell
 .\opensphere-setup.exe version
-.\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --storage-class hostpath
-.\opensphere-setup.exe --version 0.5.0-edge.20 bootstrap --release edge --context docker-desktop --storage-class hostpath
+.\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --registry-auth oauth
+.\opensphere-setup.exe --version 0.5.0-edge.21 resolve --release edge --registry-auth oauth
 ```
 
 버전·채널 선택자는 명령 앞에 두며 상호 배타적이다. 옵션을 생략하면 EXE가 발행된 exact Release를 사용한다. `--release`와 `--lock`은 Console 배포 선택자다.
@@ -45,7 +47,7 @@ OpenSphere 배너를 표시한다. 파이프·CI 및 `version` 같은 기계 판
 노드, 기본 또는 명시한 동적 StorageClass이다. 공개 platform 아카이브는 Node.js,
 PowerShell, kubectl과 Linux의 libatomic을 포함한다. 공개 `edge` 설치에는 GitHub CLI가
 필요하지 않으며, `candidate`/`stable` OCI attestation 검증에서만 `gh`를 요구한다. Console
-GHCR package가 private이면 별도의 read-only package credential을 stdin으로 전달한다.
+GHCR package가 private이면 `--registry-auth oauth`로 인증하거나 read-only package credential을 stdin으로 전달한다.
 
 지원 계약:
 
@@ -324,3 +326,16 @@ backend/registry/
 cmd/os-cli/
 deploy/opensphere-console.yaml
 ```
+
+
+## GitHub OAuth 인증과 GHCR 접근
+
+`--registry-auth oauth`를 지정하면 등록된 OpenSphere 앱으로 기기 인증을 시작한다. 표시된 GitHub 주소에서 일회용 코드를 승인한다. 공개 Client ID는 실행 파일에 포함되며 Client Secret/PAT는 포함되지 않는다. 기본 auto 모드는 자동으로 브라우저 인증을 시작하지 않는다.
+
+`resolve`는 선택된 Console 릴리스의 GHCR 접근·공급망 정책을 검사하고 토큰 없는 lock을 저장한다. `doctor`는 동일 인증에 더해 로컬 Kubernetes 설치 준비 상태를 읽기 전용으로 검사한다. `status`는 Kubernetes Pod 조회이며 GitHub 로그인을 수행하지 않는다.
+
+`read:packages offline_access`만 요청하며 repo/write/admin 권한이 포함된 credential은 운영 인계를 거부한다. 토큰은 실행 프로세스 메모리에만 두며 Windows 런타임 보관 폴더에 저장하지 않는다. 따라서 별도 명령을 새로 실행하면 OAuth 승인이 다시 필요할 수 있다. 런타임 ZIP 다운로드 재사용과 OAuth 로그인은 별개다.
+
+**Console 설치와 운영 인계는 별도 호환 조건이다.** OAuth credential을 `bootstrap`에 넘기려면 대상 Console이 `registry-auth/v1`을 활성화해야 한다. 기존 Console 릴리스가 이를 지원하지 않으면 namespace/credential 쓰기 전에 중단한다. 이 Setup 릴리스만으로 기존 Console에 refresh worker를 설치하거나 활성화하지 않는다. 기존 설치의 `upgrade`는 Console 재인증 경로를 요구한다.
+
+[인증·저장·재인증 계약과 현재 검증 범위](docs/REGISTRY-AUTH-LIFECYCLE.md)를 참고한다.

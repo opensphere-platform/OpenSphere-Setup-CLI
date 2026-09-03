@@ -249,7 +249,7 @@ test('every target Console manifest renders with governed immutable images', () 
   ]) {
     const source = readFileSync(new URL(spec.path, CONSOLE_SOURCE), 'utf8');
     const rendered = renderManifest(
-      lock, spec, source, 'hostpath', 'https://localhost:8090', 'development'
+      lock, spec, source, 'hostpath', 'https://localhost:8090', 'development', {kubernetesApiEgress:[{to:[{ipBlock:{cidr:'192.0.2.10/32'}}],ports:[{protocol:'TCP',port:6443}]}]}
     );
     assert.doesNotMatch(rendered, /__OPENSPHERE_[A-Z0-9_]+__/);
     const images = [...rendered.matchAll(/^[ \t]*image:[ \t]+["']?([^"'#\s]+)/gmu)]
@@ -268,7 +268,7 @@ test('custom Console endpoint renders into C_API and Main Shell authorities', ()
   ]) {
     const source = readFileSync(new URL(spec.path, CONSOLE_SOURCE), 'utf8');
     const rendered = renderManifest(
-      lock, spec, source, 'hostpath', 'https://localhost:18090', 'development'
+      lock, spec, source, 'hostpath', 'https://localhost:18090', 'development', {kubernetesApiEgress:[{to:[{ipBlock:{cidr:'192.0.2.10/32'}}],ports:[{protocol:'TCP',port:6443}]}]}
     );
     assert.doesNotMatch(rendered, /__OPENSPHERE_CONSOLE_URL__/);
     assert.match(rendered, /https:\/\/localhost:18090/);

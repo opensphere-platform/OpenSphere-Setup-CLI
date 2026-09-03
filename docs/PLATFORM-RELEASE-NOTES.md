@@ -1,28 +1,20 @@
-# OpenSphere Setup CLI — reusable portable execution
+# OpenSphere Setup CLI 0.5.0-edge.21 — GitHub OAuth Device Flow
 
-Setup is an occasional standalone administration tool, not an installed host application.
+This edge prerelease adds opt-in GitHub OAuth Device Flow authentication. The registered OpenSphere application Client ID is built in; no PAT or client secret is bundled.
 
-- Replace the old edge.19 launcher with this release's `opensphere-setup.exe` once.
-- Each selected version is downloaded and extracted only once beside the EXE in `opensphere-setup-runtime/<release-tag>/`.
-- Later commands verify and reuse the same runtime files. No repeated archive download or extraction for that version.
-- Small channel and immutable Release metadata requests still require Internet access. This is not a fully offline launcher.
-- Every reuse checks the stored archive and SHA256SUMS against GitHub digests, then checks all extracted files against the verified archive. Changed, missing, linked, or extra files block execution.
-- Concurrent first runs share an OS preparation lock. Failed downloads never become complete versions; successful runtimes survive command success, failure, and cancellation.
-- New versions live in separate folders. No automatic eviction or overwriting of existing versions.
-- Move the EXE and its runtime folder together. To remove them, first close all Setup commands, then delete both. No Setup installation directory, global npm package, PATH registration, service, or hidden shared cache.
-- The first Windows archive download remains about 174 MB. The archive and expanded runtime use about 610 MiB per version; leave at least 1 GiB free for a new version. Internal Node remains about 99 MiB.
-- Linux/macOS and pre-downloaded Windows archives run in place as before.
-- bootstrap/upgrade do not install the host os CLI. Windows development CA trust requires explicit `bootstrap --trust-local-ca`.
+**Known limitation:** live OAuth login, refresh, identity preservation and old-token rejection passed. The current `opensphere-console:edge` manifest returned HTTP 404 (`MANIFEST_UNKNOWN`) both before and after refresh. Private GHCR pull and end-to-end Console installation are not verified. The response does not distinguish a missing image from restricted access. This prerelease must not be described as a completed OAuth installation solution.
+
+- Run with `--registry-auth oauth`, then approve the displayed one-time code at GitHub. The requested scopes are `read:packages offline_access`.
+- `resolve` verifies the selected Console release and image access; `doctor` also checks Kubernetes installation prerequisites without changing the cluster. `status` remains a Kubernetes Pod query, not a GitHub login command.
+- Tokens remain in memory until an explicitly supported bootstrap handoff. No OAuth token is written into the portable runtime cache. Separate commands may require a new authorization.
+- Broad repo/write/admin credentials are rejected for runtime handoff. Dedicated read-only PAT input remains available through stdin.
+- OAuth bootstrap requires a Console release that activates `registry-auth/v1`. Unsupported releases fail before namespace/credential writes. This Setup release does not deploy Console's credential refresh worker or retrofit an existing installation. OAuth upgrade requires the Console reauthorization path.
+- Kubernetes API egress for compatible Console releases is discovered from the target cluster's Service/EndpointSlices, rather than hardcoded.
+- Windows remains a portable launcher with verified, per-version runtime reuse. No host Setup installation, PATH change, or service registration. Five platform archives and SHA256SUMS are distributed as before.
 
 ```powershell
-.\opensphere-setup.exe version
-.\opensphere-setup.exe --channel edge status --context docker-desktop
-.\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop
-.\opensphere-setup.exe --version 0.5.0-edge.20 bootstrap --release edge --context docker-desktop
+.\opensphere-setup.exe --channel edge resolve --release edge --registry-auth oauth
+.\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --registry-auth oauth
 ```
 
-Setup selectors precede the command. Console `--release` and `--lock` remain independent.
-Caller cwd, stdin, stdout/stderr and exit status are preserved. Runtime cleanup never deletes operation outputs or Kubernetes resources.
-
-Edge Windows executables are not Authenticode signed. Do not bypass organization controls.
-macOS ad-hoc signatures are not Apple notarization. Candidate/stable remain HOLD.
+Setup version/channel selectors precede the command. Console `--release` and `--lock` remain independent. Windows edge executables are not Authenticode signed, and macOS ad-hoc signatures are not notarization; candidate/stable remain HOLD.

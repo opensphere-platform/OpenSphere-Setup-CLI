@@ -18,12 +18,14 @@ Setup은 필요할 때 실행하는 독립형 관리 도구다. Windows에 Setup
 
 **내부 런타임 용량은 아직 줄어들지 않았다.** 처음 사용하는 버전은 약 174MB ZIP을 내려받고 약 440MiB를 푼다. 무결성 검증을 위한 원본 ZIP까지 보관하므로 버전당 약 610MiB를 사용한다. 새 버전 준비 시 1GiB 이상 여유 공간을 확보한다. 내부 Node SEA는 여전히 약 99MiB다. 이번 변경은 반복 다운로드 제거이며 네이티브 재작성 완료를 뜻하지 않는다.
 
+**현재 검증 한계:** 등록 앱의 실제 OAuth 로그인·토큰 갱신·이전 토큰 무효화는 확인했다. 그러나 `opensphere-console:edge` manifest 조회는 갱신 전후 모두 HTTP 404(`MANIFEST_UNKNOWN`)였다. OAuth는 opt-in 시험 기능이며 private GHCR 다운로드 또는 Console 설치 완료가 검증된 버전은 아니다. 404만으로 패키지 부재와 접근 제한을 구분할 수 없다.
+
 ## Windows 단일 EXE
 
-`setup-v0.5.0-edge.20`부터 같은 버전의 런타임을 재사용한다. edge.19 EXE는 자동으로 이 동작으로 바뀌지 않으므로 아래 새 EXE로 한 번 교체한다. 기존 `Install-OpenSphereSetup.exe`, `Install-OpenSphereSetup.ps1`, `install-opensphere-setup.sh`는 설치형 배포물이므로 새 릴리스에서 제외한다. 이전 릴리스 18개는 사용자 요청으로 삭제했다. 현재 edge.20만 다운로드할 수 있다. Git 태그는 유지했다.
+`setup-v0.5.0-edge.20`부터 같은 버전의 런타임을 재사용한다. edge.19 EXE는 자동으로 이 동작으로 바뀌지 않으므로 아래 새 EXE로 한 번 교체한다. 기존 `Install-OpenSphereSetup.exe`, `Install-OpenSphereSetup.ps1`, `install-opensphere-setup.sh`는 설치형 배포물이므로 새 릴리스에서 제외한다. 이전 릴리스 18개는 사용자 요청으로 삭제했다. 당시 edge.20만 남겼으며 Git 태그는 유지했다. edge.21은 OAuth를 추가한 별도 불변 릴리스이며 edge.20을 교체하거나 삭제하지 않는다. 실제 발행 상태는 [발행 기록](OAUTH-EDGE21-PUBLICATION-STATUS.md)을 확인한다.
 
 ```powershell
-$release = 'setup-v0.5.0-edge.20'
+$release = 'setup-v0.5.0-edge.21'
 $base = "https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/$release"
 Invoke-WebRequest -UseBasicParsing "$base/opensphere-setup.exe" -OutFile .\opensphere-setup.exe
 Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS" -OutFile .\SHA256SUMS
@@ -33,7 +35,7 @@ if (-not $expected -or $actual -ne $expected) { throw 'Launcher checksum mismatc
 
 .\opensphere-setup.exe version
 .\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --storage-class hostpath
-.\opensphere-setup.exe --version 0.5.0-edge.20 bootstrap --release edge --context docker-desktop --storage-class hostpath
+.\opensphere-setup.exe --version 0.5.0-edge.21 bootstrap --release edge --context docker-desktop --storage-class hostpath
 ```
 
 파일 위치에서 실행한다. 권한 상승, LocalAppData 설치, command shim, PATH 등록은 없다. `help`와 기본 `version`은 런타임 다운로드 없이 실행된다. 나머지 명령은 채널·immutable Release 메타데이터를 온라인으로 확인한다. 처음 쓰는 버전만 ZIP을 GitHub asset digest와 SHA256SUMS로 검증해 푼다. 재사용 시 보관 ZIP·체크섬의 digest와 모든 런타임 파일의 SHA-256을 원본 ZIP과 대조하고 추가 파일·링크·누락·변조를 거부한다. 자식 CLI의 stdin·stdout·stderr, 종료 코드와 호출자의 cwd를 유지한다.
@@ -55,8 +57,8 @@ if (-not $expected -or $actual -ne $expected) { throw 'Launcher checksum mismatc
 ```text
 opensphere-setup.exe
 opensphere-setup-runtime/
-  setup-v0.5.0-edge.20.lock
-  setup-v0.5.0-edge.20/
+  setup-v0.5.0-edge.21.lock
+  setup-v0.5.0-edge.21/
     runtime.zip
     SHA256SUMS
     expanded/opensphere-setup-windows-amd64/...
@@ -76,7 +78,7 @@ Windows는 ZIP을 원하는 폴더에 풀고 그 안에서 `.\opensphere-setup.e
 Linux/macOS는 해당 OS·CPU 아카이브와 SHA256SUMS를 검증하고 압축을 푼다.
 
 ```bash
-release=setup-v0.5.0-edge.20
+release=setup-v0.5.0-edge.21
 asset=opensphere-setup-linux-amd64.tar.gz
 base="https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/$release"
 curl --fail --location --proto '=https' --tlsv1.2 "$base/$asset" --output "$asset"
@@ -102,3 +104,16 @@ macOS는 `darwin-amd64` 또는 `darwin-arm64`, Linux arm64는 `linux-arm64`로 �
 - Kubernetes 자원, 작업 디렉터리의 release lock, 요청한 복구 산출물은 작업 결과다. 프로그램 설치 파일과 구분하며 임의 삭제하지 않는다.
 - 공개 Setup 다운로드는 인증 없이 가능하다. private Console GHCR package는 read-only credential을 stdin으로 전달한다. candidate/stable OCI attestation에는 별도 `gh`가 필요하다.
 - edge Windows EXE는 아직 Authenticode 서명 전이다. SmartScreen/조직 정책을 우회하지 않는다. macOS ad-hoc 서명은 Developer ID notarization을 대체하지 않는다. 서명·공증 전 candidate/stable 발행은 차단한다.
+
+## OAuth로 GHCR 접근 확인
+
+Windows 포터블 실행기:
+
+```powershell
+.\opensphere-setup.exe --channel edge resolve --release edge --registry-auth oauth
+.\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --registry-auth oauth
+```
+
+첫 번째 명령은 GitHub 인증과 릴리스 접근을, 두 번째는 Kubernetes 설치 전 읽기 전용 진단까지 수행한다. 공개 Client ID는 내장되어 있으며 표시된 기기 코드만 GitHub에서 승인한다. `status`는 GitHub 인증 명령이 아니다. 토큰은 로컬에 캐시하지 않으므로 별도 명령에서는 재승인이 필요할 수 있다.
+
+OAuth bootstrap은 대상 Console의 registry-auth/v1 인계 지원이 필수다. 미지원 Console에 refresh credential을 남기지 않는다. 기존 Console의 운영 갱신 기능이 이 실행 파일 하나로 배포되는 것은 아니다.

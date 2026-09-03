@@ -1,3 +1,6 @@
+import {KUBERNETES_EGRESS_SLOT,discoverRegistryKubernetesEgress,renderRegistryKubernetesEgress} from './registry-runtime-access.mjs';
+import {setTimeout as registryDelay} from 'node:timers/promises';
+import {REGISTRY_AUTH_SECRET,REGISTRY_AUTH_CONTRACT,initialRegistryState,registryStateSecret,parseRegistryState,requiredImages,pullSecretData,GENERATION_ANNOTATION,validateCredential} from './registry-lifecycle-contract.mjs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -797,7 +800,9 @@ function ensureExternalShellTlsSecret(reference, source) {
   })}\n`);
 }
 
-export function ensureRegistryPullSecrets(lock, suppliedCredentials) {
+export function ensureRegistryPullSecrets(lock, suppliedCredentials, {lifecycleEnabled=false}={}) {
+  if(suppliedCredentials)validateCredential(suppliedCredentials);
+  if(suppliedCredentials?.lifecycle?.mode==='github-device' && !lifecycleEnabled)throw new Error('Target Console has not enabled registry-auth/v1; OAuth runtime handoff is blocked');
   const requiresCredentials = releaseNeedsRegistryCredentials(lock);
   const existing = new Map(MANAGED_NAMESPACES.map((namespace) => {
     try { return [namespace, readSecret(namespace, REGISTRY_PULL_SECRET)]; }
@@ -808,24 +813,47 @@ export function ensureRegistryPullSecrets(lock, suppliedCredentials) {
       ? secretHasGhcrCredential(existing.get(namespace))
       : Boolean(existing.get(namespace))
   );
-  if (!suppliedCredentials && everyNamespaceReady) {
+  const ownerJson=kubectl(['-n','opensphere-console','get','secret',REGISTRY_AUTH_SECRET,'--ignore-not-found','-o','json'],{capture:true});
+  if(ownerJson.trim()){
+    const owner=parseRegistryState(JSON.parse(ownerJson));
+    if(!everyNamespaceReady)throw new Error('Runtime-owned registry pull Secrets are incomplete; repair through Console or an explicit recovery procedure');
+    return {credentialsRequired:requiresCredentials,credentialSource:'console-managed',lifecycleGeneration:owner.generation};
+  }
+  if (!suppliedCredentials && everyNamespaceReady && !lifecycleEnabled) {
     return {
       credentialsRequired: requiresCredentials,
       credentialSource: requiresCredentials ? 'existing-secret' : 'anonymous'
     };
   }
-  const credentials = suppliedCredentials ?? (requiresCredentials ? hostRegistryCredentials() : null);
+  const credentials = suppliedCredentials ?? null;
+  const state=lifecycleEnabled ? initialRegistryState(credentials,requiredImages(lock)) : null;
   if (requiresCredentials && !credentials) {
     throw new Error('This release contains private GHCR packages; provide --registry-username with --registry-token-stdin or authenticate gh with read:packages');
   }
   for (const namespace of MANAGED_NAMESPACES) {
     if (!credentials && existing.get(namespace)) continue;
-    applyYaml(`${JSON.stringify(registryPullSecretManifest(namespace, credentials))}\n`);
+    const manifest=registryPullSecretManifest(namespace, credentials);
+    if(state){manifest.data=pullSecretData(credentials,state.generation);manifest.metadata.annotations={[GENERATION_ANNOTATION]:state.generation};}
+    applyYaml(JSON.stringify(manifest)+'\n');
   }
+  if(state) kubectl(['create','-f','-'],{capture:true,input:JSON.stringify(registryStateSecret(state))});
   return {
     credentialsRequired: requiresCredentials,
+    lifecycleGeneration:state?.generation,
     credentialSource: credentials ? 'managed-secret' : 'anonymous'
   };
+}
+
+export async function verifyRegistryHandoff(generation,{read=()=>readSecret('opensphere-console',REGISTRY_AUTH_SECRET),sleep=registryDelay,now=Date.now,timeoutMs=120000}={}){
+  const deadline=now()+timeoutMs;
+  while(now()<deadline){
+    const state=parseRegistryState(read());
+    if(state.generation!==generation)throw new Error('Registry credential generation changed during Setup handoff');
+    if(state.phase==='ReauthorizationRequired')throw new Error('Console requires registry reauthorization');
+    if(state.phase==='Ready' && state.observation?.generation===generation && JSON.stringify([...state.observation.namespaces].sort())===JSON.stringify([...MANAGED_NAMESPACES].sort()) && now()-Date.parse(state.observation.verifiedAt)<300000)return;
+    await sleep(2000);
+  }
+  throw new Error('Console registry credential handoff was not verified before timeout');
 }
 
 function validateAuthEnvironment(value) {
@@ -859,9 +887,9 @@ export function renderManifest(
   storageClass,
   consoleUrl = defaultConsoleUrl('edge', 'development'),
   authEnvironment = 'development',
-  { sourceRevision = lock.sourceRevision } = {}
+  { sourceRevision = lock.sourceRevision, kubernetesApiEgress } = {}
 ) {
-  let yaml = sourceYaml;
+  let yaml = renderRegistryKubernetesEgress(sourceYaml, kubernetesApiEgress);
   for (const [pattern, component] of spec.replacements ?? []) {
     const image = lock.components?.[component]?.image;
     if (!image) throw new Error(`Release lock lacks component ${component}`);
@@ -931,7 +959,8 @@ export async function fetchManifest(
     storageClass,
     consoleUrl,
     authEnvironment,
-    { sourceRevision }
+    { sourceRevision, kubernetesApiEgress: sourceYaml.includes(KUBERNETES_EGRESS_SLOT)
+      ? discoverRegistryKubernetesEgress(kubectl) : undefined }
   );
 }
 
@@ -1018,7 +1047,9 @@ async function materializeFoundationInstallers(
       raw,
       storageClass,
       consoleUrl,
-      authEnvironment
+      authEnvironment,
+      { kubernetesApiEgress: raw.includes(KUBERNETES_EGRESS_SLOT)
+        ? discoverRegistryKubernetesEgress(kubectl) : undefined }
     );
     return { spec, raw, rendered };
   }));
@@ -2114,6 +2145,8 @@ export async function bootstrap(lock, {
     );
     progress?.done(`${installArtifactCount(lock) + Number(prepared.foundation?.migration?.manifest?.migrationCount || 0)} artifacts, ${prepared.all.length} manifest groups`);
 
+    const registryLifecycleEnabled=prepared.all.some(entry=>entry.yaml.includes('CONSOLE_REGISTRY_AUTH_CONTRACT') && entry.yaml.includes('registry-auth/v1'));
+    if(registryCredentials?.lifecycle?.mode==='github-device' && !registryLifecycleEnabled)throw new Error('Target Console has not enabled registry-auth/v1; no OAuth credentials or namespaces were written');
     const externalShellTls = effectiveShellTls
       ? readSecret(effectiveShellTls.namespace, effectiveShellTls.name)
       : undefined;
@@ -2136,7 +2169,7 @@ export async function bootstrap(lock, {
       ensureNamespace(namespace);
       progress?.item('namespace', namespace);
     }
-    const registry = ensureRegistryPullSecrets(lock, registryCredentials);
+    const registry = ensureRegistryPullSecrets(lock, registryCredentials, {lifecycleEnabled:registryLifecycleEnabled});
     progress?.done(`GHCR credentials=${registry.credentialSource}`);
 
     progress?.item('설치 경계', 'Recovery 및 기타 선택 모듈 설정은 bootstrap 이후 Console에서 수행');
@@ -2225,6 +2258,11 @@ export async function bootstrap(lock, {
     progress?.step('Supabase·Gitea·Beszel·C_API·C_EXT·Registry·CLI·Main Shell rollout 대기');
     waitForCoreRollouts(lock, progress);
     progress?.done('핵심 workload Ready');
+    if(registry.lifecycleGeneration && registryCredentials){
+      progress?.step('Console registry credential 인계 및 Secret 전파 확인');
+      await verifyRegistryHandoff(registry.lifecycleGeneration);
+      progress?.done('Console이 동일 credential generation과 5개 namespace 전파를 확인함');
+    }
 
     progress?.step('Pod·Service·runtime image·초기 관리자 상태 최종 검증');
     const evidence = await verifyInstallation(lock, {
@@ -2370,6 +2408,7 @@ export async function upgrade(
   }
   operations.preflight({ storageClass: config.storageClass, channel: targetLock.channel });
   operations.ensureManagedNamespaces();
+  if(registryCredentials?.lifecycle?.mode==='github-device')throw new Error('Use Console Registry reauthorization for an existing installation; Setup upgrade does not replace runtime refresh authority');
   operations.ensureRegistryPullSecrets(targetLock, registryCredentials);
   const initialAdmin = config.initialAdmin;
   const componentTransition = targetLock.releaseScope === RELEASE_SCOPE_COMPONENT;

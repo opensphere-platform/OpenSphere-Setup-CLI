@@ -165,6 +165,12 @@ jobs:
             throw 'candidate/stable Setup publication remains on HOLD until trusted Windows Authenticode and Apple notarization gates are implemented.'
           }
 
+      - name: Require registered OpenSphere OAuth app
+        shell: pwsh
+        run: |
+          node scripts/verify-oauth-app.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'OpenSphere OAuth App must be configured before public release' }
+
       - name: Install and test
         shell: pwsh
         run: |
