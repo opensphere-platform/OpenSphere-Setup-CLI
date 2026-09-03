@@ -605,6 +605,47 @@ test('temporary receipt cleanup accepts a peer removal only with the exact final
   }
 });
 
+test('temporary receipt EPERM retry preserves exact final and pending bytes', async (t) => {
+  for (const scenario of ['transient', 'peer-removed', 'permanent', 'final-missing', 'pending-different']) {
+    await t.test(scenario, async (t) => {
+      const layout = await tempLayout();
+      t.after(() => rm(layout.base, { recursive: true, force: true }));
+      const digest = 'sha256:' + '4'.repeat(64);
+      const receipt = { planDigest: digest, incidentId: 'incident', approvalId: 'approval',
+        recoveredUid: 'uid', recoveredResourceVersion: '1', succeeded: true,
+        state: 'SemanticReconstructionRecovered' };
+      const finalPath = join(layout.receipts, '4'.repeat(64), '00000001.json');
+      let attempts = 0;
+      const store = await createDurableInstallationLockRecoveryReceiptStore(layout.receipts, layout.workspace, {
+        moveNoReplaceFn: async (source, destination) => {
+          if (destination === finalPath) { await writeFile(destination, await readFile(source), { flag: 'wx' }); return; }
+          await mockCustody.moveNoReplaceFn(source, destination);
+        },
+        unlinkTemporaryFn: async (path) => {
+          attempts += 1;
+          if (attempts === 1 || scenario === 'permanent') {
+            if (scenario === 'peer-removed') await unlink(path);
+            if (scenario === 'final-missing') await unlink(finalPath);
+            if (scenario === 'pending-different') await writeFile(path, JSON.stringify({ ...receipt, recoveredUid: 'other' }));
+            throw Object.assign(new Error('temporary cleanup EPERM'), { code: 'EPERM' });
+          }
+          await unlink(path);
+        },
+      });
+      if (['transient', 'peer-removed'].includes(scenario)) {
+        assert.deepEqual(await store.write(digest, receipt), receipt);
+        assert.deepEqual(await readdir(join(layout.receipts, '.tmp')), []);
+        assert.equal(attempts, scenario === 'transient' ? 2 : 1);
+      } else {
+        await assert.rejects(store.write(digest, receipt), scenario === 'permanent'
+          ? /temporary cleanup EPERM/u : scenario === 'final-missing'
+            ? /lost its exact final revision/u : /encountered different bytes/u);
+        assert.equal(attempts, scenario === 'permanent' ? 4 : 1);
+      }
+    });
+  }
+});
+
 test('actual Windows no-replace receipt promotion converges across eight writers', async (t) => {
   if (process.platform !== 'win32') return t.skip('Windows-only no-replace receipt promotion');
   const layout = await tempLayout();

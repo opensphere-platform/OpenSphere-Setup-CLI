@@ -4,6 +4,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { request as httpsRequest } from 'node:https';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import {
   canonicalJson,
@@ -651,19 +652,30 @@ export async function createDurableInstallationLockRecoveryReceiptStore(
       }
       await syncDirectory(temporaryDirectory);
       const removeExactTemporary = async () => {
-        const pending = await optionalReceipt(temporary);
-        if (!pending) return;
-        if (canonicalJson(pending) !== canonicalJson(receipt)) {
-          throw new Error('recovery receipt temporary cleanup encountered different bytes');
-        }
-        try { await unlinkTemporaryFn(temporary); }
-        catch (error) {
-          if (error.code !== 'ENOENT') throw error;
-          // An identical writer may finish cleanup after our read. Accept this
-          // only while the exact final revision still exists.
+        for (let attempt = 0; ; attempt += 1) {
+          // Revalidate both authorities on every retry. Windows may briefly
+          // deny unlink while another identical writer finishes cleanup.
           const concurrent = await optionalReceipt(finalPath);
           if (!concurrent || canonicalJson(concurrent) !== canonicalJson(receipt)) {
             throw new Error('recovery receipt temporary cleanup lost its exact final revision');
+          }
+          const pending = await optionalReceipt(temporary);
+          if (!pending) break;
+          if (canonicalJson(pending) !== canonicalJson(receipt)) {
+            throw new Error('recovery receipt temporary cleanup encountered different bytes');
+          }
+          try { await unlinkTemporaryFn(temporary); break; }
+          catch (error) {
+            if (error.code === 'ENOENT') {
+              const final = await optionalReceipt(finalPath);
+              if (!final || canonicalJson(final) !== canonicalJson(receipt)) {
+                throw new Error('recovery receipt temporary cleanup lost its exact final revision');
+              }
+              break;
+            }
+            // Persistent EPERM and all other access errors remain failures.
+            if (error.code !== 'EPERM' || attempt >= 3) throw error;
+            await delay(25 * (attempt + 1));
           }
         }
         await syncDirectory(temporaryDirectory);

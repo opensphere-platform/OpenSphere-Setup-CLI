@@ -10,6 +10,7 @@ This edge prerelease adds opt-in GitHub OAuth Device Flow authentication. The re
 - Broad repo/write/admin credentials are rejected for runtime handoff. Dedicated read-only PAT input remains available through stdin.
 - OAuth bootstrap requires a Console release that activates `registry-auth/v1`. Unsupported releases fail before namespace/credential writes. This Setup release does not deploy Console's credential refresh worker or retrofit an existing installation. OAuth upgrade requires the Console reauthorization path.
 - Kubernetes API egress for compatible Console releases is discovered from the target cluster's Service/EndpointSlices, rather than hardcoded.
+- Bootstrap validates administrator/TLS inputs before starting authentication. Concurrent recovery receipt cleanup retries transient Windows EPERM only after revalidating exact files; persistent denial and content drift still fail.
 - Windows remains a portable launcher with verified, per-version runtime reuse. No host Setup installation, PATH change, or service registration. Five platform archives and SHA256SUMS are distributed as before.
 
 ```powershell
