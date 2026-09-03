@@ -556,6 +556,48 @@ test('concurrent identical receipt append converges without exposing temporary r
   assert.deepEqual(await readdir(join(layout.receipts, '.staging')), []);
 });
 
+test('custody scan tolerates vanished peer files but rejects irregular replacements', async (t) => {
+  for (const folder of ['.tmp', '.staging']) {
+    for (const scenario of ['removed', 'hard-link', 'directory']) {
+      await t.test(`${folder}/${scenario}`, async (t) => {
+        const layout = await tempLayout();
+        t.after(() => rm(layout.base, { recursive: true, force: true }));
+        const digest = `sha256:${'6'.repeat(64)}`;
+        const receipt = { planDigest: digest, incidentId: 'incident', approvalId: 'approval',
+          recoveredUid: 'uid', succeeded: true, state: 'SemanticReconstructionRecovered' };
+        const store = await createDurableInstallationLockRecoveryReceiptStore(
+          layout.receipts, layout.workspace, {
+            readCustodyEntriesFn: async (path, options) => {
+              const entries = await readdir(path, options);
+              if (path === join(layout.receipts, folder) && entries.length) {
+                const peerFile = join(path, entries[0].name);
+                await unlink(peerFile);
+                if (scenario === 'hard-link') {
+                  const other = join(layout.base, 'other-receipt.json');
+                  await writeFile(other, JSON.stringify(receipt));
+                  await link(other, peerFile);
+                }
+                if (scenario === 'directory') await mkdir(peerFile);
+              }
+              return entries;
+            },
+          }
+        );
+        const name = folder === '.tmp' ? `${'6'.repeat(64)}.00000001.json`
+          : `${'6'.repeat(64)}.00000001.${'8'.repeat(32)}.candidate`;
+        await writeFile(join(layout.receipts, folder, name), JSON.stringify(receipt));
+        if (scenario === 'removed') {
+          // A transient peer file is not a durable receipt, even when observed
+          // immediately before the peer moves or cleans it up.
+          assert.equal(await store.read(digest), null);
+          assert.deepEqual(await readdir(join(layout.receipts, folder)), []);
+        } else {
+          await assert.rejects(store.read(digest), /unique regular file|irregular candidate/u);
+        }
+      });
+    }
+  }
+});
 test('temporary receipt cleanup accepts a peer removal only with the exact final revision', async (t) => {
   for (const scenario of ['identical', 'missing', 'different', 'access-denied']) {
     await t.test(scenario, async (t) => {

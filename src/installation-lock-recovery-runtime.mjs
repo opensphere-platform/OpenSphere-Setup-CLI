@@ -399,6 +399,7 @@ export async function createDurableInstallationLockRecoveryReceiptStore(
     assertDirectoryCustodyFn = assertInstallationLockRecoveryPrivateDirectory,
     moveNoReplaceFn = atomicNoReplaceMove,
     unlinkTemporaryFn = unlink,
+    readCustodyEntriesFn = readdir,
     candidateIdFn = () => randomUUID().replaceAll('-', ''),
   } = {}
 ) {
@@ -452,13 +453,19 @@ export async function createDurableInstallationLockRecoveryReceiptStore(
         || await realpath(temporaryDirectory) !== resolve(temporaryDirectory)) {
       throw new Error('recovery receipt temporary directory identity changed during recovery');
     }
-    const temporaryEntries = await readdir(temporaryDirectory, { withFileTypes: true });
+    const temporaryEntries = await readCustodyEntriesFn(temporaryDirectory, { withFileTypes: true });
     for (const entry of temporaryEntries) {
       if (!/^[a-f0-9]{64}\.[0-9]{8}\.json$/u.test(entry.name)
           || !entry.isFile() || entry.isSymbolicLink()) {
         throw new Error('recovery receipt temporary directory contains an unknown artifact');
       }
-      await readReceiptRevision(join(temporaryDirectory, entry.name));
+      try { await readReceiptRevision(join(temporaryDirectory, entry.name)); }
+      catch (error) {
+        // This directory scan observes peers' transient files. A peer can
+        // promote/remove an entry after readdir; append and cleanup still
+        // validate exact pending/final bytes before accepting a receipt.
+        if (error.code !== 'ENOENT') throw error;
+      }
     }
     const currentStaging = await lstat(stagingDirectory);
     if (!currentStaging.isDirectory() || currentStaging.isSymbolicLink()
@@ -466,13 +473,20 @@ export async function createDurableInstallationLockRecoveryReceiptStore(
         || await realpath(stagingDirectory) !== resolve(stagingDirectory)) {
       throw new Error('recovery receipt staging directory identity changed during recovery');
     }
-    const stagingEntries = await readdir(stagingDirectory, { withFileTypes: true });
+    const stagingEntries = await readCustodyEntriesFn(stagingDirectory, { withFileTypes: true });
     for (const entry of stagingEntries) {
       if (!/^[a-f0-9]{64}\.[0-9]{8}\.[a-f0-9]{32}\.candidate$/u.test(entry.name)
           || !entry.isFile() || entry.isSymbolicLink()) {
         throw new Error('recovery receipt staging directory contains an unknown artifact');
       }
-      const candidateStat = await lstat(join(stagingDirectory, entry.name));
+      let candidateStat;
+      try { candidateStat = await lstat(join(stagingDirectory, entry.name)); }
+      catch (error) {
+        // Candidates legitimately disappear when another writer promotes or
+        // removes its own file. Only absence during this scan is harmless.
+        if (error.code === 'ENOENT') continue;
+        throw error;
+      }
       if (!candidateStat.isFile() || candidateStat.isSymbolicLink()
           || (Number.isInteger(candidateStat.nlink) && candidateStat.nlink !== 1)) {
         throw new Error('recovery receipt staging directory contains an irregular candidate');
