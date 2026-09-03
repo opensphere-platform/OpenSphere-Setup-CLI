@@ -7,18 +7,18 @@ OpenSphere OS Console의 신뢰 가능한 최초 설치, 재개, 검증, 업그�
 
 Setup CLI는 Windows에 설치해 상시 사용하는 프로그램이 아니다. 필요한 때 실행해 Kubernetes의 Console을 준비·설치·검증하고 종료한다. **Setup 설치, PATH 등록, 서비스 등록은 하지 않는다.**
 
-현재 소스 버전은 `0.5.0-edge.25`이며 OpenSphere 전용 OAuth App의 Device Flow를 포함한다. 이번 수정 및 발행·복구 상태는 [Console 설치 복구 기록](docs/CONSOLE-INSTALL-NULL-OUTPUT-EDGE25.md)을 참고한다.
+현재 소스 버전은 `0.5.0-edge.26`이며 OpenSphere 전용 OAuth App의 Device Flow를 포함한다. 이번 수정 및 발행·복구 상태는 [Console 설치 복구 기록](docs/CONSOLE-INSTALL-IMAGE-STARTUP-EDGE26.md)을 참고한다.
 
-**현재 수정 범위:** edge.24의 Beszel 배포 완료 후, 아직 없는 Console API 조회 결과가 null인데 Trim을 호출해 설치가 중단되는 오류를 edge.25에서 수정했다. 실제 native 무출력과 production 조회 함수를 포함하도록 회귀 검증을 보강했다. 앞선 설치 순서·진행 표시·credential·공급망 계약은 유지한다. 발행·삭제 상태는 위 기록을 따른다. 실제 클린 bootstrap 성공을 아직 주장하지 않는다.
+**현재 수정 범위:** edge.25 API 이미지에서 runtime/package.json이 누락돼 CommonJS 파일이 ESM으로 해석되는 패키징 오류를 edge.26에서 수정했다. 완성된 API 이미지의 실제 PostgreSQL 연결·HTTP Ready 및 잘못된 DB 인증 거부를 CI와 로컬 채널 전환 조건으로 추가했다. 설치 순서·credential·공급망·Ready 기준은 유지한다. 현재 발행·삭제 상태는 위 기록을 따른다. 이미지 기동 검증을 전체 Kubernetes bootstrap 성공으로 표시하지 않는다.
 
 ### Windows amd64 — 한 번 다운로드하고 재사용하는 포터블 실행 파일
 
-[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.25/opensphere-setup.exe)
+[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.26/opensphere-setup.exe)
 
 ```powershell
 .\opensphere-setup.exe version
 .\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --registry-auth oauth
-.\opensphere-setup.exe --version 0.5.0-edge.25 resolve --release edge --registry-auth oauth
+.\opensphere-setup.exe --version 0.5.0-edge.26 resolve --release edge --registry-auth oauth
 ```
 
 버전·채널 선택자는 명령 앞에 두며 상호 배타적이다. 옵션을 생략하면 EXE가 발행된 exact Release를 사용한다. `--release`와 `--lock`은 Console 배포 선택자다.

@@ -1,21 +1,21 @@
-# OpenSphere Setup CLI 0.5.0-edge.25 — Beszel native empty-output fix
+# OpenSphere Setup CLI 0.5.0-edge.26 — verify the packaged Console API
 
-This edge prerelease fixes a deterministic PowerShell error after Beszel had successfully deployed. On a fresh install, Console API does not exist yet. The successful `kubectl --ignore-not-found` lookup emits no stdout, and the production helper returns null. Version edge.24 called Trim on that null value and stopped installation.
+This edge prerelease targets the Console fix for a packaging error: the API image copied CommonJS contract files without their runtime/package.json. Node inherited the parent ESM setting and the API exited immediately. The runtime manifest is now included and explicitly declares commonjs.
 
-The consumer check is now null-safe. Tests execute the production lookup helper and a native child process with no output, instead of mocking the helper as an empty string. The strengthened test rejects the published edge.24 code and passes with this fix. Existing API refresh, nonzero lookup failure and wrong-identity rejection remain covered. Readiness, credentials, RBAC and network policy are unchanged.
+The validation boundary is also corrected. A new gate starts the built image using its normal entrypoint and UID 1001 against isolated PostgreSQL. It requires HTTP 200/Ready with a real restricted runtime DB connection, and HTTP 503 with an invalid DB credential. It uses no Kubernetes data, host ports, or host source mounts. Temporary test containers, volumes and network are removed.
 
-Governed Console source: `4a35cf46d5bcf31118cae25ab4ce2846a719b0db`, Console version `202609031708`. The prerequisite order corrected in edge.24 is retained.
+CI runs this gate after building the API image. The local edge publisher runs it against the exact image digest before moving date/edge tags, including reused images. OCI metadata inspection is no longer described as an application startup check. The previously published broken image was rejected by this gate; the fixed local image passed.
 
-[Publication, reset and validation record](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/blob/main/docs/CONSOLE-INSTALL-NULL-OUTPUT-EDGE25.md). Unit/contract checks and read-only verification do not establish a completed Kubernetes clean bootstrap. Five platform package builds and their smoke checks are required before this release is published. Candidate/stable remain on HOLD.
+Governed Console source: `101f770c5691ac905838c4bd2476d5b0bd02e1e8`, Console version `202609031742`. Earlier installer order and null-output fixes remain in place. No DB schema, RBAC, network-policy, credential or readiness requirement is weakened.
 
-For the prepared local Kubernetes cluster, download the [Windows portable EXE](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.25/opensphere-setup.exe), then run:
+[Publication, validation and clean-install record](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/blob/main/docs/CONSOLE-INSTALL-IMAGE-STARTUP-EDGE26.md). The image gate verifies API startup and DB-backed readiness, not a completed Kubernetes bootstrap or every Console feature. Candidate/stable remain on HOLD.
+
+Download the [Windows portable EXE](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.26/opensphere-setup.exe), then start the prepared local installation:
 
 ```powershell
-.\opensphere-setup.exe --version 0.5.0-edge.25 bootstrap `
+.\opensphere-setup.exe --version 0.5.0-edge.26 bootstrap `
   --release edge --context docker-desktop `
   --storage-class standard --registry-auth oauth
 ```
 
-Approve the new one-time code displayed by the command at GitHub. The public Client ID is built in; no PAT or client secret is bundled. Tokens are not cached alongside the portable runtime. Console handles supported operational credential handoff. Separate commands can require a new authorization.
-
-Windows remains portable: no host Setup installation, PATH change, or service registration. The first execution of a version downloads about 166 MiB of verified runtime once; subsequent executions verify and reuse it. The release includes five platform archives, the Windows launcher and SHA256SUMS. Windows edge executables are not Authenticode signed; macOS ad-hoc signatures are not notarization.
+Approve the displayed new GitHub device code. The public Client ID is built in; no PAT or client secret is bundled. Windows remains portable with verified per-version runtime reuse, no host Setup installation, PATH change or service registration. The first use of a new version downloads about 166 MiB once. Tokens are not kept in the portable runtime cache. Windows edge executables are not Authenticode signed and macOS ad-hoc signatures are not notarization.
