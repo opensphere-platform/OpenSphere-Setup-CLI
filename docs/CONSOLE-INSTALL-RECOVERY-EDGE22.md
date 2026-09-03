@@ -1,6 +1,8 @@
 # Console 설치 SQL 오류 복구 — Setup edge.22
 
-2026-09-03. 상태: Setup 전체 300개 회귀, main CI 및 5플랫폼 공개 발행 통과. 수정 Console GHCR edge 발행 완료. 공개 EXE upgrade를 시작했으며 현재 사용자 OAuth 승인을 기다린다. 아직 설치 복구 성공을 주장하지 않는다.
+> **2026-09-03 후속 상태:** 사용자의 클린 재설치 지시에 따라 기존 Console 설치 namespace 5개와 영구 데이터 4개를 모두 삭제했다. 아래 실패/보존형 upgrade 내용은 과거 기록이며 현재는 설치 lock도 없다. 새 설치는 아직 실행하지 않았다. Console의 docs/CONSOLE-INSTALL-CLEAN-PURGE-20260903.md 참조.
+
+2026-09-03. 상태: Setup 전체 300개 회귀, main CI 및 5플랫폼 공개 발행 통과. 수정 Console GHCR edge 발행 완료. OAuth 승인을 받아 공개 EXE upgrade를 실행했지만, API egress template 및 기존 session key 해석 오류로 upgrade와 rollback 모두 실패했다. 설치 미완료다. 현재 추가 source 수정은 auto-review가 documentation-only scope를 근거로 차단했다. 상세 변경 명세는 Console docs/CONSOLE-INSTALL-RECOVERY-PATCH-REVIEW-20260903.md에 기록했다.
 
 ## 문제
 

@@ -1041,6 +1041,8 @@ async function materializeFoundationInstallers(
   const target = isTargetConsoleRelease(lock);
   const manifestArtifacts = await Promise.all(foundationManifestSpecs(lock).map(async (spec) => {
     const raw = await fetchReleaseArtifact(lock, spec.path, { sourceArtifactCredential });
+    const kubernetesApiEgress = raw.includes(KUBERNETES_EGRESS_SLOT)
+      ? discoverRegistryKubernetesEgress(kubectl) : undefined;
     const rendered = renderManifest(
       lock,
       spec,
@@ -1048,10 +1050,12 @@ async function materializeFoundationInstallers(
       storageClass,
       consoleUrl,
       authEnvironment,
-      { kubernetesApiEgress: raw.includes(KUBERNETES_EGRESS_SLOT)
-        ? discoverRegistryKubernetesEgress(kubectl) : undefined }
+      { kubernetesApiEgress }
     );
-    return { spec, raw, rendered };
+    // PowerShell owns image/origin substitution; Setup owns API discovery.
+    // Persist the same discovered egress that passed preflight rendering.
+    const installerTemplate = renderRegistryKubernetesEgress(raw, kubernetesApiEgress);
+    return { spec, installerTemplate, rendered };
   }));
   const artifacts = (await Promise.all(foundationArtifactPaths(lock).map(async (path) => {
     const contents = await fetchReleaseArtifact(lock, path, {
@@ -1073,7 +1077,7 @@ async function materializeFoundationInstallers(
     await writeReleaseArtifact(
       root,
       artifact.spec.path,
-      target ? artifact.raw : artifact.rendered
+      target ? artifact.installerTemplate : artifact.rendered
     );
   }
   return {
