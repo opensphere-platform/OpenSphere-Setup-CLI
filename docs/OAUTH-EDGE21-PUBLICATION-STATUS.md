@@ -4,7 +4,7 @@
 
 ## 발행 상태
 
-- 후보: setup-v0.5.0-edge.21. 이 문서 작성 시점은 공개 워크플로 실행 전이다. 성공한 Actions run과 불변 GitHub Release가 발행 완료의 근거다.
+- **발행 완료: setup-v0.5.0-edge.21**, 2026-09-03 04:06:02 UTC (13:06:02 KST). [공개 릴리스](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/tag/setup-v0.5.0-edge.21), [5-platform 발행 성공](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/actions/runs/33713489052), [main CI 성공](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/actions/runs/33713335878).
 - package/CLI/channel을 edge.21로 일치시켰다. edge.20 릴리스와 자산은 수정·삭제하지 않는다. candidate/stable은 계속 HOLD다.
 - 사용자 제공 공개 Client ID: Ov23lijzo43hyJMnNcMb. Device Flow 시작 및 실제 사용자 승인을 확인했다. Client Secret/PAT는 내장하지 않았다.
 
@@ -30,7 +30,7 @@
 
 - Setup 298/298 테스트 통과 (인증 입력 검증과 Windows 경합 회귀 보강 후). Console source lock 1c0b3973ee9881d45fef3ab308003872119bedd5의 격리 checkout으로 CI 조건을 맞췄다.
 - Go Windows launcher 테스트, bundle/version, native launcher release binding 통과.
-- Windows launcher 후보 7,497,216 bytes. 원격 runtime 자산이 발행되기 전에는 사용자 실행용으로 안내하지 않는다.
+- 공개 Windows launcher 7,497,216 bytes, Windows runtime ZIP 173,881,484 bytes. 인증 없는 공개 다운로드와 API digest/SHA256SUMS 일치를 확인했다.
 - Setup/Console provider와 lifecycle contract 내용 일치. provider 토큰 모양 Client ID 거부, 잘못된 OAuth CLI 옵션의 네트워크 전 차단 시험 통과.
 - Console registry-auth/v1이 없는 대상에는 OAuth bootstrap을 namespace/credential 쓰기 전에 차단한다.
 
@@ -50,3 +50,13 @@ main f934539의 CI 33712594569에서 2개 테스트가 실패했다. CI의 GH_TO
 ## Windows 동시 영수증 정리 검증
 
 6039e8c의 main CI는 통과했으나 공개 워크플로 33712984416의 Windows 테스트에서 동시 임시 영수증 정리의 EPERM이 발생했다. 릴리스는 생성되지 않았다. 기존 ENOENT 처리에 더해 일시적인 EPERM만 최대 3회 재시도하고, 매 시도마다 최종 영수증과 임시 파일의 내용·기존 custody 검증을 다시 수행하도록 보완했다. 영구 EPERM/EACCES, 최종 파일 소실, 다른 임시 내용은 여전히 실패한다. 실제 클러스터 복구나 파일 권한 변경은 하지 않았다.
+
+## 최종 공개 자산 검증 — 2026-09-03 04:08 UTC
+
+- Release ID 381719322, immutable=true, prerelease=true. 원본 commit: 43cbe85f463b13cc56cf015ce14b1510592c7a01. 플랫폼 아카이브 5개 + Windows launcher + SHA256SUMS 총 7개 자산.
+- EXE SHA-256: 116b704771003405e31daaf33ad9c5ecd038c58139a700d1b7692c4c9fcebf66.
+- Windows ZIP SHA-256: 81bfc705e78dfe7ff611a1641d2d4be10ec0325a18b4fcda44ca3fed98b315f0.
+- 공개 EXE에서 실제 CLI 실행 경로로 165.8MiB ZIP을 한 번 다운로드했다. 같은 EXE의 두 번째 실행은 파일 검증 후 'reusing verified runtime; no runtime download'를 반환했다. 네트워크 전 Client ID 오류를 의도적으로 주입한 안전한 검증이며 GitHub 승인이나 Kubernetes 변경은 하지 않았다.
+- 런처와 내부 native runtime 버전 모두 0.5.0-edge.21. 내부 런타임의 공개 Client ID 일치 확인. version 단독 조회는 다운로드를 생략하는 경량 경로이므로 그것만으로 캐시 재사용을 판정하지 않았다.
+- 로컬 비밀값 없는 증거: .release/public-edge21/verification.json, first-run.log, second-run.log. .release는 git 제외 경로다. runtime은 EXE 옆 검증 디렉터리에만 보관하고 Windows 설치/PATH/서비스 등록을 하지 않았다.
+- 기존 edge.20을 수정·삭제하지 않았고 Console GHCR 또는 Kubernetes는 변경하지 않았다. GHCR OAuth manifest 접근 실패와 Console 운영 인계 미발행 상태는 그대로 남아 있다.

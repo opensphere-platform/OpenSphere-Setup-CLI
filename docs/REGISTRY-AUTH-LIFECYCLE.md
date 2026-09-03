@@ -1,6 +1,6 @@
 # Registry 인증·운영 권한 인계 — registry-auth/v1
 
-2026-09-03. **Setup edge.21 발행 준비 / Console 운영 인계는 로컬 구현·미발행 / Kubernetes 미적용.** 실제 발행 상태는 [발행 기록](OAUTH-EDGE21-PUBLICATION-STATUS.md)을 따른다. OAuth 로그인·갱신은 실측 통과했으나 private GHCR manifest 접근은 실패했으며 opt-in 시험 기능으로 유지한다.
+2026-09-03. **Setup edge.21 공개 발행 완료 / Console 운영 인계는 로컬 구현·미발행 / Kubernetes 미적용.** 실제 발행 상태는 [발행 기록](OAUTH-EDGE21-PUBLICATION-STATUS.md)을 따른다. OAuth 로그인·갱신은 실측 통과했으나 private GHCR manifest 접근은 실패했으며 opt-in 시험 기능으로 유지한다.
 
 ## 책임과 경계
 
@@ -11,7 +11,7 @@
 | Kubernetes kubelet | namespace의 imagePullSecret으로 이미지 다운로드 | GitHub OAuth 로그인 또는 refresh-token 갱신 |
 | 운영자 | OAuth 앱 승인, 조직/SSO 권한 승인, 필요 시 재인증, PAT 수동 교체 | 정상적인 자동 갱신마다 Setup 실행 |
 
-2026-09-03 사용자가 여섯 Secret에 한정한 get/update 권한 예외를 승인했다. C_API 배포 원본에 5개 namespace Role/RoleBinding, 600초 projected ServiceAccount token, registry-auth/v1 활성화 환경 변수와 필수 egress를 반영했다. automount는 false를 유지한다. 클러스터 적용 및 공개 릴리스 발행은 아직 하지 않았다. 기존 C_REG의 catalog/read-model 책임과 C_EXT의 Extension 실행 책임은 유지한다. 추가 repository/process/datastore/framework/dependency는 없다.
+2026-09-03 사용자가 여섯 Secret에 한정한 get/update 권한 예외를 승인했다. C_API 배포 원본에 5개 namespace Role/RoleBinding, 600초 projected ServiceAccount token, registry-auth/v1 활성화 환경 변수와 필수 egress를 반영했다. automount는 false를 유지한다. Console의 클러스터 적용 및 운영 인계 이미지 발행은 아직 하지 않았다. Setup edge.21 OAuth 시험판은 별도로 공개 발행했다. 기존 C_REG의 catalog/read-model 책임과 C_EXT의 Extension 실행 책임은 유지한다. 추가 repository/process/datastore/framework/dependency는 없다.
 
 ## 저장 계약
 

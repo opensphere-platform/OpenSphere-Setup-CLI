@@ -1,6 +1,6 @@
 # GHCR authentication lifecycle implementation — 2026-09-03
 
-Status: Setup edge.21 publication in progress; Console lifecycle remains local and undeployed. See OAUTH-EDGE21-PUBLICATION-STATUS.md for the latest publication state. Sections below are chronological evidence, not current blockers.
+Status: Setup edge.21 published and public Windows artifacts verified; Console lifecycle remains local and undeployed. See OAUTH-EDGE21-PUBLICATION-STATUS.md for the latest publication state. Sections below are chronological evidence, not current blockers.
 
 Scope: CON-FR-007, CON-FR-014, CON-FR-017. Setup authenticates and verifies read-only package access; Console owns operational credential lifecycle. Setup stays portable and stores no credential on Windows. Existing processes only; no new repository, process, datastore, dependency, or broad cluster role.
 
@@ -38,3 +38,7 @@ The user requested an OAuth-enabled public release. Local edge.21 candidate, bun
 The user supplied public Client ID Ov23lijzo43hyJMnNcMb and approved Device Flow. Actual read:packages login, 8-hour access-token issuance, refresh, identity preservation and old-access-token rejection passed. GHCR opensphere-console:edge returned HTTP 404/MANIFEST_UNKNOWN before and after refresh. The org packages API probe was invalid for this account (public API type User); its 404 cannot establish package absence. No OAuth credentials were saved.
 
 Setup passed 290 tests against the pinned canonical Console source; provider and lifecycle contract copies match Console. Windows thin launcher, Go tests and bundle checks passed. Publishing edge.21 is explicitly scoped to opt-in OAuth authentication, not proven GHCR pull or a completed Console installation. Unsupported Console bootstrap fails before namespace/credential writes. Console runtime/DB/cold-pull gates remain open.
+
+## Publication completed — 2026-09-03 04:08 UTC
+
+Immutable release setup-v0.5.0-edge.21 / ID 381719322 was published from 43cbe85f463b13cc56cf015ce14b1510592c7a01. Main CI 33713335878 and five-platform publication 33713489052 passed. Final local suite: 298 tests. Public EXE and ZIP hashes, native runtime version, embedded public Client ID, pre-network invalid-client rejection and second-run runtime reuse were verified without a Windows installation or Kubernetes mutation. OAuth identity/refresh passed, private GHCR manifest access did not; no Console runtime-readiness claim. See OAUTH-EDGE21-PUBLICATION-STATUS.md for exact hashes and open gates.
