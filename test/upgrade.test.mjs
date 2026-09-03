@@ -604,3 +604,32 @@ test('OAuth upgrade cannot repair missing runtime credentials with the temporary
   assert.equal(events.some(event => event.startsWith('install:')), false);
   assert.equal(events.some(event => event.startsWith('record:')), false);
 });
+
+test('upgrade and rollback enter Installing before verification and Ready only with evidence', async () => {
+  const previous = lock('1'.repeat(40), 'a');
+  const target = lock('2'.repeat(40), 'b');
+  for (const failTarget of [false, true]) {
+    const phases = [];
+    let current;
+    const operations = runtime(previous, []);
+    operations.recordInstallationState = (release, _storage, _admin, _url, _auth, _tls, phase, options) => {
+      assert.ok(['Installing', 'Ready'].includes(phase));
+      if (phase === 'Ready') {
+        assert.equal(options.verification.evidenceConfigMap, 'opensphere-installation-evidence');
+        assert.equal(options.verification.verifiedAt, '2026-09-03T09:00:00.000Z');
+      }
+      current = { revision: release.sourceRevision, phase };
+      phases.push(current);
+    };
+    operations.verifyInstallation = async (release) => {
+      assert.equal(current.phase, 'Installing');
+      assert.equal(current.revision, release.sourceRevision);
+      if (failTarget && release.sourceRevision === target.sourceRevision) throw new Error('unhealthy target');
+      return { releaseDigest: release.releaseDigest, verifiedAt: '2026-09-03T09:00:00.000Z' };
+    };
+    if (failTarget) await assert.rejects(upgrade(previous, target, { runtime: operations }), /previous release was restored/);
+    else await upgrade(previous, target, { runtime: operations });
+    assert.deepEqual(phases.at(-1), { revision: failTarget ? previous.sourceRevision : target.sourceRevision, phase: 'Ready' });
+    if (failTarget) assert.equal(phases.some(state => state.revision === target.sourceRevision && state.phase === 'Ready'), false);
+  }
+});

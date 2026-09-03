@@ -23,3 +23,8 @@ test('Console-activated optional module Secrets are outside bootstrap verificati
   assert.equal(required['opensphere-console/opensphere-osaa-runtime'], undefined);
   assert.equal(required['opensphere-osaa-credentials/opensphere-osaa-runtime'], undefined);
 });
+
+test('Gitea bootstrap requires current scoped tokens without manufacturing retired Backend webhook credentials', () => {
+  const required = requiredSecretsForLock({ components: { consoleApi: {}, gitea: {} } });
+  assert.deepEqual(required['opensphere-console/opensphere-gitea-control-plane'], ['token', 'review-token']);
+});
