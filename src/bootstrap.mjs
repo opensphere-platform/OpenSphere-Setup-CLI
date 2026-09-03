@@ -1143,6 +1143,19 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
   ]);
   progress?.item('완료', 'Gitea bootstrap 및 control-plane credential');
 
+  // C_API requires the bounded Beszel reader projection at container start.
+  // The Beszel installer only refreshes C_API when it already exists.
+  progress?.item('설치', 'Beszel baseline host observability');
+  run('pwsh', [
+    '-NoProfile', '-NonInteractive', '-File',
+    join(foundation.root, 'deploy', 'baseline-monitoring', 'install.ps1'),
+    '-KubectlContext', context,
+    '-BeszelHubImage', lock.components.beszelHub.image,
+    '-BeszelAgentImage', lock.components.beszelAgent.image,
+    '-BeszelBootstrapImage', lock.components.beszelBootstrap.image
+  ]);
+  progress?.item('완료', 'Beszel Hub bootstrap Job 및 Agent restart 검증');
+
   const migration = foundation.migration.evidence;
   progress?.item('설치', 'Supabase Data & Identity + Console API/Extension Controller');
   run('pwsh', [
@@ -1163,17 +1176,6 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
     '-ExpectedMigrationLatestGlobalId', migration.latestGlobalId
   ]);
   progress?.item('완료', 'fresh migration prefix 및 최소권한 C_API/C_EXT runtime');
-
-  progress?.item('설치', 'Beszel baseline host observability');
-  run('pwsh', [
-    '-NoProfile', '-NonInteractive', '-File',
-    join(foundation.root, 'deploy', 'baseline-monitoring', 'install.ps1'),
-    '-KubectlContext', context,
-    '-BeszelHubImage', lock.components.beszelHub.image,
-    '-BeszelAgentImage', lock.components.beszelAgent.image,
-    '-BeszelBootstrapImage', lock.components.beszelBootstrap.image
-  ]);
-  progress?.item('완료', 'Beszel Hub bootstrap Job 및 Agent restart 검증');
 }
 
 function runComponentMigrations(foundation, progress) {
@@ -2024,10 +2026,23 @@ export async function preflightReleaseArtifacts(lock, {
 }
 
 function installPreparedRelease(lock, prepared, storageClass, consoleUrl, label, progress) {
+  const options = { preserveHostLocalEdgeTrust: lock.channel === 'edge' };
+  const prerequisitePaths = prepared.foundation.target ? [
+    'apps/extension-controller/crds/ui-plugin-crds.yaml',
+    TRUST_CONFIGMAP_PATH,
+  ] : [];
+  const prerequisites = prerequisitePaths.map(path => prepared.base.find(item => item.path === path));
+  if (prerequisites.some(item => !item)) throw new Error('Verified release lacks Extension Controller prerequisites');
+  if (prerequisites.length) {
+    progress?.item('설치', 'Extension Controller CRD 및 신뢰 키 선행 적용');
+    applyRelease(prerequisites, label, progress, options);
+    kubectl(['wait', '--for=condition=Established', '--timeout=60s',
+      'crd/uipluginpackages.plugins.opensphere.io',
+      'crd/uipluginregistrations.plugins.opensphere.io']);
+    progress?.item('완료', 'Extension Controller CRD Established');
+  }
   runFoundationInstallers(lock, prepared.foundation, storageClass, consoleUrl, progress);
-  applyRelease(prepared.base, label, progress, {
-    preserveHostLocalEdgeTrust: lock.channel === 'edge'
-  });
+  applyRelease(prepared.base.filter(item => !prerequisitePaths.includes(item.path)), label, progress, options);
 }
 
 export async function bootstrap(lock, {

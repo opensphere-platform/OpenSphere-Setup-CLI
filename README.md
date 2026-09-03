@@ -7,18 +7,18 @@ OpenSphere OS Console의 신뢰 가능한 최초 설치, 재개, 검증, 업그�
 
 Setup CLI는 Windows에 설치해 상시 사용하는 프로그램이 아니다. 필요한 때 실행해 Kubernetes의 Console을 준비·설치·검증하고 종료한다. **Setup 설치, PATH 등록, 서비스 등록은 하지 않는다.**
 
-현재 소스 버전은 `0.5.0-edge.23`이며 OpenSphere 전용 OAuth App의 Device Flow를 포함한다. 이번 수정 및 발행·복구 상태는 [Console 설치 복구 기록](docs/CONSOLE-INSTALL-PROGRESS-EDGE23.md)을 참고한다.
+현재 소스 버전은 `0.5.0-edge.24`이며 OpenSphere 전용 OAuth App의 Device Flow를 포함한다. 이번 수정 및 발행·복구 상태는 [Console 설치 복구 기록](docs/CONSOLE-INSTALL-ORDER-EDGE24.md)을 참고한다.
 
-**현재 검증 범위:** edge.23의 Setup 테스트 309개, 5개 플랫폼 공개 빌드와 packaged runtime smoke test가 통과했다. 공개 Windows EXE의 체크섬·버전·읽기 전용 status 및 runtime 재사용을 확인했다. Console 설치의 REST schema·기존 키 읽기·API egress 전달 오류를 수정하고 12단계 진행 표시를 추가했다. 실제 OAuth 로그인·갱신 및 doctor 검증은 앞선 릴리스에서 수행한 기록이며, 수정판의 새로운 클린 bootstrap 성공을 의미하지 않는다. 발행·기존 설치 삭제 결과와 재시도 명령은 위 복구 기록을 따른다.
+**현재 수정 범위:** edge.23 실제 설치에서 확인된 Beszel reader Secret과 C_API의 설치 순서 오류, 후속 C_EXT CRD 선행 적용 누락을 edge.24에서 수정한다. 진행 표시와 기존 credential/공급망 계약은 유지한다. 발행·검증·현재 실패 설치 삭제 상태는 위 기록을 따른다. 과거 version/status 또는 CI 통과를 실제 클린 bootstrap 성공으로 표시하지 않는다.
 
 ### Windows amd64 — 한 번 다운로드하고 재사용하는 포터블 실행 파일
 
-[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.23/opensphere-setup.exe)
+[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.24/opensphere-setup.exe)
 
 ```powershell
 .\opensphere-setup.exe version
 .\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --registry-auth oauth
-.\opensphere-setup.exe --version 0.5.0-edge.23 resolve --release edge --registry-auth oauth
+.\opensphere-setup.exe --version 0.5.0-edge.24 resolve --release edge --registry-auth oauth
 ```
 
 버전·채널 선택자는 명령 앞에 두며 상호 배타적이다. 옵션을 생략하면 EXE가 발행된 exact Release를 사용한다. `--release`와 `--lock`은 Console 배포 선택자다.
