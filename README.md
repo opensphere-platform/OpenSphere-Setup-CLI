@@ -7,18 +7,18 @@ OpenSphere OS Console의 신뢰 가능한 최초 설치, 재개, 검증, 업그�
 
 Setup CLI는 Windows에 설치해 상시 사용하는 프로그램이 아니다. 필요한 때 실행해 Kubernetes의 Console을 준비·설치·검증하고 종료한다. **Setup 설치, PATH 등록, 서비스 등록은 하지 않는다.**
 
-현재 소스 버전은 `0.5.0-edge.21`이며 OpenSphere 전용 OAuth App의 Device Flow를 포함한다. 실제 공개 상태와 검증 근거는 [OAuth 발행 기록](docs/OAUTH-EDGE21-PUBLICATION-STATUS.md)을 참고한다.
+현재 소스 버전은 `0.5.0-edge.22`이며 OpenSphere 전용 OAuth App의 Device Flow를 포함한다. 이번 수정 및 발행·복구 상태는 [Console 설치 복구 기록](docs/CONSOLE-INSTALL-RECOVERY-EDGE22.md)을 참고한다.
 
-**현재 검증 한계:** 등록 앱의 실제 OAuth 로그인·토큰 갱신·이전 토큰 무효화는 확인했다. 그러나 `opensphere-console:edge` manifest 조회는 갱신 전후 모두 HTTP 404(`MANIFEST_UNKNOWN`)였다. OAuth는 opt-in 시험 기능이며 private GHCR 다운로드 또는 Console 설치 완료가 검증된 버전은 아니다. 404만으로 패키지 부재와 접근 제한을 구분할 수 없다.
+**현재 검증 범위:** 실제 OAuth 로그인·갱신과 발행된 Console 이미지 21개·설치 파일 47개의 doctor 검증은 통과했다. 이후 실제 설치에서 발견한 Console SQL 구문 오류를 수정했다. edge.22는 업그레이드의 임시 OAuth 인증과 기존 운영 Secret 보존을 지원한다. 발행·클러스터 복구 완료 여부는 위 복구 기록에 별도로 남긴다.
 
 ### Windows amd64 — 한 번 다운로드하고 재사용하는 포터블 실행 파일
 
-[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.21/opensphere-setup.exe)
+[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.22/opensphere-setup.exe)
 
 ```powershell
 .\opensphere-setup.exe version
 .\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --registry-auth oauth
-.\opensphere-setup.exe --version 0.5.0-edge.21 resolve --release edge --registry-auth oauth
+.\opensphere-setup.exe --version 0.5.0-edge.22 resolve --release edge --registry-auth oauth
 ```
 
 버전·채널 선택자는 명령 앞에 두며 상호 배타적이다. 옵션을 생략하면 EXE가 발행된 exact Release를 사용한다. `--release`와 `--lock`은 Console 배포 선택자다.
@@ -336,6 +336,6 @@ deploy/opensphere-console.yaml
 
 `read:packages offline_access`만 요청하며 repo/write/admin 권한이 포함된 credential은 운영 인계를 거부한다. 토큰은 실행 프로세스 메모리에만 두며 Windows 런타임 보관 폴더에 저장하지 않는다. 따라서 별도 명령을 새로 실행하면 OAuth 승인이 다시 필요할 수 있다. 런타임 ZIP 다운로드 재사용과 OAuth 로그인은 별개다.
 
-**Console 설치와 운영 인계는 별도 호환 조건이다.** OAuth credential을 `bootstrap`에 넘기려면 대상 Console이 `registry-auth/v1`을 활성화해야 한다. 기존 Console 릴리스가 이를 지원하지 않으면 namespace/credential 쓰기 전에 중단한다. 이 Setup 릴리스만으로 기존 Console에 refresh worker를 설치하거나 활성화하지 않는다. 기존 설치의 `upgrade`는 Console 재인증 경로를 요구한다.
+**Console 설치와 운영 인계는 별도 호환 조건이다.** OAuth credential을 `bootstrap`에 넘기려면 대상 Console이 `registry-auth/v1`을 활성화해야 한다. 기존 Console 릴리스가 이를 지원하지 않으면 namespace/credential 쓰기 전에 중단한다. 이 Setup 릴리스만으로 기존 Console에 refresh worker를 설치하거나 활성화하지 않는다. 기존 설치의 `upgrade --registry-auth oauth`는 임시 인증을 공급망 검증에만 사용하며 기존 운영 Secret을 보존한다. 운영 credential 교체·갱신은 Console 재인증 또는 별도 복구 절차를 따른다.
 
 [인증·저장·재인증 계약과 현재 검증 범위](docs/REGISTRY-AUTH-LIFECYCLE.md)를 참고한다.

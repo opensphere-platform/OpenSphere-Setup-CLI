@@ -2408,8 +2408,12 @@ export async function upgrade(
   }
   operations.preflight({ storageClass: config.storageClass, channel: targetLock.channel });
   operations.ensureManagedNamespaces();
-  if(registryCredentials?.lifecycle?.mode==='github-device')throw new Error('Use Console Registry reauthorization for an existing installation; Setup upgrade does not replace runtime refresh authority');
-  operations.ensureRegistryPullSecrets(targetLock, registryCredentials);
+  // OAuth here authenticates supply-chain reads only. Preserve the installed
+  // owner/pull Secrets; runtime reauthorization remains a Console operation.
+  operations.ensureRegistryPullSecrets(
+    targetLock,
+    registryCredentials?.lifecycle?.mode === 'github-device' ? null : registryCredentials
+  );
   const initialAdmin = config.initialAdmin;
   const componentTransition = targetLock.releaseScope === RELEASE_SCOPE_COMPONENT;
   const changedComponents = componentTransition ? targetLock.changedComponents : [];

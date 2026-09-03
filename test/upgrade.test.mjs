@@ -565,3 +565,42 @@ test('unrecoverable image pull errors fail before rollout timeout', () => {
     }]
   }), null);
 });
+
+test('OAuth upgrade verifies supply chains but never forwards temporary credentials to runtime Secrets', async () => {
+  const previous = lock('1'.repeat(40), 'a');
+  const target = lock('2'.repeat(40), 'b');
+  const events = [];
+  const credentials = Object.freeze({username: 'test-user', token: 'ephemeral-test-only-token', lifecycle: {mode: 'github-device'}});
+  const checked = [];
+  const operations = runtime(previous, events);
+  operations.verifyReleaseLock = async (release, options) => {
+    assert.equal(options.registryCredentials, credentials);
+    checked.push(release.releaseDigest);
+  };
+  operations.ensureRegistryPullSecrets = (release, supplied) => {
+    assert.equal(release.releaseDigest, target.releaseDigest);
+    assert.equal(supplied, null, 'runtime credential authority must be preserved');
+    events.push('preserved-registry-owner');
+    return {credentialSource: 'console-managed'};
+  };
+  const result = await upgrade(previous, target, {registryCredentials: credentials, runtime: operations});
+  assert.equal(result.changed, true);
+  assert.deepEqual(new Set(checked), new Set([previous.releaseDigest, target.releaseDigest]));
+  assert.ok(events.includes('preserved-registry-owner'));
+});
+
+test('OAuth upgrade cannot repair missing runtime credentials with the temporary login', async () => {
+  const previous = lock('1'.repeat(40), 'a');
+  const target = lock('2'.repeat(40), 'b');
+  const events = [];
+  const operations = runtime(previous, events);
+  operations.ensureRegistryPullSecrets = (_release, supplied) => {
+    assert.equal(supplied, null);
+    throw new Error('Runtime-owned registry pull Secrets are incomplete');
+  };
+  await assert.rejects(upgrade(previous, target, {
+    registryCredentials: {lifecycle: {mode: 'github-device'}}, runtime: operations
+  }), /Runtime-owned registry pull Secrets are incomplete/);
+  assert.equal(events.some(event => event.startsWith('install:')), false);
+  assert.equal(events.some(event => event.startsWith('record:')), false);
+});

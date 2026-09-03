@@ -1,5 +1,7 @@
 # 부분 실패 진단과 복구
 
+> 릴리스 자체의 installer 결함은 같은 release의 재실행으로 해결되지 않는다. 2026-09-03 예약어 SQL 오류의 경우 [edge.22 복구 절차](CONSOLE-INSTALL-RECOVERY-EDGE22.md)에 따라 수정 Console으로 명시적 upgrade하며 PVC/Secret을 보존한다.
+
 같은 release·context·StorageClass·Console origin으로 재실행하는 것이 기본 복구 방법이다.
 Secret은 누락된 키만 보완하며 정상 재개 과정에서 암묵적으로 회전하지 않는다. 데이터 PVC를
 삭제하거나 다른 StorageClass로 바꾸는 작업은 이 Runbook의 자동 재개 범위가 아니다.

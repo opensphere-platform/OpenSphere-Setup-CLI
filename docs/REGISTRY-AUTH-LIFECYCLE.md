@@ -1,5 +1,7 @@
 # Registry 인증·운영 권한 인계 — registry-auth/v1
 
+> 현재 설치 오류 및 edge.22 수정 상태는 [설치 복구 기록](CONSOLE-INSTALL-RECOVERY-EDGE22.md)을 따른다. 아래 edge.21 발행 당시 관측은 이력이다. GHCR manifest 접근은 이후 실제 doctor에서 통과했으며 현재 장애는 Console installer SQL이다.
+
 2026-09-03. **Setup edge.21 공개 발행 완료 / Console 운영 인계는 로컬 구현·미발행 / Kubernetes 미적용.** 실제 발행 상태는 [발행 기록](OAUTH-EDGE21-PUBLICATION-STATUS.md)을 따른다. OAuth 로그인·갱신은 실측 통과했으나 private GHCR manifest 접근은 실패했으며 opt-in 시험 기능으로 유지한다.
 
 ## 책임과 경계
@@ -50,7 +52,7 @@ GitHub GHCR 문서는 PAT classic을 공식 사용자 인증 수단으로 안내
 5. 재인증: Console 기존 GHCR 화면 → 최근 MFA/console.registry.manage/CSRF/idempotency/reason → durable operation → device code 시작 → 브라우저 승인 → 현재 사용자 권한과 최근 MFA 재검증 → 새 credential 인계. code는 요청한 사용자에게만 표시한다. 권한이 철회됐거나 MFA 유효 시간이 지나면 완료하지 않는다.
 6. PAT: 자동 refresh가 없으며 manual로 표시한다. 관측 가능한 만료 일시를 표시하고 거부/만료를 감지하면 재인증 또는 token 교체를 요구한다. 만료 정보가 없으면 없음으로 표시하며 영구 권한이라고 부르지 않는다.
 7. 제거: 현재 권한과 exact confirmation 확인 후 refresh token을 포함한 owner credential을 비우고 모든 pull Secret을 anonymous로 동기화한다. GitHub 계정 전체 앱 권한을 자동 철회하지 않는다. 실행 중인 컨테이너 종료를 의미하지 않는다.
-8. 기존 설치: Setup은 Console이 소유하는 credential을 교체하지 않는다. upgrade용 인증과 runtime 재인증을 구분한다. 현재 작업본은 OAuth를 가진 upgrade에서 Console 재인증 경로를 요구한다.
+8. 기존 설치: Setup은 Console이 소유하는 credential을 교체하지 않는다. upgrade용 인증과 runtime 재인증을 구분한다. edge.22의 OAuth upgrade는 임시 credential을 기존/대상 공급망 검증에만 사용하고 기존 owner/pull Secret을 보존한다. 운영 credential 자체를 바꾸는 경우에만 Console 재인증 또는 별도 복구 절차가 필요하다.
 
 ## 상태·검증 의미
 
