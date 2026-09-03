@@ -9,7 +9,7 @@ Setup CLI는 Windows에 설치해 상시 사용하는 프로그램이 아니다.
 
 현재 소스 버전은 `0.5.0-edge.23`이며 OpenSphere 전용 OAuth App의 Device Flow를 포함한다. 이번 수정 및 발행·복구 상태는 [Console 설치 복구 기록](docs/CONSOLE-INSTALL-PROGRESS-EDGE23.md)을 참고한다.
 
-**현재 검증 범위:** 실제 OAuth 로그인·갱신과 발행된 Console 이미지 21개·설치 파일 47개의 doctor 검증은 통과했다. 이후 실제 설치에서 발견한 Console SQL 구문 오류를 수정했다. edge.22는 업그레이드의 임시 OAuth 인증과 기존 운영 Secret 보존을 지원한다. 발행·클러스터 복구 완료 여부는 위 복구 기록에 별도로 남긴다.
+**현재 검증 범위:** edge.23의 Setup 테스트 309개, 5개 플랫폼 공개 빌드와 packaged runtime smoke test가 통과했다. 공개 Windows EXE의 체크섬·버전·읽기 전용 status 및 runtime 재사용을 확인했다. Console 설치의 REST schema·기존 키 읽기·API egress 전달 오류를 수정하고 12단계 진행 표시를 추가했다. 실제 OAuth 로그인·갱신 및 doctor 검증은 앞선 릴리스에서 수행한 기록이며, 수정판의 새로운 클린 bootstrap 성공을 의미하지 않는다. 발행·기존 설치 삭제 결과와 재시도 명령은 위 복구 기록을 따른다.
 
 ### Windows amd64 — 한 번 다운로드하고 재사용하는 포터블 실행 파일
 
