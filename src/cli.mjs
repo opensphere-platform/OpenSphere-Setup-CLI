@@ -366,7 +366,6 @@ async function main() {
     progress.step('입력 옵션과 설치 정책 검증');
     validateChannel(channel);
     const sourceArtifactCredential = takeSourceArtifactCredential();
-    const registryCredentials = await registryCredentialsOption();
     const selectedAuthEnvironment = selectAuthEnvironment(channel, authEnvironment);
     const requestedShellTlsSecret = hasOption('--shell-tls-secret') ? option('--shell-tls-secret', '') : undefined;
     assertReleaseShellTlsReference(channel, requestedShellTlsSecret ? parseShellTlsSecretRef(requestedShellTlsSecret) : undefined);
@@ -375,6 +374,8 @@ async function main() {
       displayName: option('--admin-display-name', 'OpenSphere Administrator'),
       email: option('--admin-email', 'admin@opensphere.local')
     });
+    // Validate all pure bootstrap inputs before initiating authentication.
+    const registryCredentials = await registryCredentialsOption();
     progress.done(`auth=${selectedAuthEnvironment}, registry=${registryCredentials ? 'explicit' : 'automatic'}`);
     progress.step('로컬 실행 환경 fail-fast 검증');
     const localEnvironment = inspectLocalEnvironment({ requireGh: channel !== 'edge' });

@@ -28,7 +28,7 @@
 
 ## 로컬 발행 검증
 
-- Setup 290/290 테스트 통과. Console source lock 1c0b3973ee9881d45fef3ab308003872119bedd5의 격리 checkout으로 CI 조건을 맞췄다.
+- Setup 292/292 테스트 통과 (CI 회귀 2건 보강 후). Console source lock 1c0b3973ee9881d45fef3ab308003872119bedd5의 격리 checkout으로 CI 조건을 맞췄다.
 - Go Windows launcher 테스트, bundle/version, native launcher release binding 통과.
 - Windows launcher 후보 7,497,216 bytes. 원격 runtime 자산이 발행되기 전에는 사용자 실행용으로 안내하지 않는다.
 - Setup/Console provider와 lifecycle contract 내용 일치. provider 토큰 모양 Client ID 거부, 잘못된 OAuth CLI 옵션의 네트워크 전 차단 시험 통과.
@@ -42,3 +42,7 @@ Console의 migration/DB/MFA 회귀 검증, 실제 이미지 발행, registry-aut
 
 - https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps
 - https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry
+
+## 최초 CI에서 수정한 입력 검증 순서
+
+main f934539의 CI 33712594569에서 2개 테스트가 실패했다. CI의 GH_TOKEN이 있는 환경에서 OAuth 도입으로 비동기 provider 검사가 관리자 이름/TLS 입력 검사보다 먼저 실행된 것이 원인이다. 공개 빌드 33712615231을 발행 전에 중단하고 순서를 수정했다. 잘못된 OAuth App override를 함께 지정해도 순수 입력 오류가 먼저 반환되는 회귀 테스트 2개를 추가했다. 수정 커밋의 main CI가 통과한 후에만 발행 워크플로를 다시 실행한다.
