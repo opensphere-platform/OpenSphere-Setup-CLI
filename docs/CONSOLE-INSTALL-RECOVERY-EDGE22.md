@@ -1,6 +1,6 @@
 # Console 설치 SQL 오류 복구 — Setup edge.22
 
-2026-09-03. 상태: Setup 전체 300개 회귀 통과, 공개 발행 및 실제 복구 결과는 완료 후 기록.
+2026-09-03. 상태: Setup 전체 300개 회귀, main CI 및 5플랫폼 공개 발행 통과. 수정 Console GHCR edge 발행 완료. 공개 EXE upgrade를 시작했으며 현재 사용자 OAuth 승인을 기다린다. 아직 설치 복구 성공을 주장하지 않는다.
 
 ## 문제
 
@@ -27,3 +27,13 @@ repository/process/datastore/framework/dependency 추가: 0. 새 설치 명령�
 기존 bootstrap 재실행은 이전 cluster lock의 잘못된 installer를 다시 받으므로 이번 릴리스 결함의 해결 방법이 아니다. upgrade는 target을 명시적으로 바꾸는 기존 경로다. PVC, Gitea repository, Supabase Secret, TLS, runtime registry owner Secret을 삭제하지 않는다. Developer/WWW namespace도 변경하지 않는다.
 
 새 설치는 수정 릴리스의 bootstrap을 사용한다. 실제 설치·Ready·cold-pull·runtime 갱신 검증은 공개 발행이나 단위 테스트 성공과 별도다.
+
+## 공개 발행 및 실행 증거
+
+- Console `202609031456`, source `3d50f630a6273085e66b6a76fcd5cc8889f9ca40`, anchor `sha256:7ca70ad9118bf53b86636b6395f6356f36816bc2b42acb253d4b03f2c125aeca`, canonical 18개 + auxiliary 3개 최종 검증·edge 전환 완료.
+- [공개 Setup edge.22](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/tag/setup-v0.5.0-edge.22), Release ID 381777345, source `5a985eb5a716adb11563d7fc6f3460b72a3ba1ce`.
+- 공개 EXE 7,497,216 bytes, SHA-256 `481858ec0fe30e9a2e5baea022edde05a338238397b8e5ffb19e17fd5acaa79f`. 다운로드·해시·version/status 실행 확인. upgrade 실행 시 검증된 runtime을 재사용했고 다시 다운로드하지 않았다.
+- [Setup CI](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/actions/runs/33721342577) 및 [5플랫폼 공개 발행](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/actions/runs/33721369348): success.
+- `.release/public-edge22/public-release-evidence.json`과 `.release/registry-auth-verification/console-repair-upgrade-edge22.log`에 비밀값 없는 증거를 보존한다. 일회용 user code와 credential은 로그 파일에서 제외한다.
+
+기존 Gitea webhook/post-merge owner 미구현 경고는 SQL 중단과 별개다. bootstrap core 및 upgrade 성공을 이 관리 기능의 완성으로 표시하지 않는다.
