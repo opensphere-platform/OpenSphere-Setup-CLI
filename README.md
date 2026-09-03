@@ -7,21 +7,25 @@ OpenSphere OS Console의 신뢰 가능한 최초 설치, 재개, 검증, 업그�
 
 Setup CLI는 Windows에 설치해 상시 사용하는 프로그램이 아니다. 필요한 때 실행해 Kubernetes의 Console을 준비·설치·검증하고 종료한다. **Setup 설치, PATH 등록, 서비스 등록은 하지 않는다.**
 
-현재 버전은 `0.5.0-edge.19`다.
+현재 버전은 `0.5.0-edge.20`다.
 
-### Windows amd64 — 단일 온라인 실행 파일
+### Windows amd64 — 한 번 다운로드하고 재사용하는 포터블 실행 파일
 
-[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.19/opensphere-setup.exe)
+[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.20/opensphere-setup.exe)
 
 ```powershell
 .\opensphere-setup.exe version
 .\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --storage-class hostpath
-.\opensphere-setup.exe --version 0.5.0-edge.19 bootstrap --release edge --context docker-desktop --storage-class hostpath
+.\opensphere-setup.exe --version 0.5.0-edge.20 bootstrap --release edge --context docker-desktop --storage-class hostpath
 ```
 
 버전·채널 선택자는 명령 앞에 두며 상호 배타적이다. 옵션을 생략하면 EXE가 발행된 exact Release를 사용한다. `--release`와 `--lock`은 Console 배포 선택자다.
 
-실행기는 공개 immutable Release의 runtime ZIP을 임시 다운로드하고 GitHub asset digest와 SHA256SUMS를 검증한 뒤 실행한다. 정상 종료·명령 실패 시 임시 파일을 정리한다. 영구 설치·캐시는 없다. **작은 실행 파일이지만 작업할 때 약 170MB를 내려받으며 내부 Node CLI는 여전히 약 99MiB다.** 완전 오프라인 단일 EXE라고 주장하지 않는다.
+**같은 버전은 한 번만 다운로드한다.** 실행 파일 옆의 `opensphere-setup-runtime/<release-tag>/`에 검증된 ZIP과 압축 해제한 런타임을 보관한다. 이후 같은 버전의 명령은 파일 무결성을 확인해 그대로 재사용한다. 정상 종료·명령 실패 뒤에도 보존하며, `edge`가 새 버전을 가리킬 때만 해당 버전을 새로 받는다.
+
+채널·immutable Release 메타데이터의 작은 온라인 조회는 실행마다 유지한다. 보관 ZIP의 GitHub SHA-256을 대조하고, 런타임 파일 전체를 원본 ZIP과 비교한다. 훼손된 버전은 실행하지 않으며 자동 삭제하거나 덮어쓰지 않는다. 읽기 전용 위치라면 EXE를 쓰기 가능한 폴더로 옮긴다. LocalAppData에 우회 설치하지 않는다.
+
+**첫 다운로드는 버전당 약 174MB이며 내부 Node CLI는 여전히 약 99MiB다.** 보관 ZIP과 런타임을 합쳐 버전당 약 610MiB를 사용하므로 1GiB 이상 여유 공간을 확보한다. EXE와 `opensphere-setup-runtime` 폴더를 함께 옮기면 재사용할 수 있고, 사용 중인 명령을 종료한 뒤 함께 지우면 제거된다. 이전 버전도 자동으로 삭제하지 않는다. `edge.19` 실행기는 이 동작으로 자동 변경되지 않으므로 **새 EXE로 한 번 교체해야 한다.**
 
 ### 압축형 포터블 패키지 — Windows/Linux/macOS
 
@@ -296,7 +300,7 @@ UID가 유지되는지 전후로 검증하며 cluster-wide reset은 수행하지
 ## 주요 소스
 
 ```text
-launchers/windows/             Windows 무설치 온라인 실행기
+launchers/windows/             Windows 무설치 포터블 실행기
 src/cli.mjs                    명령 진입점
 src/installation-contract.mjs  Setup ownership와 installation phase 계약
 src/release.mjs                서명 BOM, attestation과 digest lock

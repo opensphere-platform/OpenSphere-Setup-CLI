@@ -1,29 +1,28 @@
-# OpenSphere Setup CLI — portable execution
+# OpenSphere Setup CLI — reusable portable execution
 
 Setup is an occasional standalone administration tool, not an installed host application.
 
-- Windows: download `opensphere-setup.exe` and run directly.
-- Linux/macOS, or pre-downloaded Windows runtime: extract the platform archive and run in place.
-- No Setup installation directory, global npm package, PATH registration, service, or permanent runtime cache.
-- Windows launcher verifies immutable GitHub metadata, asset size, SHA-256 and SHA256SUMS, extracts the runtime to a unique temporary directory, executes it and cleans up.
-- Each operational command downloads the full runtime archive. Internal Node is still about 99 MiB; this release changes lifecycle, not runtime size.
-- bootstrap/upgrade no longer install the host os CLI. Use the separate explicit `install-cli` command.
-- Windows localhost CA trust requires explicit `bootstrap --trust-local-ca`.
-- Old installer assets are no longer published. Immutable older releases remain unchanged.
-- Runtimes without `hostInstallation: explicit-only` are refused by the new launcher.
+- Replace the old edge.19 launcher with this release's `opensphere-setup.exe` once.
+- Each selected version is downloaded and extracted only once beside the EXE in `opensphere-setup-runtime/<release-tag>/`.
+- Later commands verify and reuse the same runtime files. No repeated archive download or extraction for that version.
+- Small channel and immutable Release metadata requests still require Internet access. This is not a fully offline launcher.
+- Every reuse checks the stored archive and SHA256SUMS against GitHub digests, then checks all extracted files against the verified archive. Changed, missing, linked, or extra files block execution.
+- Concurrent first runs share an OS preparation lock. Failed downloads never become complete versions; successful runtimes survive command success, failure, and cancellation.
+- New versions live in separate folders. No automatic eviction or overwriting of existing versions.
+- Move the EXE and its runtime folder together. To remove them, first close all Setup commands, then delete both. No Setup installation directory, global npm package, PATH registration, service, or hidden shared cache.
+- The first Windows archive download remains about 174 MB. The archive and expanded runtime use about 610 MiB per version; leave at least 1 GiB free for a new version. Internal Node remains about 99 MiB.
+- Linux/macOS and pre-downloaded Windows archives run in place as before.
+- bootstrap/upgrade do not install the host os CLI. Windows development CA trust requires explicit `bootstrap --trust-local-ca`.
 
 ```powershell
 .\opensphere-setup.exe version
+.\opensphere-setup.exe --channel edge status --context docker-desktop
 .\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop
-.\opensphere-setup.exe --version 0.5.0-edge.19 bootstrap --release edge --context docker-desktop
+.\opensphere-setup.exe --version 0.5.0-edge.20 bootstrap --release edge --context docker-desktop
 ```
 
-Setup selectors precede the command; Console `--release` and `--lock` remain independent.
-Caller cwd, stdin, stdout/stderr and exit status are preserved.
-Operation outputs and Kubernetes resources are not removed with the temporary runtime.
-
-Five platform archives contain Node.js, PowerShell and kubectl (plus libatomic on Linux).
-Every platform runs native runtime smoke tests; publication verifies all remote digests.
+Setup selectors precede the command. Console `--release` and `--lock` remain independent.
+Caller cwd, stdin, stdout/stderr and exit status are preserved. Runtime cleanup never deletes operation outputs or Kubernetes resources.
 
 Edge Windows executables are not Authenticode signed. Do not bypass organization controls.
 macOS ad-hoc signatures are not Apple notarization. Candidate/stable remain HOLD.

@@ -6,7 +6,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -178,45 +177,6 @@ func TestChecksumRequiresExactSingleMatchingEntry(t *testing.T) {
 	for _, bad := range []string{"", good + good, strings.Repeat("0", 64) + "  " + runtimeAsset} {
 		if err := verifyChecksumFile([]byte(bad), asset); err == nil {
 			t.Fatal("bad checksum file accepted")
-		}
-	}
-}
-
-func TestTemporaryRuntimeIsRemovedOnSuccessAndOperationFailure(t *testing.T) {
-	for _, fail := range []bool{false, true} {
-		archiveData := runtimeZip(t, "", "0.5.0-edge.19", "explicit-only")
-		archive := makeAsset(runtimeAsset, archiveData)
-		sumData := []byte(strings.TrimPrefix(archive.Digest, "sha256:") + "  " + runtimeAsset + "\n")
-		sums := makeAsset("SHA256SUMS", sumData)
-		client := clientFor(map[string][]byte{archive.BrowserDownloadURL: archiveData, sums.BrowserDownloadURL: sumData})
-		release := releaseMetadata{TagName: testTag, Immutable: true, Assets: []releaseAsset{archive, sums}}
-		var usedRoot string
-		cwd, _ := os.Getwd()
-		code, err := withTemporaryRuntime(context.Background(), client, release, func(root string) (int, error) {
-			usedRoot = root
-			if _, err := os.Stat(filepath.Join(root, "opensphere-setup.exe")); err != nil {
-				t.Fatal(err)
-			}
-			current, _ := os.Getwd()
-			if current != cwd {
-				t.Fatal("caller working directory changed")
-			}
-			if fail {
-				return 7, errors.New("child failed")
-			}
-			return 0, nil
-		})
-		if usedRoot == "" {
-			t.Fatal("runtime was not invoked")
-		}
-		if _, statErr := os.Stat(filepath.Dir(filepath.Dir(usedRoot))); !os.IsNotExist(statErr) {
-			t.Fatalf("temporary files remain: %s, %v", usedRoot, statErr)
-		}
-		if fail && (code != 7 || err == nil) {
-			t.Fatalf("failure status lost: %d %v", code, err)
-		}
-		if !fail && (code != 0 || err != nil) {
-			t.Fatalf("success failed: %d %v", code, err)
 		}
 	}
 }

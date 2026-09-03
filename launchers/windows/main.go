@@ -33,8 +33,8 @@ const (
 	maxExpandedBytes    = 1 << 30
 )
 
-// The public launcher selects a release, runs its verified runtime from a unique
-// temporary directory, and removes that directory after the child exits.
+// The public launcher keeps verified, versioned runtimes beside its executable.
+// A completed runtime is reused without downloading or extracting it again.
 // It never installs Setup, writes a command shim, or changes the user's PATH.
 var releaseTag string
 
@@ -79,10 +79,10 @@ func printHelp() {
 	fmt.Println("Usage:")
 	fmt.Println("  opensphere-setup.exe [--version <semver> | --channel <edge|candidate|stable>] <command> [options]")
 	fmt.Println("  opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop")
-	fmt.Println("  opensphere-setup.exe --version 0.5.0-edge.19 bootstrap --release edge")
-	fmt.Println("\nNo Windows installation, PATH registration, service, or permanent runtime cache.")
-	fmt.Println("Each operation downloads the verified runtime into a temporary directory and removes it on exit.")
-	fmt.Println("Internet access and download/extraction space are required. The archive remains available for offline runtime use.")
+	fmt.Println("  opensphere-setup.exe --version 0.5.0-edge.20 bootstrap --release edge")
+	fmt.Println("\nNo Windows installation, PATH registration, or service.")
+	fmt.Println("Each version is downloaded once into opensphere-setup-runtime beside this EXE and reused.")
+	fmt.Println("Release metadata requires Internet access. Move the EXE and runtime folder together; delete them when no longer needed.")
 	fmt.Println("Selectors before <command> choose the Setup version. --release after <command> chooses the Console channel.")
 	fmt.Println("Use version to print the selected Setup version; help/--help does not download a runtime.")
 	fmt.Println("Console CLI installation is a separate explicit install-cli command.")
@@ -166,8 +166,17 @@ func run(ctx context.Context, args []string) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	fmt.Fprintf(os.Stderr, "[Setup] %s — temporary execution; no Windows installation\n", tag)
-	return withTemporaryRuntime(ctx, client, release, func(root string) (int, error) {
+	executable, err := os.Executable()
+	if err != nil {
+		return 1, err
+	}
+	executable, err = filepath.EvalSymlinks(executable)
+	if err != nil {
+		return 1, err
+	}
+	base := filepath.Join(filepath.Dir(executable), "opensphere-setup-runtime")
+	fmt.Fprintf(os.Stderr, "[Setup] %s — portable execution; no Windows installation\n", tag)
+	return withPortableRuntime(ctx, client, release, base, func(root string) (int, error) {
 		setup := filepath.Join(root, "opensphere-setup.exe")
 		check := exec.CommandContext(ctx, setup, "version")
 		configureChild(check)
@@ -384,6 +393,14 @@ func verifyChecksumFile(data []byte, archive releaseAsset) error {
 }
 
 func extractRuntime(archivePath, destination, expectedVersion string) (string, error) {
+	return processRuntimeArchive(archivePath, destination, expectedVersion, false)
+}
+
+func verifyRuntime(archivePath, destination, expectedVersion string) (string, error) {
+	return processRuntimeArchive(archivePath, destination, expectedVersion, true)
+}
+
+func processRuntimeArchive(archivePath, destination, expectedVersion string, verifyOnly bool) (string, error) {
 	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return "", err
@@ -392,6 +409,25 @@ func extractRuntime(archivePath, destination, expectedVersion string) (string, e
 	if len(reader.File) > 5000 {
 		return "", errors.New("runtime archive has too many entries")
 	}
+	if verifyOnly {
+		if err := assertPlainDirectory(destination); err != nil {
+			return "", err
+		}
+		// Reject links before opening any stored runtime file.
+		if err := filepath.WalkDir(destination, func(p string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if !entry.IsDir() && !entry.Type().IsRegular() {
+				return fmt.Errorf("non-regular portable runtime file: %s", p)
+			}
+			return nil
+		}); err != nil {
+			return "", err
+		}
+	}
+	allowed := map[string]bool{".": true}
+	seen := map[string]bool{}
 	var expanded uint64
 	for _, file := range reader.File {
 		name := strings.TrimSuffix(file.Name, "/")
@@ -399,6 +435,14 @@ func extractRuntime(archivePath, destination, expectedVersion string) (string, e
 			(name != runtimeDirectory && !strings.HasPrefix(name, runtimeDirectory+"/")) ||
 			(!file.FileInfo().IsDir() && !file.Mode().IsRegular()) {
 			return "", fmt.Errorf("unsafe runtime archive entry %q", file.Name)
+		}
+		key := strings.ToLower(filepath.FromSlash(name))
+		if seen[key] {
+			return "", errors.New("runtime archive contains duplicate Windows paths")
+		}
+		seen[key] = true
+		for p := key; p != "."; p = filepath.Dir(p) {
+			allowed[p] = true
 		}
 		for _, segment := range strings.Split(name, "/") {
 			if strings.TrimRight(segment, ". ") != segment || strings.ContainsAny(segment, "<>\"|?*\x00") {
@@ -420,7 +464,43 @@ func extractRuntime(archivePath, destination, expectedVersion string) (string, e
 		target := filepath.Join(destination, filepath.FromSlash(name))
 		relative, err := filepath.Rel(destination, target)
 		if err != nil || filepath.IsAbs(relative) || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
-			return "", errors.New("runtime archive entry escapes temporary directory")
+			return "", errors.New("runtime archive entry escapes runtime directory")
+		}
+		if verifyOnly {
+			if file.FileInfo().IsDir() {
+				if err := assertPlainDirectory(target); err != nil {
+					return "", err
+				}
+				continue
+			}
+			stat, err := os.Lstat(target)
+			if err != nil || !stat.Mode().IsRegular() || uint64(stat.Size()) != file.UncompressedSize64 {
+				return "", fmt.Errorf("stored runtime file missing or changed: %s", name)
+			}
+			input, err := file.Open()
+			if err != nil {
+				return "", err
+			}
+			expectedHash := sha256.New()
+			written, copyErr := io.Copy(expectedHash, io.LimitReader(input, int64(file.UncompressedSize64)+1))
+			closeErr := input.Close()
+			if copyErr != nil {
+				return "", copyErr
+			}
+			if closeErr != nil {
+				return "", closeErr
+			}
+			if uint64(written) != file.UncompressedSize64 {
+				return "", errors.New("runtime ZIP entry size mismatch")
+			}
+			actualHash, err := hashRegularFile(target, int64(file.UncompressedSize64))
+			if err != nil {
+				return "", err
+			}
+			if actualHash != hex.EncodeToString(expectedHash.Sum(nil)) {
+				return "", fmt.Errorf("stored runtime SHA-256 mismatch: %s", name)
+			}
+			continue
 		}
 		if file.FileInfo().IsDir() {
 			if err := os.MkdirAll(target, 0700); err != nil {
@@ -455,6 +535,23 @@ func extractRuntime(archivePath, destination, expectedVersion string) (string, e
 			return "", errors.New("expanded runtime size mismatch")
 		}
 	}
+	if verifyOnly {
+		if err := filepath.WalkDir(destination, func(p string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			rel, err := filepath.Rel(destination, p)
+			if err != nil {
+				return err
+			}
+			if !allowed[strings.ToLower(rel)] {
+				return fmt.Errorf("unexpected file in portable runtime: %s", rel)
+			}
+			return nil
+		}); err != nil {
+			return "", err
+		}
+	}
 	root := filepath.Join(destination, runtimeDirectory)
 	metadata, err := os.ReadFile(filepath.Join(root, "OPENSPHERE-RUNTIME.json"))
 	if err != nil {
@@ -475,49 +572,4 @@ func extractRuntime(archivePath, destination, expectedVersion string) (string, e
 		}
 	}
 	return root, nil
-}
-
-func withTemporaryRuntime(ctx context.Context, client *http.Client, release releaseMetadata, operation func(string) (int, error)) (int, error) {
-	archive, err := exactAsset(release.Assets, runtimeAsset)
-	if err != nil {
-		return 1, err
-	}
-	sums, err := exactAsset(release.Assets, "SHA256SUMS")
-	if err != nil {
-		return 1, err
-	}
-	for _, asset := range []releaseAsset{archive, sums} {
-		if err := validateAsset(asset, release.TagName); err != nil {
-			return 1, err
-		}
-	}
-	temporary, err := os.MkdirTemp("", "opensphere-setup-run-")
-	if err != nil {
-		return 1, err
-	}
-	defer func() {
-		if err := os.RemoveAll(temporary); err != nil {
-			fmt.Fprintf(os.Stderr, "[Setup] temporary cleanup failed; remove %s after all child processes exit: %v\n", temporary, err)
-		}
-	}()
-	fmt.Fprintf(os.Stderr, "[Setup] downloading %.1f MiB verified runtime; files are temporary\n", float64(archive.Size)/(1<<20))
-	archivePath, sumsPath := filepath.Join(temporary, "runtime.zip"), filepath.Join(temporary, "SHA256SUMS")
-	if err := downloadVerified(ctx, client, sums, sumsPath, 1<<20); err != nil {
-		return 1, err
-	}
-	if err := downloadVerified(ctx, client, archive, archivePath, maxArchiveBytes); err != nil {
-		return 1, err
-	}
-	data, err := os.ReadFile(sumsPath)
-	if err != nil {
-		return 1, err
-	}
-	if err := verifyChecksumFile(data, archive); err != nil {
-		return 1, err
-	}
-	root, err := extractRuntime(archivePath, filepath.Join(temporary, "expanded"), strings.TrimPrefix(release.TagName, "setup-v"))
-	if err != nil {
-		return 1, err
-	}
-	return operation(root)
 }
