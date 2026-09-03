@@ -1,5 +1,7 @@
 # Setup edge.24 — 클린 설치 의존성 순서 수정
 
+> 후속 관측: edge.24 실제 설치에서 Beszel 후처리 null 오류가 확인됐다. 현재 수정·발행 상태는 [edge.25 보고서](CONSOLE-INSTALL-NULL-OUTPUT-EDGE25.md)를 따른다. 아래는 edge.24 당시 발행·삭제·읽기 전용 검증 기록이다.
+
 2026-09-03. 상태: 수정본 공개 발행·검증 및 실패 설치 삭제 완료. 사용자 요청은 현재 실패한 설치를 정리하고 클린 설치를 준비하는 것이다. 새 bootstrap은 실행하지 않는다.
 
 Console source `787b82193125d6c592b16dd05ce09007a01d0998`, Console version `202609031642`를 고정한다.
