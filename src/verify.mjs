@@ -36,7 +36,9 @@ const REQUIRED_SECRETS = Object.freeze({
   ],
   'opensphere-console/opensphere-extension-controller-runtime': ['database-url'],
   'opensphere-console/opensphere-gitea-control-plane': [
-    'token', 'review-token', 'webhook-secret', 'reconciler-token'
+    // The current C_API producer/consumer contract has two scoped Gitea tokens.
+    // Webhook/reconciler keys belong only to the retired Backend rollback path.
+    'token', 'review-token'
   ],
   'opensphere-console/opensphere-console-cli-runtime': ['jwt-secret'],
   'opensphere-console/opensphere-baseline-monitoring-reader': ['email', 'password']
@@ -265,15 +267,20 @@ export function isRuntimeServicePod(pod) {
   return !(pod.metadata?.ownerReferences ?? []).some((owner) => owner.kind === 'Job');
 }
 
-function workloadReady(resource) {
-  const generation = Number(resource.metadata?.generation ?? 0);
-  if (Number(resource.status?.observedGeneration ?? 0) < generation) return false;
+export function workloadReady(resource) {
   const kind = String(resource.kind ?? '').toLowerCase();
   if (kind === 'job') {
+    // Completed Jobs do not report the Deployment/StatefulSet observedGeneration
+    // field. Require their own terminal success condition and successful count.
     const completions = Number(resource.spec?.completions ?? 1);
+    const conditions = resource.status?.conditions ?? [];
     return Number(resource.status?.failed ?? 0) === 0
+      && !conditions.some(condition => condition.type === 'Failed' && condition.status === 'True')
+      && conditions.some(condition => condition.type === 'Complete' && condition.status === 'True')
       && Number(resource.status?.succeeded ?? 0) >= completions;
   }
+  const generation = Number(resource.metadata?.generation ?? 0);
+  if (Number(resource.status?.observedGeneration ?? 0) < generation) return false;
   if (kind === 'daemonset') {
     const desired = Number(resource.status?.desiredNumberScheduled ?? 0);
     return desired > 0
@@ -522,29 +529,41 @@ async function verifySupabaseServices() {
 
   const secret = getJson(['-n', 'opensphere-console-data', 'get', 'secret', 'opensphere-supabase-secrets']);
   const serviceRole = decodeSecret(secret, 'service-role-key');
-  const objectKey = `setup-conformance/${randomUUID()}.txt`;
+  // A transport/storage probe must not depend on a retired application's bucket
+  // or change the owned avatar bucket. Use one private, bounded, temporary bucket.
+  const bucket = `setup-conformance-${randomUUID()}`;
+  const objectKey = 'roundtrip.txt';
   const body = `opensphere-supabase-storage-${randomUUID()}`;
   await withService('opensphere-console-data', 'opensphere-supabase-storage', 5000, async (base) => {
-    const headers = {
-      apikey: serviceRole,
-      authorization: `Bearer ${serviceRole}`,
-      'content-type': 'text/plain',
-      'x-upsert': 'true'
-    };
-    await requireOk(await fetch(`${base}/object/operation-artifacts/${objectKey}`, {
-      method: 'POST', headers, body
-    }), 'Supabase Storage put');
-    const get = await requireOk(await fetch(`${base}/object/operation-artifacts/${objectKey}`, {
-      headers: { apikey: serviceRole, authorization: `Bearer ${serviceRole}` }
-    }), 'Supabase Storage get');
-    if (await get.text() !== body) throw new Error('Supabase Storage get returned different object bytes');
-    await requireOk(await fetch(`${base}/object/operation-artifacts/${objectKey}`, {
-      method: 'DELETE', headers: { apikey: serviceRole, authorization: `Bearer ${serviceRole}` }
-    }), 'Supabase Storage delete');
+    const authorization = { apikey: serviceRole, authorization: `Bearer ${serviceRole}` };
+    let created = false;
+    try {
+      await requireOk(await fetch(`${base}/bucket`, {
+        method: 'POST', headers: { ...authorization, 'content-type': 'application/json' },
+        body: JSON.stringify({ id: bucket, name: bucket, public: false, file_size_limit: 1024, allowed_mime_types: ['text/plain'] })
+      }), 'Supabase Storage temporary private bucket create');
+      created = true;
+      await requireOk(await fetch(`${base}/object/${bucket}/${objectKey}`, {
+        method: 'POST', headers: { ...authorization, 'content-type': 'text/plain' }, body
+      }), 'Supabase Storage put');
+      const get = await requireOk(await fetch(`${base}/object/${bucket}/${objectKey}`, {
+        headers: authorization
+      }), 'Supabase Storage get');
+      if (await get.text() !== body) throw new Error('Supabase Storage get returned different object bytes');
+      const publicRead = await fetch(`${base}/object/public/${bucket}/${objectKey}`);
+      if (publicRead.ok) throw new Error('Supabase Storage probe bucket unexpectedly permits public reads');
+    } finally {
+      if (created) {
+        const removed = await fetch(`${base}/object/${bucket}/${objectKey}`, { method: 'DELETE', headers: authorization });
+        if (removed.status !== 404) await requireOk(removed, 'Supabase Storage probe object cleanup');
+        await requireOk(await fetch(`${base}/bucket/${bucket}`, {
+          method: 'DELETE', headers: authorization
+        }), 'Supabase Storage probe bucket cleanup');
+      }
+    }
   });
   return { authHealth: true, restHealth: true, objectPutGetDelete: true };
 }
-
 async function giteaRequest(base, token, path, options = {}) {
   const response = await fetch(`${base}${path}`, {
     ...options,
@@ -608,7 +627,11 @@ async function verifyGitea() {
         throw new Error(`Gitea verification branch cleanup failed: HTTP ${response.status}`);
       }
     }
-    return { privateRepository: true, protectedMain: true, signedCommitsRequired: true, commitReadRevert: true };
+    return {
+      privateRepository: true, protectedMain: true, signedCommitsRequired: true, commitReadRevert: true,
+      // Bootstrap readiness does not claim the unimplemented post-merge owner.
+      managementReady: false, postMergeReconciliation: 'NotImplementedInConsoleApi'
+    };
   });
 }
 

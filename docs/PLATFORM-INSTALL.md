@@ -25,7 +25,7 @@ Setup은 필요할 때 실행하는 독립형 관리 도구다. Windows에 Setup
 `setup-v0.5.0-edge.20`부터 같은 버전의 런타임을 재사용한다. edge.19 EXE는 자동으로 이 동작으로 바뀌지 않으므로 아래 새 EXE로 한 번 교체한다. 기존 `Install-OpenSphereSetup.exe`, `Install-OpenSphereSetup.ps1`, `install-opensphere-setup.sh`는 설치형 배포물이므로 새 릴리스에서 제외한다. 이전 릴리스 18개는 사용자 요청으로 삭제했다. 당시 edge.20만 남겼으며 Git 태그는 유지했다. edge.21은 OAuth를 추가한 별도 불변 릴리스이며 edge.20을 교체하거나 삭제하지 않는다. 현재 사용 버전은 edge.26이다. [edge.21 발행 기록](OAUTH-EDGE21-PUBLICATION-STATUS.md)은 당시 이력이며 현재 발행 상태는 [edge.26 설치 기록](CONSOLE-INSTALL-IMAGE-STARTUP-EDGE26.md)을 확인한다.
 
 ```powershell
-$release = 'setup-v0.5.0-edge.26'
+$release = 'setup-v0.5.0-edge.27'
 $base = "https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/$release"
 Invoke-WebRequest -UseBasicParsing "$base/opensphere-setup.exe" -OutFile .\opensphere-setup.exe
 Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS" -OutFile .\SHA256SUMS
@@ -35,7 +35,7 @@ if (-not $expected -or $actual -ne $expected) { throw 'Launcher checksum mismatc
 
 .\opensphere-setup.exe version
 .\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --storage-class standard --registry-auth oauth
-.\opensphere-setup.exe --version 0.5.0-edge.26 bootstrap --release edge --context docker-desktop --storage-class standard --registry-auth oauth
+.\opensphere-setup.exe --version 0.5.0-edge.27 bootstrap --release edge --context docker-desktop --storage-class standard --registry-auth oauth
 ```
 
 파일 위치에서 실행한다. 권한 상승, LocalAppData 설치, command shim, PATH 등록은 없다. `help`와 기본 `version`은 런타임 다운로드 없이 실행된다. 나머지 명령은 채널·immutable Release 메타데이터를 온라인으로 확인한다. 처음 쓰는 버전만 ZIP을 GitHub asset digest와 SHA256SUMS로 검증해 푼다. 재사용 시 보관 ZIP·체크섬의 digest와 모든 런타임 파일의 SHA-256을 원본 ZIP과 대조하고 추가 파일·링크·누락·변조를 거부한다. 자식 CLI의 stdin·stdout·stderr, 종료 코드와 호출자의 cwd를 유지한다.
@@ -57,8 +57,8 @@ if (-not $expected -or $actual -ne $expected) { throw 'Launcher checksum mismatc
 ```text
 opensphere-setup.exe
 opensphere-setup-runtime/
-  setup-v0.5.0-edge.26.lock
-  setup-v0.5.0-edge.26/
+  setup-v0.5.0-edge.27.lock
+  setup-v0.5.0-edge.27/
     runtime.zip
     SHA256SUMS
     expanded/opensphere-setup-windows-amd64/...
@@ -78,7 +78,7 @@ Windows는 ZIP을 원하는 폴더에 풀고 그 안에서 `.\opensphere-setup.e
 Linux/macOS는 해당 OS·CPU 아카이브와 SHA256SUMS를 검증하고 압축을 푼다.
 
 ```bash
-release=setup-v0.5.0-edge.26
+release=setup-v0.5.0-edge.27
 asset=opensphere-setup-linux-amd64.tar.gz
 base="https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/$release"
 curl --fail --location --proto '=https' --tlsv1.2 "$base/$asset" --output "$asset"

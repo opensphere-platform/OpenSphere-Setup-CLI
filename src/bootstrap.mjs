@@ -2546,7 +2546,8 @@ export async function upgrade(
         initialAdmin,
         effectiveConsoleUrl,
         config.authEnvironment,
-        config.shellTlsSecret
+        config.shellTlsSecret,
+        'Installing'
       );
       if (componentTransition) operations.waitForComponentRollouts(changedComponents);
       else operations.waitForCoreRollouts(targetLock);
@@ -2564,6 +2565,11 @@ export async function upgrade(
         operations.pruneReleaseResources(previousInventory, targetInventory);
       }
       operations.recordReleaseInventory(targetLock, targetInventory);
+      operations.recordInstallationState(
+        targetLock, config.storageClass, initialAdmin, effectiveConsoleUrl,
+        config.authEnvironment, config.shellTlsSecret, 'Ready',
+        { verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: evidence.verifiedAt } }
+      );
       return {
         changed: true,
         lock: targetLock,
@@ -2625,13 +2631,14 @@ export async function upgrade(
           initialAdmin,
           effectiveConsoleUrl,
           config.authEnvironment,
-          config.shellTlsSecret
+          config.shellTlsSecret,
+          'Installing'
         );
         if (componentTransition && rollbackChangedComponents.length > 0) {
           operations.waitForComponentRollouts(rollbackChangedComponents);
         }
         else operations.waitForCoreRollouts(previousLock);
-        await operations.verifyInstallation(previousLock, {
+        const rollbackEvidence = await operations.verifyInstallation(previousLock, {
           consoleUrl: effectiveConsoleUrl,
           requireZeroRestarts: false,
           mode: 'rollback',
@@ -2643,6 +2650,11 @@ export async function upgrade(
           operations.pruneReleaseResources(targetInventory, previousInventory);
         }
         operations.recordReleaseInventory(previousLock, previousInventory);
+        operations.recordInstallationState(
+          previousLock, config.storageClass, initialAdmin, effectiveConsoleUrl,
+          config.authEnvironment, config.shellTlsSecret, 'Ready',
+          { verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: rollbackEvidence.verifiedAt } }
+        );
       } catch (rollbackError) {
         throw new Error(`Upgrade failed (${upgradeError.message}); rollback also failed (${rollbackError.message})`);
       }
