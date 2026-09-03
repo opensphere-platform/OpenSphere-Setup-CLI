@@ -1,5 +1,7 @@
 # Setup 포터블 공개 실행 검증 — 0.5.0-edge.19
 
+이 문서는 edge.19의 과거 기록이다. 해당 Release는 사용자 요청으로 2026-09-03 삭제했다. 현재 결과는 [edge.20 런타임 재사용 검증](PORTABLE-RUNTIME-REUSE-VERIFICATION.md)을 따른다.
+
 검증 시각: 2026-09-03 09:38 KST. 이 문서는 해당 시점의 증거이며 이후 환경의 건강 상태를 보장하지 않는다.
 
 기준: [독립 실행 계약](PORTABLE-EXECUTION-CONTRACT.md).

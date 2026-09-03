@@ -20,7 +20,7 @@ Setup은 필요할 때 실행하는 독립형 관리 도구다. Windows에 Setup
 
 ## Windows 단일 EXE
 
-`setup-v0.5.0-edge.20`부터 같은 버전의 런타임을 재사용한다. edge.19 EXE는 자동으로 이 동작으로 바뀌지 않으므로 아래 새 EXE로 한 번 교체한다. 기존 `Install-OpenSphereSetup.exe`, `Install-OpenSphereSetup.ps1`, `install-opensphere-setup.sh`는 설치형 배포물이므로 새 릴리스에서 제외한다. 이전 immutable 릴리스는 변경하지 않는다.
+`setup-v0.5.0-edge.20`부터 같은 버전의 런타임을 재사용한다. edge.19 EXE는 자동으로 이 동작으로 바뀌지 않으므로 아래 새 EXE로 한 번 교체한다. 기존 `Install-OpenSphereSetup.exe`, `Install-OpenSphereSetup.ps1`, `install-opensphere-setup.sh`는 설치형 배포물이므로 새 릴리스에서 제외한다. 이전 릴리스 18개는 사용자 요청으로 삭제했다. 현재 edge.20만 다운로드할 수 있다. Git 태그는 유지했다.
 
 ```powershell
 $release = 'setup-v0.5.0-edge.20'

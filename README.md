@@ -7,7 +7,7 @@ OpenSphere OS Console의 신뢰 가능한 최초 설치, 재개, 검증, 업그�
 
 Setup CLI는 Windows에 설치해 상시 사용하는 프로그램이 아니다. 필요한 때 실행해 Kubernetes의 Console을 준비·설치·검증하고 종료한다. **Setup 설치, PATH 등록, 서비스 등록은 하지 않는다.**
 
-현재 버전은 `0.5.0-edge.20`다.
+현재 버전은 `0.5.0-edge.20`다. 사용자 요청으로 이전 GitHub 릴리스 18개를 삭제하고 이 버전만 남겼다. [공개 실행·재사용·삭제 검증 결과](docs/PORTABLE-RUNTIME-REUSE-VERIFICATION.md)를 참고한다.
 
 ### Windows amd64 — 한 번 다운로드하고 재사용하는 포터블 실행 파일
 
