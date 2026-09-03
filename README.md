@@ -9,7 +9,7 @@ Setup CLI는 Windows에 설치해 상시 사용하는 프로그램이 아니다.
 
 현재 소스 버전은 `0.5.0-edge.24`이며 OpenSphere 전용 OAuth App의 Device Flow를 포함한다. 이번 수정 및 발행·복구 상태는 [Console 설치 복구 기록](docs/CONSOLE-INSTALL-ORDER-EDGE24.md)을 참고한다.
 
-**현재 수정 범위:** edge.23 실제 설치에서 확인된 Beszel reader Secret과 C_API의 설치 순서 오류, 후속 C_EXT CRD 선행 적용 누락을 edge.24에서 수정한다. 진행 표시와 기존 credential/공급망 계약은 유지한다. 발행·검증·현재 실패 설치 삭제 상태는 위 기록을 따른다. 과거 version/status 또는 CI 통과를 실제 클린 bootstrap 성공으로 표시하지 않는다.
+**현재 수정 범위:** edge.23 실제 설치에서 확인된 Beszel reader Secret과 C_API의 설치 순서 오류, 후속 C_EXT CRD 선행 적용 누락을 edge.24에서 수정했다. 진행 표시와 기존 credential/공급망 계약은 유지한다. 발행·검증·현재 실패 설치 삭제 상태는 위 기록을 따른다. 과거 version/status 또는 CI 통과를 실제 클린 bootstrap 성공으로 표시하지 않는다.
 
 ### Windows amd64 — 한 번 다운로드하고 재사용하는 포터블 실행 파일
 
