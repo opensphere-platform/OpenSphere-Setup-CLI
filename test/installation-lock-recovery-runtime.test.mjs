@@ -556,6 +556,55 @@ test('concurrent identical receipt append converges without exposing temporary r
   assert.deepEqual(await readdir(join(layout.receipts, '.staging')), []);
 });
 
+test('temporary receipt cleanup accepts a peer removal only with the exact final revision', async (t) => {
+  for (const scenario of ['identical', 'missing', 'different', 'access-denied']) {
+    await t.test(scenario, async (t) => {
+      const layout = await tempLayout();
+      t.after(() => rm(layout.base, { recursive: true, force: true }));
+      const digest = 'sha256:' + '7'.repeat(64);
+      const receipt = {
+        planDigest: digest, incidentId: 'incident', approvalId: 'approval',
+        recoveredUid: 'uid', recoveredResourceVersion: '1', succeeded: true,
+        state: 'SemanticReconstructionRecovered',
+      };
+      const finalPath = join(layout.receipts, '7'.repeat(64), '00000001.json');
+      const store = await createDurableInstallationLockRecoveryReceiptStore(
+        layout.receipts, layout.workspace, {
+          moveNoReplaceFn: async (source, destination) => {
+            if (destination === finalPath) {
+              // A concurrent writer has persisted the final revision while an
+              // identical pending revision still awaits cleanup.
+              await writeFile(destination, await readFile(source), { flag: 'wx' });
+              return;
+            }
+            await mockCustody.moveNoReplaceFn(source, destination);
+          },
+          unlinkTemporaryFn: async (path) => {
+            if (scenario === 'access-denied') {
+              throw Object.assign(new Error('cleanup denied'), { code: 'EACCES' });
+            }
+            // A peer removes the pending file between the validated read and unlink.
+            await unlink(path);
+            if (scenario === 'missing') await unlink(finalPath);
+            if (scenario === 'different') {
+              await writeFile(finalPath, JSON.stringify({ ...receipt, recoveredUid: 'other' }));
+            }
+            await unlink(path);
+          },
+        }
+      );
+      if (scenario === 'identical') {
+        assert.deepEqual(await store.write(digest, receipt), receipt);
+        assert.deepEqual(await store.read(digest), receipt);
+        assert.deepEqual(await readdir(join(layout.receipts, '.tmp')), []);
+      } else {
+        await assert.rejects(store.write(digest, receipt), scenario === 'access-denied'
+          ? /cleanup denied/u : /lost its exact final revision/u);
+      }
+    });
+  }
+});
+
 test('actual Windows no-replace receipt promotion converges across eight writers', async (t) => {
   if (process.platform !== 'win32') return t.skip('Windows-only no-replace receipt promotion');
   const layout = await tempLayout();

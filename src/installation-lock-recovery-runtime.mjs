@@ -397,6 +397,7 @@ export async function createDurableInstallationLockRecoveryReceiptStore(
     ensureDirectoryCustodyFn = ensureInstallationLockRecoveryPrivateDirectory,
     assertDirectoryCustodyFn = assertInstallationLockRecoveryPrivateDirectory,
     moveNoReplaceFn = atomicNoReplaceMove,
+    unlinkTemporaryFn = unlink,
     candidateIdFn = () => randomUUID().replaceAll('-', ''),
   } = {}
 ) {
@@ -655,7 +656,16 @@ export async function createDurableInstallationLockRecoveryReceiptStore(
         if (canonicalJson(pending) !== canonicalJson(receipt)) {
           throw new Error('recovery receipt temporary cleanup encountered different bytes');
         }
-        await unlink(temporary);
+        try { await unlinkTemporaryFn(temporary); }
+        catch (error) {
+          if (error.code !== 'ENOENT') throw error;
+          // An identical writer may finish cleanup after our read. Accept this
+          // only while the exact final revision still exists.
+          const concurrent = await optionalReceipt(finalPath);
+          if (!concurrent || canonicalJson(concurrent) !== canonicalJson(receipt)) {
+            throw new Error('recovery receipt temporary cleanup lost its exact final revision');
+          }
+        }
         await syncDirectory(temporaryDirectory);
         await refreshTemporaryIdentity();
       };
