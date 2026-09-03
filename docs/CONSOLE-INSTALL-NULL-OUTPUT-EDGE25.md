@@ -1,5 +1,7 @@
 # Setup edge.25 — Beszel null 출력 오류 수정 및 클린 설치 준비
 
+> 후속 정정: edge.25의 실제 신규 설치에서 API 이미지 패키징 결함이 발견됐다. 이전 준비 완료는 전체 bootstrap 성공 검증이 아니었다. 현재 기준은 [edge.26 수정·공개 발행·클린 준비 결과](CONSOLE-INSTALL-IMAGE-STARTUP-EDGE26.md)이다.
+
 2026-09-03. 상태: 수정·공개 발행·실행 검증 및 실패 설치 삭제 완료. 사용자가 업데이트 후 클린 설치 준비·보고를 지시했다. 새 bootstrap은 실행하지 않는다.
 
 Console source `4a35cf46d5bcf31118cae25ab4ce2846a719b0db`, version `202609031708`을 고정한다.
