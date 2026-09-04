@@ -7,18 +7,18 @@ OpenSphere OS Console의 신뢰 가능한 최초 설치, 재개, 검증, 업그�
 
 Setup CLI는 Windows에 설치해 상시 사용하는 프로그램이 아니다. 필요한 때 실행해 Kubernetes의 Console을 준비·설치·검증하고 종료한다. **Setup 설치, PATH 등록, 서비스 등록은 하지 않는다.**
 
-현재 소스 버전은 `0.5.0-edge.29`이며 OpenSphere 전용 OAuth App의 Device Flow를 포함한다. 이번 버전은 Console의 LLM credential custody와 감사 기록을 fresh migration 계보에 고정하고, Cluster Manager 이전 운영 plane을 명시적인 `OFF` projection으로 제공한다. [변경 사항](docs/CONSOLE-R2D2-BASELINE-EDGE29.md)을 참고한다.
+현재 소스 버전은 `0.5.0-edge.30`이며 OpenSphere 전용 OAuth App의 Device Flow를 포함한다. 이번 버전은 Console의 네이티브 OSAA·OSDST·OS Shell core와 전용 데이터베이스 권한, TLS, 세션 registry credential을 fresh bootstrap에 포함한다. [변경 사항](docs/CONSOLE-NATIVE-RUNTIME-EDGE30.md)을 참고한다.
 
-**현재 수정 범위:** edge.29는 governed Console source를 `be3c2a05bdd8aeeb457d3e5c1132b6cd4a5289a4`로 잠근다. LLM Key 생성은 Kubernetes Secret custody, fingerprint-only 조회와 durable Supabase audit까지 검증한다. Operational Graph·Incident·Durable Operation은 Cluster Manager가 전용 schema·login·reconcile scope를 설치할 때까지 `OFF`이며, 조회 API는 빈 결과와 명시적 비활성 상태를 반환한다. 이미지 기동이나 단위 시험만으로 전체 Kubernetes 설치 성공을 표시하지 않는다.
+**현재 수정 범위:** edge.30은 governed Console source를 `1b2f63cd533fdad621f82294a82f3e81b7cb4d06`으로 잠근다. bootstrap은 canonical C_API와 별도로 OSAA Gateway, OSDST, OS Shell API·Gateway·Reconciler를 설치하고 migration `opensphere-console/20260905/0035`가 exact release evidence를 활성화한 경우에만 native runtime을 Ready로 인정한다. 이미지 기동이나 단위 시험만으로 전체 Kubernetes 설치 성공을 표시하지 않는다.
 
 ### Windows amd64 — 한 번 다운로드하고 재사용하는 포터블 실행 파일
 
-[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.29/opensphere-setup.exe)
+[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.30/opensphere-setup.exe)
 
 ```powershell
 .\opensphere-setup.exe version
 .\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --registry-auth oauth
-.\opensphere-setup.exe --version 0.5.0-edge.29 resolve --release edge --registry-auth oauth
+.\opensphere-setup.exe --version 0.5.0-edge.30 resolve --release edge --registry-auth oauth
 ```
 
 버전·채널 선택자는 명령 앞에 두며 상호 배타적이다. 옵션을 생략하면 EXE가 발행된 exact Release를 사용한다. `--release`와 `--lock`은 Console 배포 선택자다.
