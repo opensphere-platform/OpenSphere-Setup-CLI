@@ -6,6 +6,8 @@ export const MANAGED_NAMESPACES = Object.freeze([
   'opensphere-console-change',
   'opensphere-monitoring',
   'opensphere-console',
+  'opensphere-osaa-credentials',
+  'opensphere-shell-sessions',
   'opensphere-system'
 ]);
 
@@ -17,8 +19,12 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
   clusterRbac: Object.freeze([
     'clusterrolebinding/opensphere-extension-controller-cli-downloads',
     'clusterrolebinding/opensphere-registry',
+    'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
+    'clusterrolebinding/opensphere-shell-runtime-token-reviewer',
     'clusterrole/opensphere-extension-controller-cli-downloads',
-    'clusterrole/opensphere-registry'
+    'clusterrole/opensphere-registry',
+    'clusterrole/opensphere-console-osaa-gateway-environment-reader',
+    'clusterrole/opensphere-shell-runtime-token-reviewer'
   ]),
   admissionPolicies: Object.freeze([
     'validatingadmissionpolicybinding/opensphere-console-manual-ui-contract',
@@ -26,7 +32,9 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     'validatingadmissionpolicybinding/opensphere-console-image-integrity-workload',
     'validatingadmissionpolicy/opensphere-console-image-integrity-workload',
     'validatingadmissionpolicybinding/opensphere-console-image-integrity-cronjob',
-    'validatingadmissionpolicy/opensphere-console-image-integrity-cronjob'
+    'validatingadmissionpolicy/opensphere-console-image-integrity-cronjob',
+    'validatingadmissionpolicybinding/opensphere-shell-runtime-template-v1',
+    'validatingadmissionpolicy/opensphere-shell-runtime-template-v1'
   ])
 });
 

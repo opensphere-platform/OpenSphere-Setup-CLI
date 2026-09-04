@@ -55,6 +55,12 @@ function localReleaseLock() {
       cliArtifacts: {
         image: `ghcr.io/opensphere-platform/${AUXILIARY_ARTIFACTS.cliArtifacts}@sha256:${'f'.repeat(64)}`
       },
+      osShellControl: {
+        image: `ghcr.io/opensphere-platform/${AUXILIARY_ARTIFACTS.osShellControl}@sha256:${'d'.repeat(64)}`
+      },
+      osShellRuntime: {
+        image: `ghcr.io/opensphere-platform/${AUXILIARY_ARTIFACTS.osShellRuntime}@sha256:${'c'.repeat(64)}`
+      },
       consoleIndexContent: {
         image: `ghcr.io/opensphere-platform/${AUXILIARY_ARTIFACTS.consoleIndexContent}@sha256:${'e'.repeat(64)}`
       }
@@ -87,11 +93,15 @@ test('Setup owns the exact cluster-scoped C_EXT CLI download authority it instal
   assert.deepEqual(MANAGED_CLUSTER_RBAC, [
     'clusterrolebinding/opensphere-extension-controller-cli-downloads',
     'clusterrolebinding/opensphere-registry',
+    'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
+    'clusterrolebinding/opensphere-shell-runtime-token-reviewer',
     'clusterrole/opensphere-extension-controller-cli-downloads',
-    'clusterrole/opensphere-registry'
+    'clusterrole/opensphere-registry',
+    'clusterrole/opensphere-console-osaa-gateway-environment-reader',
+    'clusterrole/opensphere-shell-runtime-token-reviewer'
   ]);
-  assert.equal(MANAGED_CLUSTER_RBAC.every((resource) => resource.endsWith(authority)
-    || resource.endsWith('opensphere-registry')), true);
+  assert.equal(MANAGED_CLUSTER_RBAC.includes(`clusterrole/${authority}`), true);
+  assert.equal(MANAGED_CLUSTER_RBAC.includes(`clusterrolebinding/${authority}`), true);
 });
 
 test('fresh bootstrap creates only the exact six-key Supabase server Secret', () => {
@@ -144,7 +154,13 @@ test('Setup consumes the Console global migration manifest and materialized-rele
 
   assert.deepEqual(FOUNDATION_ARTIFACT_PATHS, [
     'scripts/Install-ConsoleApiRuntime.ps1',
+    'scripts/Install-ConsoleNativeRuntime.ps1',
     'scripts/console-migrations.mjs',
+    'scripts/os-shell-tls-contract.ps1',
+    'apps/osaa-gateway/deploy.yaml',
+    'apps/osdst/deploy.yaml',
+    'apps/os-shell-control/deploy.yaml',
+    'apps/os-shell-control/runtime-template.js',
     'backend/gitea/bootstrap/install.ps1',
     'backend/gitea/bootstrap/configure-signing.ps1',
     'backend/gitea/bootstrap/control-plane-bootstrap.ps1',
@@ -179,11 +195,11 @@ test('base manifests contain only bootstrap-owned shared surfaces', () => {
   ]) assert.doesNotMatch(paths, new RegExp(retired));
 });
 
-test('release responsibility separates bootstrap core from Console-activated modules', () => {
+test('release responsibility installs native Console core and leaves later modules available', () => {
   const profile = releaseResponsibilityProfile(COMPONENTS);
   assert.deepEqual(profile.bootstrapCore, [...BOOTSTRAP_CORE_COMPONENTS]);
   assert.deepEqual(profile.availableModules, [...AVAILABLE_MODULE_COMPONENTS]);
-  for (const component of ['beszelHub', 'beszelAgent', 'beszelBootstrap']) {
+  for (const component of ['beszelHub', 'beszelAgent', 'beszelBootstrap', 'osaaGateway', 'osdst']) {
     assert.equal(profile.bootstrapCore.includes(component), true);
   }
   for (const component of AVAILABLE_MODULE_COMPONENTS) {
@@ -192,7 +208,7 @@ test('release responsibility separates bootstrap core from Console-activated mod
   assert.equal(Object.hasOwn(COMPONENTS, 'backend'), false);
 });
 
-test('rollout order establishes authorities, C_API/C_EXT, Beszel and CLI before Main Shell', () => {
+test('rollout order establishes native core, authorities, C_API/C_EXT, Beszel and CLI before Main Shell', () => {
   const index = (namespace, resource) =>
     CORE_ROLLOUTS.findIndex(([candidateNamespace, candidateResource]) =>
       candidateNamespace === namespace && candidateResource === resource);
@@ -200,15 +216,20 @@ test('rollout order establishes authorities, C_API/C_EXT, Beszel and CLI before 
   const gitea = index('opensphere-console-change', 'deployment/opensphere-gitea');
   const api = index('opensphere-console', 'deployment/opensphere-console-api');
   const extension = index('opensphere-console', 'deployment/opensphere-extension-controller');
+  const osaa = index('opensphere-console', 'deployment/opensphere-console-osaa-gateway');
+  const osdst = index('opensphere-console', 'deployment/opensphere-osdst');
+  const shellApi = index('opensphere-console', 'deployment/opensphere-shell-api');
+  const shellGateway = index('opensphere-console', 'deployment/opensphere-shell-gateway');
+  const shellReconciler = index('opensphere-console', 'deployment/opensphere-shell-reconciler');
   const registry = index('opensphere-console', 'deployment/opensphere-registry');
   const cli = index('opensphere-console', 'deployment/os-cli');
   const hub = index('opensphere-monitoring', 'statefulset/beszel-hub');
   const agent = index('opensphere-monitoring', 'daemonset/beszel-agent');
   const shell = index('opensphere-console', 'deployment/opensphere-console');
-  for (const observed of [postgres, gitea, api, extension, registry, cli, hub, agent, shell]) {
+  for (const observed of [postgres, gitea, api, extension, osaa, osdst, shellApi, shellGateway, shellReconciler, registry, cli, hub, agent, shell]) {
     assert.ok(observed >= 0);
   }
-  for (const dependency of [postgres, gitea, api, extension, registry, cli, hub, agent]) {
+  for (const dependency of [postgres, gitea, api, extension, osaa, osdst, shellApi, shellGateway, shellReconciler, registry, cli, hub, agent]) {
     assert.ok(dependency < shell);
   }
   assert.deepEqual(coreRolloutsForLock(localReleaseLock()), [...CORE_ROLLOUTS]);
@@ -230,6 +251,9 @@ test('every target workload references the Setup-managed GHCR pull Secret', () =
     CONSOLE_API_MANIFEST.path,
     EXTENSION_CONTROLLER_MANIFEST.path,
     BESZEL_MANIFEST.path,
+    'apps/osaa-gateway/deploy.yaml',
+    'apps/osdst/deploy.yaml',
+    'apps/os-shell-control/deploy.yaml',
     'cmd/os-cli/deploy.yaml',
     'backend/registry/deploy/registry.yaml',
     'deploy/opensphere-console.yaml'
@@ -357,11 +381,11 @@ test('doctor PVC capacity includes Supabase, Gitea and Beszel bootstrap core', (
   assert.equal(requestedGiB, DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB);
 });
 
-test('active bootstrap never creates Foundation, OSAA credential or Recovery namespaces', () => {
+test('active bootstrap keeps Foundation and Recovery namespaces outside Setup ownership', () => {
   const source = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
   const start = source.indexOf('export async function bootstrap');
   const end = source.indexOf('export async function upgrade', start);
   const active = source.slice(start, end);
-  assert.doesNotMatch(active, /opensphere-foundation|opensphere-osaa-credentials|opensphere-console-recovery/);
+  assert.doesNotMatch(active, /opensphere-foundation|opensphere-console-recovery/);
   assert.doesNotMatch(source, /function ensureFoundationDataEngineCredentials/);
 });

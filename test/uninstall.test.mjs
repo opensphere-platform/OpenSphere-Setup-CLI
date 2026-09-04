@@ -33,14 +33,18 @@ test('uninstall refuses to reach Kubernetes without the explicit destructive con
   }
 });
 
-test('managed cluster RBAC owns only the target Registry and C_EXT bootstrap resources', () => {
+test('managed cluster RBAC owns every cluster authority installed by Console bootstrap', () => {
   assert.deepEqual(MANAGED_CLUSTER_RBAC, [
     'clusterrolebinding/opensphere-extension-controller-cli-downloads',
     'clusterrolebinding/opensphere-registry',
+    'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
+    'clusterrolebinding/opensphere-shell-runtime-token-reviewer',
     'clusterrole/opensphere-extension-controller-cli-downloads',
-    'clusterrole/opensphere-registry'
+    'clusterrole/opensphere-registry',
+    'clusterrole/opensphere-console-osaa-gateway-environment-reader',
+    'clusterrole/opensphere-shell-runtime-token-reviewer'
   ]);
-  assert.equal(MANAGED_CLUSTER_RBAC.some((resource) => resource.includes('osaa') || resource.includes('backend')), false);
+  assert.equal(MANAGED_CLUSTER_RBAC.some((resource) => resource.includes('backend')), false);
 });
 
 test('managed uninstall owns only Console bootstrap admission policies', () => {
@@ -50,7 +54,9 @@ test('managed uninstall owns only Console bootstrap admission policies', () => {
     'validatingadmissionpolicybinding/opensphere-console-image-integrity-workload',
     'validatingadmissionpolicy/opensphere-console-image-integrity-workload',
     'validatingadmissionpolicybinding/opensphere-console-image-integrity-cronjob',
-    'validatingadmissionpolicy/opensphere-console-image-integrity-cronjob'
+    'validatingadmissionpolicy/opensphere-console-image-integrity-cronjob',
+    'validatingadmissionpolicybinding/opensphere-shell-runtime-template-v1',
+    'validatingadmissionpolicy/opensphere-shell-runtime-template-v1'
   ]);
 });
 

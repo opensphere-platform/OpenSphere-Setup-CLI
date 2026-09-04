@@ -18,6 +18,7 @@ import {
   releaseNeedsRegistryCredentials,
   secretHasGhcrCredential
 } from './registry-pull-secret.mjs';
+import { REGISTRY_NAMESPACES } from './registry-lifecycle-contract.mjs';
 
 const REQUIRED_SECRETS = Object.freeze({
   'opensphere-console-data/opensphere-supabase-secrets': [
@@ -35,6 +36,17 @@ const REQUIRED_SECRETS = Object.freeze({
     'database-url', 'session-encryption-key', 'supabase-service-role-key'
   ],
   'opensphere-console/opensphere-extension-controller-runtime': ['database-url'],
+  'opensphere-console/opensphere-osaa-gateway-db': ['host', 'port', 'database', 'username', 'password'],
+  'opensphere-console/opensphere-osdst-db': ['host', 'port', 'database', 'username', 'password'],
+  'opensphere-console/opensphere-osdst-maintenance-db': ['host', 'port', 'database', 'username', 'password'],
+  'opensphere-console/opensphere-shell-api-db': ['host', 'port', 'database', 'username', 'password', 'provider', 'sslmode'],
+  'opensphere-console/opensphere-shell-gateway-db': ['host', 'port', 'database', 'username', 'password', 'provider', 'sslmode'],
+  'opensphere-console/opensphere-shell-reconciler-db': ['host', 'port', 'database', 'username', 'password', 'provider', 'sslmode'],
+  'opensphere-console/opensphere-shell-control-runtime': ['admission-secret', 'delegation-secret', 'delegation-signing-key'],
+  'opensphere-console/opensphere-shell-api-tls': ['tls.crt', 'tls.key'],
+  'opensphere-console/opensphere-shell-reconciler-tls': ['tls.crt', 'tls.key'],
+  'opensphere-console/opensphere-shell-credential-authority-tls': ['tls.crt', 'tls.key'],
+  'opensphere-console/opensphere-shell-console-api-tls': ['tls.crt', 'tls.key'],
   'opensphere-console/opensphere-gitea-control-plane': [
     // The current C_API producer/consumer contract has two scoped Gitea tokens.
     // Webhook/reconciler keys belong only to the retired Backend rollback path.
@@ -49,6 +61,17 @@ const EXACT_SECRET_REFERENCES = Object.freeze(new Set([
   'opensphere-monitoring/beszel-runtime',
   'opensphere-console/opensphere-console-api-runtime',
   'opensphere-console/opensphere-extension-controller-runtime',
+  'opensphere-console/opensphere-osaa-gateway-db',
+  'opensphere-console/opensphere-osdst-db',
+  'opensphere-console/opensphere-osdst-maintenance-db',
+  'opensphere-console/opensphere-shell-api-db',
+  'opensphere-console/opensphere-shell-gateway-db',
+  'opensphere-console/opensphere-shell-reconciler-db',
+  'opensphere-console/opensphere-shell-control-runtime',
+  'opensphere-console/opensphere-shell-api-tls',
+  'opensphere-console/opensphere-shell-reconciler-tls',
+  'opensphere-console/opensphere-shell-credential-authority-tls',
+  'opensphere-console/opensphere-shell-console-api-tls',
   'opensphere-console/opensphere-baseline-monitoring-reader'
 ]));
 
@@ -69,6 +92,13 @@ const REQUIRED_SERVICES = Object.freeze([
   ['opensphere-console-change', 'opensphere-gitea'],
   ['opensphere-monitoring', 'beszel-hub'],
   ['opensphere-console', 'opensphere-console-api'],
+  ['opensphere-console', 'opensphere-console-osaa-gateway'],
+  ['opensphere-console', 'opensphere-osdst'],
+  ['opensphere-console', 'opensphere-shell-api'],
+  ['opensphere-console', 'opensphere-shell-gateway'],
+  ['opensphere-console', 'opensphere-shell-reconciler'],
+  ['opensphere-console', 'opensphere-shell-credential-authority'],
+  ['opensphere-console', 'opensphere-shell-console-api'],
   ['opensphere-console', 'opensphere-registry'],
   ['opensphere-console', 'opensphere-console-ext']
 ]);
@@ -86,17 +116,55 @@ const WORKLOADS = Object.freeze([
   { component: 'gitea', namespace: 'opensphere-console-change', kind: 'deployment', name: 'opensphere-gitea', container: 'gitea' },
   { component: 'consoleApi', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-api', container: 'api' },
   { component: 'extensionController', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-extension-controller', container: 'controller' },
+  { component: 'osaaGateway', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-osaa-gateway', container: 'gateway' },
+  { component: 'osdst', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-osdst', container: 'osdst' },
+  { artifact: 'osShellControl', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-shell-api', container: 'api' },
+  { artifact: 'osShellControl', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-shell-gateway', container: 'gateway' },
+  { artifact: 'osShellControl', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-shell-reconciler', container: 'reconciler' },
   { component: 'registry', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-registry', container: 'registry' },
   { artifact: 'cliArtifacts', namespace: 'opensphere-console', kind: 'deployment', name: 'os-cli', container: 'serve' },
   { component: 'beszelHub', namespace: 'opensphere-monitoring', kind: 'statefulset', name: 'beszel-hub', container: 'hub' },
   { component: 'beszelAgent', namespace: 'opensphere-monitoring', kind: 'daemonset', name: 'beszel-agent', container: 'agent' },
-  { component: 'beszelBootstrap', namespace: 'opensphere-monitoring', kind: 'job', name: 'beszel-bootstrap-v0187', container: 'configure' },
+  {
+    component: 'beszelBootstrap',
+    namespace: 'opensphere-monitoring',
+    kind: 'job',
+    name: 'beszel-bootstrap-v0187',
+    container: 'configure',
+    ephemeral: true
+  },
   { component: 'console', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console', container: 'shell' },
   { artifact: 'consoleIndexContent', ownerComponent: 'console', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console', container: 'console-index-content', initContainer: true }
 ]);
 
 function getJson(args) {
   return JSON.parse(kubectl([...args, '-o', 'json'], { capture: true }));
+}
+
+function getJsonOrNull(args) {
+  const output = kubectl([...args, '--ignore-not-found=true', '-o', 'json'], { capture: true }).trim();
+  return output ? JSON.parse(output) : null;
+}
+
+export function hasDurableBeszelBootstrapEvidence(evidence, lock, installationState) {
+  return Boolean(
+    evidence
+    && evidence.releaseDigest === lock.releaseDigest
+    && evidence.verifiedAt === installationState?.verification?.verifiedAt
+    && evidence.runtimeImagesMatchLock === true
+    && evidence.beszel?.bootstrapJobComplete === true
+    && evidence.beszel?.agentPublicKeyPublished === true
+  );
+}
+
+function readRecordedInstallationEvidence() {
+  const configMap = getJsonOrNull([
+    '-n', 'opensphere-console', 'get', 'configmap', 'opensphere-installation-evidence'
+  ]);
+  if (!configMap) return null;
+  const encoded = configMap.data?.['evidence.json'];
+  if (!encoded) throw new Error('Installation evidence ConfigMap lacks evidence.json');
+  return JSON.parse(encoded);
 }
 
 function decodeSecret(secret, key) {
@@ -199,7 +267,7 @@ function verifySecrets(lock) {
 
 function verifyRegistryPullPath(lock) {
   const credentialRequired = releaseNeedsRegistryCredentials(lock);
-  for (const namespace of MANAGED_NAMESPACES) {
+  for (const namespace of REGISTRY_NAMESPACES) {
     const secret = getJson(['-n', namespace, 'get', 'secret', REGISTRY_PULL_SECRET]);
     if (secret.type !== 'kubernetes.io/dockerconfigjson') {
       throw new Error(`Registry pull Secret has the wrong type: ${namespace}/${REGISTRY_PULL_SECRET}`);
@@ -208,7 +276,7 @@ function verifyRegistryPullPath(lock) {
       throw new Error(`Private release has no GHCR credential: ${namespace}/${REGISTRY_PULL_SECRET}`);
     }
   }
-  return { secret: REGISTRY_PULL_SECRET, credentialRequired, namespaces: [...MANAGED_NAMESPACES] };
+  return { secret: REGISTRY_PULL_SECRET, credentialRequired, namespaces: [...REGISTRY_NAMESPACES] };
 }
 
 function verifyPersistentStorage(expectedStorageClass) {
@@ -301,7 +369,12 @@ export function workloadReady(resource) {
     && Number(resource.status?.unavailableReplicas ?? 0) === 0;
 }
 
-function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null }) {
+function verifyWorkloads(lock, {
+  requireZeroRestarts,
+  componentSelection = null,
+  recordedEvidence = null,
+  installationState = null
+}) {
   const selectedComponents = componentSelection ? new Set(componentSelection) : null;
   const expected = new Set();
   const resources = [];
@@ -309,16 +382,26 @@ function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null 
   for (const spec of WORKLOADS) {
     if (spec.artifact && !lock.auxiliaryArtifacts?.[spec.artifact]) continue;
     if (spec.component && !lock.components?.[spec.component]) continue;
-    const resource = getJson(['-n', spec.namespace, 'get', spec.kind, spec.name]);
+    const resource = spec.ephemeral
+      ? getJsonOrNull(['-n', spec.namespace, 'get', spec.kind, spec.name])
+      : getJson(['-n', spec.namespace, 'get', spec.kind, spec.name]);
+    const expectedImage = spec.artifact
+      ? lock.auxiliaryArtifacts?.[spec.artifact]?.image
+      : lock.components?.[spec.component]?.image;
+    if (!resource && spec.ephemeral) {
+      if (!hasDurableBeszelBootstrapEvidence(recordedEvidence, lock, installationState)) {
+        throw new Error(`Ephemeral workload is absent without matching durable installation evidence: ${spec.namespace}/${spec.kind}/${spec.name}`);
+      }
+      expected.add(expectedImage);
+      resources.push(`${spec.namespace}/${spec.kind}/${spec.name}:durable-installation-evidence`);
+      continue;
+    }
     const podSpec = spec.kind === 'cronjob'
       ? resource.spec?.jobTemplate?.spec?.template?.spec
       : resource.spec?.template?.spec;
     const containers = spec.initContainer ? podSpec?.initContainers : podSpec?.containers;
     const container = (containers ?? []).find(({ name }) => name === spec.container);
     if (!container) throw new Error(`Workload container is missing: ${spec.namespace}/${spec.name}/${spec.container}`);
-    const expectedImage = spec.artifact
-      ? lock.auxiliaryArtifacts?.[spec.artifact]?.image
-      : lock.components?.[spec.component]?.image;
     if (!expectedImage || container.image !== expectedImage) {
       throw new Error(`Runtime image differs from release lock: ${spec.namespace}/${spec.name} (${container.image} != ${expectedImage})`);
     }
@@ -656,7 +739,7 @@ async function verifyConsoleApi() {
   });
 }
 
-async function verifyBeszel() {
+async function verifyBeszel(lock, installationState, recordedEvidence) {
   const service = getJson(['-n', 'opensphere-monitoring', 'get', 'service', 'beszel-hub']);
   if (service.spec?.type !== 'ClusterIP' || service.spec?.clusterIP === 'None'
       || (service.spec?.ports ?? []).some((port) => port.nodePort !== undefined)) {
@@ -668,11 +751,16 @@ async function verifyBeszel() {
     .some((path) => path.backend?.service?.name === 'beszel-hub'));
   if (exposed) throw new Error('Beszel Hub must not be referenced by an Ingress');
 
-  const bootstrap = getJson([
+  const bootstrap = getJsonOrNull([
     '-n', 'opensphere-monitoring', 'get', 'job', 'beszel-bootstrap-v0187'
   ]);
-  if (Number(bootstrap.status?.failed ?? 0) > 0
-      || Number(bootstrap.status?.succeeded ?? 0) < Number(bootstrap.spec?.completions ?? 1)) {
+  const durableBootstrapEvidence = !bootstrap
+    && hasDurableBeszelBootstrapEvidence(recordedEvidence, lock, installationState);
+  if (!bootstrap && !durableBootstrapEvidence) {
+    throw new Error('Beszel bootstrap Job is absent without matching durable installation evidence');
+  }
+  if (bootstrap && (Number(bootstrap.status?.failed ?? 0) > 0
+      || Number(bootstrap.status?.succeeded ?? 0) < Number(bootstrap.spec?.completions ?? 1))) {
     throw new Error('Beszel bootstrap Job has not completed successfully');
   }
   const publicKey = getJson([
@@ -688,7 +776,8 @@ async function verifyBeszel() {
     hubPrivate: true,
     hubHealth: true,
     bootstrapJobComplete: true,
-    agentPublicKeyPublished: true
+    agentPublicKeyPublished: true,
+    bootstrapProof: bootstrap ? 'completed-job' : 'durable-installation-evidence'
   };
 }
 
@@ -726,18 +815,23 @@ export async function verifyInstallation(lock, {
     throw new Error('Supabase/Gitea off-backbone integrated recovery drill is not implemented; promotion verification fails closed');
   }
   const config = verifyInstallationLock(lock, { allowLegacyComponentSet });
+  const recordedEvidence = config.installationState.phase === 'Ready'
+    ? readRecordedInstallationEvidence()
+    : null;
   const secretCount = verifySecrets(lock);
   const registryPull = verifyRegistryPullPath(lock);
   const pvcCount = verifyPersistentStorage(config.storageClass);
   const serviceEndpoints = await eventuallyReady(async () => verifyServiceEndpoints(lock));
   const runtime = await eventuallyReady(async () => verifyWorkloads(lock, {
     requireZeroRestarts,
-    componentSelection
+    componentSelection,
+    recordedEvidence,
+    installationState: config.installationState
   }));
   const postgresql = verifySupabaseDatabase(lock);
   const supabase = await verifySupabaseServices();
   const gitea = await verifyGitea();
-  const beszel = await verifyBeszel();
+  const beszel = await verifyBeszel(lock, config.installationState, recordedEvidence);
   const consoleApi = await verifyConsoleApi();
   if (consoleUrl && config.consoleUrl !== consoleUrl) {
     throw new Error(`Verified Console URL differs from installation config (${consoleUrl} != ${config.consoleUrl})`);

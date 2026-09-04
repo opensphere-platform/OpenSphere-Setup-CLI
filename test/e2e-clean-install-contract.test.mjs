@@ -15,19 +15,20 @@ function escapeRegex(value) {
   return value.replace(/[.*+?^$()|[\]\\]/g, '\\$&');
 }
 
-test('edge E2E cleanup owns exactly the five Setup bootstrap namespaces', () => {
+test('edge E2E cleanup owns exactly the seven Setup bootstrap namespaces', () => {
   assert.deepEqual(powershellArray('Namespaces'), [
     'opensphere-console-data',
     'opensphere-console-change',
     'opensphere-monitoring',
     'opensphere-console',
+    'opensphere-osaa-credentials',
+    'opensphere-shell-sessions',
     'opensphere-system'
   ]);
   for (const foreignNamespace of [
     'opensphere-developer',
     'opensphere-www',
     'opensphere-foundation',
-    'opensphere-osaa-credentials',
     'opensphere-console-recovery'
   ]) {
     assert.equal(powershellArray('Namespaces').includes(foreignNamespace), false);
@@ -44,14 +45,17 @@ test('edge E2E cleanup owns the exact target cluster-scoped set', () => {
   ]);
   const clusterRbac = [
     'opensphere-extension-controller-cli-downloads',
-    'opensphere-registry'
+    'opensphere-registry',
+    'opensphere-console-osaa-gateway-environment-reader',
+    'opensphere-shell-runtime-token-reviewer'
   ];
   assert.deepEqual(powershellArray('ClusterRoles'), clusterRbac);
   assert.deepEqual(powershellArray('ClusterRoleBindings'), clusterRbac);
   const policies = [
     'opensphere-console-manual-ui-contract',
     'opensphere-console-image-integrity-workload',
-    'opensphere-console-image-integrity-cronjob'
+    'opensphere-console-image-integrity-cronjob',
+    'opensphere-shell-runtime-template-v1'
   ];
   assert.deepEqual(powershellArray('AdmissionPolicies'), policies);
   assert.deepEqual(powershellArray('AdmissionPolicyBindings'), policies);

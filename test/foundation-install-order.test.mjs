@@ -10,13 +10,20 @@ const end=source.indexOf('\nexport function assertComponentMigrationPrefix(',beg
 assert.ok(begin>=0 && end>begin);
 const production=source.slice(begin,end);
 const names=['gitea','giteaPostgres','consoleApi','extensionController','supabasePostgres',
-  'supabaseAuth','supabaseRest','supabaseStorage','beszelHub','beszelAgent','beszelBootstrap'];
-const lock={components:Object.fromEntries(names.map(name=>[name,{image:`ghcr.io/fixture/${name}@sha256:${'a'.repeat(64)}`}]))};
+  'supabaseAuth','supabaseRest','supabaseStorage','beszelHub','beszelAgent','beszelBootstrap',
+  'osaaGateway','osdst'];
+const lock={
+  channel:'edge',
+  releaseDigest:'sha256:'+'d'.repeat(64),
+  components:Object.fromEntries(names.map(name=>[name,{image:`ghcr.io/fixture/${name}@sha256:${'a'.repeat(64)}`}])),
+  auxiliaryArtifacts:Object.fromEntries(['cliArtifacts','osShellControl','osShellRuntime'].map(name=>
+    [name,{image:`ghcr.io/fixture/${name}@sha256:${'e'.repeat(64)}`}]))
+};
 const foundation={target:true,root:'/verified-release',migration:{evidence:{
   sha256:'sha256:'+'b'.repeat(64),setDigest:'sha256:'+'c'.repeat(64),latestGlobalId:'opensphere-console/20260903/0028',
 }}};
 function harness({failBeszel=false}={}) {
-  const state={reader:false,api:false,legacy:false,calls:[],progress:[]};
+  const state={reader:false,api:false,native:false,legacy:false,calls:[],progress:[]};
   const context={join,currentKubeContext:()=> 'docker-desktop',
     runLegacyFoundationInstallers:()=>{state.legacy=true;},
     run:(executable,args)=>{
@@ -34,6 +41,15 @@ function harness({failBeszel=false}={}) {
         assert.equal(args[args.indexOf('-ExpectedMigrationSetDigest')+1],foundation.migration.evidence.setDigest);
         assert.equal(args.includes('-VerifiedMaterializedRelease'),true);
         state.api=true;
+      } else if(script.endsWith('/scripts/Install-ConsoleNativeRuntime.ps1')) {
+        if(!state.api)throw Error('native runtime started before C_API migration baseline');
+        assert.equal(args[args.indexOf('-OsaaGatewayImage')+1],lock.components.osaaGateway.image);
+        assert.equal(args[args.indexOf('-OsdstImage')+1],lock.components.osdst.image);
+        assert.equal(args[args.indexOf('-OsShellControlImage')+1],lock.auxiliaryArtifacts.osShellControl.image);
+        assert.equal(args[args.indexOf('-OsShellRuntimeImage')+1],lock.auxiliaryArtifacts.osShellRuntime.image);
+        assert.equal(args[args.indexOf('-ReleaseDigest')+1],lock.releaseDigest);
+        assert.equal(args[args.indexOf('-ExpectedMigrationSetDigest')+1],foundation.migration.evidence.setDigest);
+        state.native=true;
       }
     },
   };
@@ -44,8 +60,9 @@ test('fresh foundation provisions the mandatory monitoring reader before the API
   const h=harness();
   h.run(lock,foundation,'standard','https://localhost:1114',h.progress);
   assert.equal(h.state.api,true);
-  assert.equal(h.state.calls.length,3);
-  assert.equal(h.state.progress.filter(([kind])=>kind==='완료').length,3);
+  assert.equal(h.state.native,true);
+  assert.equal(h.state.calls.length,4);
+  assert.equal(h.state.progress.filter(([kind])=>kind==='완료').length,4);
 });
 test('monitoring prerequisite failure stops before API deployment and does not report it complete',()=>{
   const h=harness({failBeszel:true});

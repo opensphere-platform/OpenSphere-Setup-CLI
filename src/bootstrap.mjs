@@ -1,6 +1,6 @@
 import {KUBERNETES_EGRESS_SLOT,discoverRegistryKubernetesEgress,renderRegistryKubernetesEgress} from './registry-runtime-access.mjs';
 import {setTimeout as registryDelay} from 'node:timers/promises';
-import {REGISTRY_AUTH_SECRET,REGISTRY_AUTH_CONTRACT,initialRegistryState,registryStateSecret,parseRegistryState,requiredImages,pullSecretData,GENERATION_ANNOTATION,validateCredential} from './registry-lifecycle-contract.mjs';
+import {REGISTRY_AUTH_SECRET,REGISTRY_AUTH_CONTRACT,REGISTRY_NAMESPACES,initialRegistryState,registryStateSecret,parseRegistryState,requiredImages,pullSecretData,GENERATION_ANNOTATION,validateCredential} from './registry-lifecycle-contract.mjs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -474,7 +474,13 @@ const LEGACY_SUPABASE_MANIFEST = Object.freeze({
 
 export const FOUNDATION_ARTIFACT_PATHS = Object.freeze([
   'scripts/Install-ConsoleApiRuntime.ps1',
+  'scripts/Install-ConsoleNativeRuntime.ps1',
   'scripts/console-migrations.mjs',
+  'scripts/os-shell-tls-contract.ps1',
+  'apps/osaa-gateway/deploy.yaml',
+  'apps/osdst/deploy.yaml',
+  'apps/os-shell-control/deploy.yaml',
+  'apps/os-shell-control/runtime-template.js',
   'backend/gitea/bootstrap/install.ps1',
   'backend/gitea/bootstrap/configure-signing.ps1',
   'backend/gitea/bootstrap/control-plane-bootstrap.ps1',
@@ -617,6 +623,11 @@ export const CORE_ROLLOUTS = Object.freeze([
   ['opensphere-console-change', 'deployment/opensphere-gitea', '900s'],
   ['opensphere-console', 'deployment/opensphere-console-api', '600s'],
   ['opensphere-console', 'deployment/opensphere-extension-controller', '600s'],
+  ['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s'],
+  ['opensphere-console', 'deployment/opensphere-osdst', '600s'],
+  ['opensphere-console', 'deployment/opensphere-shell-api', '600s'],
+  ['opensphere-console', 'deployment/opensphere-shell-gateway', '600s'],
+  ['opensphere-console', 'deployment/opensphere-shell-reconciler', '600s'],
   ['opensphere-console', 'deployment/opensphere-registry', '600s'],
   ['opensphere-console', 'deployment/os-cli', '600s'],
   ['opensphere-monitoring', 'statefulset/beszel-hub', '600s'],
@@ -659,7 +670,7 @@ export const COMPONENT_ROLLOUTS = Object.freeze({
   beszelAgent: [['opensphere-monitoring', 'daemonset/beszel-agent', '600s']],
   beszelBootstrap: [],
   osaaGateway: [['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']],
-  osdst: [],
+  osdst: [['opensphere-console', 'deployment/opensphere-osdst', '600s']],
   osaaGovernedAdapter: [],
   notificationDispatcher: [],
   recovery: []
@@ -828,11 +839,11 @@ export function ensureRegistryPullSecrets(lock, suppliedCredentials, {lifecycleE
   if(suppliedCredentials)validateCredential(suppliedCredentials);
   if(suppliedCredentials?.lifecycle?.mode==='github-device' && !lifecycleEnabled)throw new Error('Target Console has not enabled registry-auth/v1; OAuth runtime handoff is blocked');
   const requiresCredentials = releaseNeedsRegistryCredentials(lock);
-  const existing = new Map(MANAGED_NAMESPACES.map((namespace) => {
+  const existing = new Map(REGISTRY_NAMESPACES.map((namespace) => {
     try { return [namespace, readSecret(namespace, REGISTRY_PULL_SECRET)]; }
     catch { return [namespace, null]; }
   }));
-  const everyNamespaceReady = MANAGED_NAMESPACES.every((namespace) =>
+  const everyNamespaceReady = REGISTRY_NAMESPACES.every((namespace) =>
     requiresCredentials
       ? secretHasGhcrCredential(existing.get(namespace))
       : Boolean(existing.get(namespace))
@@ -854,7 +865,7 @@ export function ensureRegistryPullSecrets(lock, suppliedCredentials, {lifecycleE
   if (requiresCredentials && !credentials) {
     throw new Error('This release contains private GHCR packages; provide --registry-username with --registry-token-stdin or authenticate gh with read:packages');
   }
-  for (const namespace of MANAGED_NAMESPACES) {
+  for (const namespace of REGISTRY_NAMESPACES) {
     if (!credentials && existing.get(namespace)) continue;
     const manifest=registryPullSecretManifest(namespace, credentials);
     if(state){manifest.data=pullSecretData(credentials,state.generation);manifest.metadata.annotations={[GENERATION_ANNOTATION]:state.generation};}
@@ -874,7 +885,7 @@ export async function verifyRegistryHandoff(generation,{read=()=>readSecret('ope
     const state=parseRegistryState(read());
     if(state.generation!==generation)throw new Error('Registry credential generation changed during Setup handoff');
     if(state.phase==='ReauthorizationRequired')throw new Error('Console requires registry reauthorization');
-    if(state.phase==='Ready' && state.observation?.generation===generation && JSON.stringify([...state.observation.namespaces].sort())===JSON.stringify([...MANAGED_NAMESPACES].sort()) && now()-Date.parse(state.observation.verifiedAt)<300000)return;
+    if(state.phase==='Ready' && state.observation?.generation===generation && JSON.stringify([...state.observation.namespaces].sort())===JSON.stringify([...REGISTRY_NAMESPACES].sort()) && now()-Date.parse(state.observation.verifiedAt)<300000)return;
     await sleep(2000);
   }
   throw new Error('Console registry credential handoff was not verified before timeout');
@@ -1214,6 +1225,25 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
     '-ExpectedMigrationLatestGlobalId', migration.latestGlobalId
   ]);
   progress?.item('완료', 'fresh migration prefix 및 최소권한 C_API/C_EXT runtime');
+
+  progress?.item('설치', 'Console native core — OSAA, OSDST/R2D2, OS Shell');
+  run('pwsh', [
+    '-NoProfile', '-NonInteractive', '-File',
+    join(foundation.root, 'scripts', 'Install-ConsoleNativeRuntime.ps1'),
+    '-OsaaGatewayImage', lock.components.osaaGateway.image,
+    '-OsdstImage', lock.components.osdst.image,
+    '-OsShellControlImage', lock.auxiliaryArtifacts.osShellControl.image,
+    '-OsShellRuntimeImage', lock.auxiliaryArtifacts.osShellRuntime.image,
+    '-OsCliImage', lock.auxiliaryArtifacts.cliArtifacts.image,
+    '-ConsoleUrl', consoleUrl,
+    '-ReleaseChannel', lock.channel,
+    '-ReleaseDigest', lock.releaseDigest,
+    '-ExpectedMigrationManifestSha256', migration.sha256,
+    '-ExpectedMigrationSetDigest', migration.setDigest,
+    '-ExpectedMigrationLatestGlobalId', migration.latestGlobalId,
+    '-KubeContext', context
+  ]);
+  progress?.item('완료', 'native core runtime과 exact-release activation evidence');
 }
 
 export function assertComponentMigrationPrefix(manifest, rows) {

@@ -11,6 +11,13 @@ const required = [
   ['opensphere-console-change', 'opensphere-gitea'],
   ['opensphere-monitoring', 'beszel-hub'],
   ['opensphere-console', 'opensphere-console-api'],
+  ['opensphere-console', 'opensphere-console-osaa-gateway'],
+  ['opensphere-console', 'opensphere-osdst'],
+  ['opensphere-console', 'opensphere-shell-api'],
+  ['opensphere-console', 'opensphere-shell-gateway'],
+  ['opensphere-console', 'opensphere-shell-reconciler'],
+  ['opensphere-console', 'opensphere-shell-credential-authority'],
+  ['opensphere-console', 'opensphere-shell-console-api'],
   ['opensphere-console', 'opensphere-registry'],
   ['opensphere-console', 'opensphere-console-ext']
 ];
@@ -58,11 +65,11 @@ test('a lock-bound CLI artifact requires its independent Service endpoint', () =
   );
 });
 
-test('Console-activated optional modules are not required during bootstrap verification', () => {
+test('native Console core services are required during bootstrap verification', () => {
   const { services, slices } = fixture();
   assert.equal(
     services.some(({ metadata }) => ['opensphere-osdst', 'opensphere-console-osaa-gateway'].includes(metadata.name)),
-    false
+    true
   );
   assert.equal(verifyRequiredServiceEndpoints(services, slices).length, required.length);
 });

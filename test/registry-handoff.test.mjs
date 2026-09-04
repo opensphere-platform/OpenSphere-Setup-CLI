@@ -10,7 +10,7 @@ test('OAuth cannot be handed to a Console without the enabled lifecycle contract
 test('Setup rejects handing broad or unverified host credentials to runtime',()=>{
  const c=credentials();c.lifecycle.scopes.push('repo');assert.throws(()=>ensureRegistryPullSecrets({},c,{lifecycleEnabled:true}),/excessive registry credential/);
 });
-test('Setup waits for matching runtime generation and all five observed namespaces',async()=>{
+test('Setup waits for matching runtime generation and all six observed namespaces',async()=>{
  let now=Date.now(),reads=0;const state=initialRegistryState(credentials(),[]);const ready={...state,phase:'Ready',observation:{generation:state.generation,namespaces:[...REGISTRY_NAMESPACES],verifiedAt:new Date(now).toISOString()}};
  await verifyRegistryHandoff(state.generation,{now:()=>now,sleep:async(ms)=>{now+=ms;},read:()=>registryStateSecret(++reads===1?state:ready)});assert.equal(reads,2);
 });

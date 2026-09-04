@@ -21,6 +21,8 @@ $Namespaces = @(
   'opensphere-console-change',
   'opensphere-monitoring',
   'opensphere-console',
+  'opensphere-osaa-credentials',
+  'opensphere-shell-sessions',
   'opensphere-system'
 )
 $Crds = @(
@@ -29,21 +31,27 @@ $Crds = @(
 )
 $ClusterRoles = @(
   'opensphere-extension-controller-cli-downloads',
-  'opensphere-registry'
+  'opensphere-registry',
+  'opensphere-console-osaa-gateway-environment-reader',
+  'opensphere-shell-runtime-token-reviewer'
 )
 $ClusterRoleBindings = @(
   'opensphere-extension-controller-cli-downloads',
-  'opensphere-registry'
+  'opensphere-registry',
+  'opensphere-console-osaa-gateway-environment-reader',
+  'opensphere-shell-runtime-token-reviewer'
 )
 $AdmissionPolicies = @(
   'opensphere-console-manual-ui-contract',
   'opensphere-console-image-integrity-workload',
-  'opensphere-console-image-integrity-cronjob'
+  'opensphere-console-image-integrity-cronjob',
+  'opensphere-shell-runtime-template-v1'
 )
 $AdmissionPolicyBindings = @(
   'opensphere-console-manual-ui-contract',
   'opensphere-console-image-integrity-workload',
-  'opensphere-console-image-integrity-cronjob'
+  'opensphere-console-image-integrity-cronjob',
+  'opensphere-shell-runtime-template-v1'
 )
 $ManagedSecrets = @(
   'opensphere-console-data/opensphere-supabase-secrets',
@@ -61,6 +69,7 @@ $ManagedSecrets = @(
   'opensphere-console-change/opensphere-ghcr-pull',
   'opensphere-monitoring/opensphere-ghcr-pull',
   'opensphere-console/opensphere-ghcr-pull',
+  'opensphere-shell-sessions/opensphere-ghcr-pull',
   'opensphere-system/opensphere-ghcr-pull'
 )
 

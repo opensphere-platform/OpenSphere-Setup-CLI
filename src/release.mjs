@@ -127,7 +127,12 @@ export const AUXILIARY_ARTIFACTS = Object.freeze({
   consoleIndexContent: 'opensphere-console-index-content'
 });
 
-export const BOOTSTRAP_AUXILIARY_ARTIFACTS = Object.freeze(['cliArtifacts', 'consoleIndexContent']);
+export const BOOTSTRAP_AUXILIARY_ARTIFACTS = Object.freeze([
+  'cliArtifacts',
+  'osShellControl',
+  'osShellRuntime',
+  'consoleIndexContent'
+]);
 const LEGACY_AUXILIARY_ARTIFACTS = Object.freeze(
   Object.fromEntries(Object.entries(AUXILIARY_ARTIFACTS).filter(([name]) => name !== 'consoleIndexContent'))
 );
@@ -139,10 +144,7 @@ export function auxiliaryCatalogForAnchor(anchor) {
   }
   return contract ? AUXILIARY_ARTIFACTS : LEGACY_AUXILIARY_ARTIFACTS;
 }
-export const AVAILABLE_AUXILIARY_ARTIFACTS = Object.freeze([
-  'osShellControl',
-  'osShellRuntime'
-]);
+export const AVAILABLE_AUXILIARY_ARTIFACTS = Object.freeze([]);
 
 // The canonical distribution catalog is complete even though Setup deploys only
 // BOOTSTRAP_CORE_COMPONENTS. Console activates AVAILABLE_MODULE_COMPONENTS later
@@ -154,6 +156,8 @@ export const BOOTSTRAP_CORE_COMPONENTS = Object.freeze([
   'consoleApi',
   'extensionController',
   'registry',
+  'osaaGateway',
+  'osdst',
   'gitea',
   'giteaPostgres',
   'supabasePostgres',
@@ -166,8 +170,6 @@ export const BOOTSTRAP_CORE_COMPONENTS = Object.freeze([
 ]);
 
 export const AVAILABLE_MODULE_COMPONENTS = Object.freeze([
-  'osaaGateway',
-  'osdst',
   'osaaGovernedAdapter',
   'notificationDispatcher',
   'recovery'

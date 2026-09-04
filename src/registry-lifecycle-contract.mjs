@@ -3,7 +3,7 @@ import {randomUUID} from 'node:crypto';
 export const REGISTRY_AUTH_CONTRACT='registry-auth/v1';
 export const REGISTRY_AUTH_SECRET='opensphere-registry-auth';
 export const REGISTRY_PULL_SECRET='opensphere-ghcr-pull';
-export const REGISTRY_NAMESPACES=Object.freeze(['opensphere-console-data','opensphere-console-change','opensphere-monitoring','opensphere-console','opensphere-system']);
+export const REGISTRY_NAMESPACES=Object.freeze(['opensphere-console-data','opensphere-console-change','opensphere-monitoring','opensphere-console','opensphere-system','opensphere-shell-sessions']);
 export const GENERATION_ANNOTATION='opensphere.io/credential-generation';
 export function requiredImages(lock) {
   if(!lock?.components || typeof lock.components!=='object' || Array.isArray(lock.components))throw new Error('Installed registry release lock is unavailable');

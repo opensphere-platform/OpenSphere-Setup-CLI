@@ -17,11 +17,12 @@ test('bootstrap verification requires Supabase, Gitea, Beszel and C_API runtime 
   assert.deepEqual(required['opensphere-console/opensphere-extension-controller-runtime'], ['database-url']);
 });
 
-test('Console-activated optional module Secrets are outside bootstrap verification', () => {
+test('native Console core Secrets are part of bootstrap verification', () => {
   const required = requiredSecretsForLock({ components: { osdst: {}, osaaGateway: {} } });
-  assert.equal(required['opensphere-console/opensphere-osaa-maintenance-runtime'], undefined);
-  assert.equal(required['opensphere-console/opensphere-osaa-runtime'], undefined);
-  assert.equal(required['opensphere-osaa-credentials/opensphere-osaa-runtime'], undefined);
+  assert.deepEqual(required['opensphere-console/opensphere-osaa-gateway-db'], ['host', 'port', 'database', 'username', 'password']);
+  assert.deepEqual(required['opensphere-console/opensphere-osdst-db'], ['host', 'port', 'database', 'username', 'password']);
+  assert.deepEqual(required['opensphere-console/opensphere-shell-control-runtime'], ['admission-secret', 'delegation-secret', 'delegation-signing-key']);
+  assert.deepEqual(required['opensphere-console/opensphere-shell-console-api-tls'], ['tls.crt', 'tls.key']);
 });
 
 test('Gitea bootstrap requires current scoped tokens without manufacturing retired Backend webhook credentials', () => {
