@@ -6,7 +6,7 @@ import vm from 'node:vm';
 
 const source=await readFile(new URL('../src/bootstrap.mjs',import.meta.url),'utf8');
 const begin=source.indexOf('function runFoundationInstallers(');
-const end=source.indexOf('\nfunction runComponentMigrations(',begin);
+const end=source.indexOf('\nexport function assertComponentMigrationPrefix(',begin);
 assert.ok(begin>=0 && end>begin);
 const production=source.slice(begin,end);
 const names=['gitea','giteaPostgres','consoleApi','extensionController','supabasePostgres',
