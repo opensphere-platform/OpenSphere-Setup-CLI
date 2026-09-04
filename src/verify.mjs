@@ -91,7 +91,8 @@ const WORKLOADS = Object.freeze([
   { component: 'beszelHub', namespace: 'opensphere-monitoring', kind: 'statefulset', name: 'beszel-hub', container: 'hub' },
   { component: 'beszelAgent', namespace: 'opensphere-monitoring', kind: 'daemonset', name: 'beszel-agent', container: 'agent' },
   { component: 'beszelBootstrap', namespace: 'opensphere-monitoring', kind: 'job', name: 'beszel-bootstrap-v0187', container: 'configure' },
-  { component: 'console', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console', container: 'shell' }
+  { component: 'console', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console', container: 'shell' },
+  { artifact: 'consoleIndexContent', ownerComponent: 'console', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console', container: 'console-index-content', initContainer: true }
 ]);
 
 function getJson(args) {
@@ -312,7 +313,8 @@ function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null 
     const podSpec = spec.kind === 'cronjob'
       ? resource.spec?.jobTemplate?.spec?.template?.spec
       : resource.spec?.template?.spec;
-    const container = (podSpec?.containers ?? []).find(({ name }) => name === spec.container);
+    const containers = spec.initContainer ? podSpec?.initContainers : podSpec?.containers;
+    const container = (containers ?? []).find(({ name }) => name === spec.container);
     if (!container) throw new Error(`Workload container is missing: ${spec.namespace}/${spec.name}/${spec.container}`);
     const expectedImage = spec.artifact
       ? lock.auxiliaryArtifacts?.[spec.artifact]?.image
@@ -326,7 +328,7 @@ function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null 
     }
     expected.add(expectedImage);
     resources.push(`${spec.namespace}/${spec.kind}/${spec.name}`);
-    if (!selectedComponents || selectedComponents.has(spec.component)) {
+    if (!selectedComponents || selectedComponents.has(spec.component ?? spec.ownerComponent)) {
       if (spec.kind !== 'cronjob' && !workloadReady(resource)) {
         throw new Error(`Changed workload is not Ready: ${spec.namespace}/${spec.kind}/${spec.name}`);
       }
@@ -349,7 +351,7 @@ function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null 
     if (spec.kind === 'cronjob' || pod.metadata?.namespace !== spec.namespace) return false;
     const labels = resource.spec?.selector?.matchLabels ?? {};
     return Object.entries(labels).every(([key, value]) => pod.metadata?.labels?.[key] === value)
-      && (pod.spec?.containers ?? []).some(
+      && (spec.initContainer ? (pod.spec?.initContainers ?? []) : (pod.spec?.containers ?? [])).some(
         ({ name, image }) => name === spec.container && image === expectedImage
       );
   }));
@@ -359,7 +361,7 @@ function verifyWorkloads(lock, { requireZeroRestarts, componentSelection = null 
     const matching = pods.filter((pod) => (
       pod.metadata?.namespace === spec.namespace
       && Object.entries(labels).every(([key, value]) => pod.metadata?.labels?.[key] === value)
-      && (pod.spec?.containers ?? []).some(
+      && (spec.initContainer ? (pod.spec?.initContainers ?? []) : (pod.spec?.containers ?? [])).some(
         ({ name, image }) => name === spec.container && image === expectedImage
       )
     ));

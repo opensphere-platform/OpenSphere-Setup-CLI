@@ -123,10 +123,22 @@ const LEGACY_INSTALLED_COMPONENTS = legacyInstalledComponentMap(HISTORICAL_COMPO
 export const AUXILIARY_ARTIFACTS = Object.freeze({
   cliArtifacts: 'opensphere-os-cli',
   osShellControl: 'opensphere-console-os-shell-control',
-  osShellRuntime: 'opensphere-os-shell-runtime'
+  osShellRuntime: 'opensphere-os-shell-runtime',
+  consoleIndexContent: 'opensphere-console-index-content'
 });
 
-export const BOOTSTRAP_AUXILIARY_ARTIFACTS = Object.freeze(['cliArtifacts']);
+export const BOOTSTRAP_AUXILIARY_ARTIFACTS = Object.freeze(['cliArtifacts', 'consoleIndexContent']);
+const LEGACY_AUXILIARY_ARTIFACTS = Object.freeze(
+  Object.fromEntries(Object.entries(AUXILIARY_ARTIFACTS).filter(([name]) => name !== 'consoleIndexContent'))
+);
+
+export function auxiliaryCatalogForAnchor(anchor) {
+  const contract = anchor.labels?.['io.opensphere.console-index-content'];
+  if (contract !== undefined && contract !== 'console-index-renderer/v1') {
+    throw new Error('Unsupported Console index renderer contract');
+  }
+  return contract ? AUXILIARY_ARTIFACTS : LEGACY_AUXILIARY_ARTIFACTS;
+}
 export const AVAILABLE_AUXILIARY_ARTIFACTS = Object.freeze([
   'osShellControl',
   'osShellRuntime'
@@ -210,6 +222,7 @@ const LOCAL_EDGE_LABELS = Object.freeze({
   'opensphere.io/ga-eligible': 'false'
 });
 const RELEASE_METADATA_LABELS = Object.freeze([
+  'io.opensphere.console-index-content',
   'io.opensphere.channel',
   'io.opensphere.release-tag',
   'io.opensphere.source-revision',
@@ -1048,7 +1061,9 @@ export function validateLock(lock, {
     throw new Error(`Release lock scope is invalid: ${releaseScope}`);
   }
   if (releaseScope === RELEASE_SCOPE_INTEGRATED
-      && (lock.baseReleaseDigest !== undefined || lock.changedComponents !== undefined)) {
+      && (lock.baseReleaseDigest !== undefined
+        || lock.changedComponents !== undefined
+        || lock.changedAuxiliaryArtifacts !== undefined)) {
     throw new Error('Integrated release lock cannot declare a component transition');
   }
   if (releaseScope === RELEASE_SCOPE_COMPONENT) {
@@ -1058,16 +1073,28 @@ export function validateLock(lock, {
     if (!/^sha256:[a-f0-9]{64}$/.test(lock.baseReleaseDigest ?? '')) {
       throw new Error('Component release lock base digest is invalid');
     }
-    const changed = lock.changedComponents;
+    const changed = lock.changedComponents ?? [];
+    const changedAuxiliary = lock.changedAuxiliaryArtifacts ?? [];
     const canonicalChanged = Array.isArray(changed)
       ? [...new Set(changed)].sort()
       : [];
-    if (!Array.isArray(changed)
-        || changed.length === 0
+    const canonicalChangedAuxiliary = Array.isArray(changedAuxiliary)
+      ? [...new Set(changedAuxiliary)].sort()
+      : [];
+    if (!Array.isArray(lock.changedComponents)
         || changed.length !== canonicalChanged.length
         || changed.some((name, index) => name !== canonicalChanged[index])
         || changed.some((name) => !Object.hasOwn(COMPONENTS, name))) {
-      throw new Error('Component release lock changedComponents must be a non-empty canonical sorted set');
+      throw new Error('Component release lock changedComponents must be a canonical sorted set');
+    }
+    if (!Array.isArray(changedAuxiliary)
+        || changedAuxiliary.length !== canonicalChangedAuxiliary.length
+        || changedAuxiliary.some((name, index) => name !== canonicalChangedAuxiliary[index])
+        || changedAuxiliary.some((name) => name !== 'consoleIndexContent')) {
+      throw new Error('Component release lock changedAuxiliaryArtifacts must contain only the canonical Console index artifact');
+    }
+    if (changed.length === 0 && changedAuxiliary.length === 0) {
+      throw new Error('Component release lock must change at least one component or auxiliary artifact');
     }
     if (lock.releaseBom !== undefined) {
       throw new Error('Component release locks cannot claim a signed Release BOM');
@@ -1103,7 +1130,7 @@ export function validateLock(lock, {
       throw new Error(`Component ${name} source revision differs from the release`);
     }
     if (releaseScope === RELEASE_SCOPE_COMPONENT
-        && lock.changedComponents.includes(name)
+        && (lock.changedComponents ?? []).includes(name)
         && component.sourceRevision !== lock.sourceRevision) {
       throw new Error(`Changed component ${name} source revision differs from the component release`);
     }
@@ -1116,7 +1143,9 @@ export function validateLock(lock, {
       throw new Error('Auxiliary runtime artifacts require governed local-edge or signed release trust');
     }
     const names = Object.keys(lock.auxiliaryArtifacts);
-    const expectedAuxiliaryNames = Object.keys(AUXILIARY_ARTIFACTS);
+    const expectedAuxiliaryNames = Object.keys(
+      names.includes('consoleIndexContent') ? AUXILIARY_ARTIFACTS : LEGACY_AUXILIARY_ARTIFACTS
+    );
     if (JSON.stringify(names) !== JSON.stringify(expectedAuxiliaryNames)) {
       throw new Error('Release lock auxiliary artifact set is not canonical');
     }
@@ -1136,6 +1165,11 @@ export function validateLock(lock, {
           && artifact.sourceRevision !== lock.sourceRevision) {
         throw new Error(`Auxiliary artifact ${name} source revision differs from the release`);
       }
+      if (releaseScope === RELEASE_SCOPE_COMPONENT
+          && (lock.changedAuxiliaryArtifacts ?? []).includes(name)
+          && artifact.sourceRevision !== lock.sourceRevision) {
+        throw new Error(`Changed auxiliary artifact ${name} source revision differs from the component release`);
+      }
       if (artifact.registryCredentialsRequired !== undefined
           && typeof artifact.registryCredentialsRequired !== 'boolean') {
         throw new Error(`Auxiliary artifact ${name} registry credential requirement is invalid`);
@@ -1152,7 +1186,10 @@ export function validateLock(lock, {
         ...(releaseScope === RELEASE_SCOPE_COMPONENT
           ? {
               baseReleaseDigest: lock.baseReleaseDigest,
-              changedComponents: lock.changedComponents
+              changedComponents: lock.changedComponents,
+              ...(lock.changedAuxiliaryArtifacts !== undefined
+                ? { changedAuxiliaryArtifacts: lock.changedAuxiliaryArtifacts }
+                : {})
             }
           : {}),
         ...(lock.auxiliaryArtifacts ? { auxiliaryArtifacts: lock.auxiliaryArtifacts } : {})
@@ -1197,8 +1234,29 @@ export function validateReleaseTransition(baseLock, targetLock) {
   if (canonicalTrust(target.trust) !== canonicalTrust(base.trust)) {
     throw new Error('Component release lock trust root differs from its base release');
   }
-  if (!sameComponent(base.auxiliaryArtifacts, target.auxiliaryArtifacts)) {
-    throw new Error('Component release cannot change auxiliary runtime artifacts');
+  const changedAuxiliary = new Set(target.changedAuxiliaryArtifacts ?? []);
+  const baseAuxiliaryNames = Object.keys(base.auxiliaryArtifacts ?? {}).sort();
+  const targetAuxiliaryNames = Object.keys(target.auxiliaryArtifacts ?? {}).sort();
+  const introducedConsoleIndex = !baseAuxiliaryNames.includes('consoleIndexContent')
+    && targetAuxiliaryNames.includes('consoleIndexContent')
+    && JSON.stringify([...baseAuxiliaryNames, 'consoleIndexContent'].sort()) === JSON.stringify(targetAuxiliaryNames)
+    && changedAuxiliary.has('consoleIndexContent');
+  if (introducedConsoleIndex && !target.changedComponents.includes('console')) {
+    throw new Error('Console index artifact introduction must change the Console component manifest');
+  }
+  if (JSON.stringify(baseAuxiliaryNames) !== JSON.stringify(targetAuxiliaryNames)
+      && !introducedConsoleIndex) {
+    throw new Error('Component release cannot add or remove auxiliary runtime artifacts');
+  }
+  for (const name of targetAuxiliaryNames) {
+    const differs = introducedConsoleIndex && name === 'consoleIndexContent'
+      ? true : !sameComponent(base.auxiliaryArtifacts?.[name], target.auxiliaryArtifacts?.[name]);
+    if (changedAuxiliary.has(name) && !differs) {
+      throw new Error(`Changed auxiliary artifact ${name} is identical to the base release`);
+    }
+    if (!changedAuxiliary.has(name) && differs) {
+      throw new Error(`Unlisted auxiliary artifact ${name} differs from the base release`);
+    }
   }
   const cutover = isAgentIdentityCutover(base.components, target.components);
   if (cutover) {
@@ -1277,7 +1335,7 @@ async function resolveLocalEdgeRelease(reference, anchor, {
     return [name, releaseComponent(repository, inspected)];
   }));
   const components = Object.fromEntries(resolved);
-  const auxiliaryResolved = await Promise.all(Object.entries(AUXILIARY_ARTIFACTS).map(async ([name, repository]) => {
+  const auxiliaryResolved = await Promise.all(Object.entries(auxiliaryCatalogForAnchor(anchor)).map(async ([name, repository]) => {
     report(onProgress, {
       type: 'local-auxiliary-start',
       component: name,
@@ -1393,7 +1451,7 @@ async function resolveSignedRelease(reference, channel, {
     return [name, releaseComponent(repository, inspected)];
   }));
   const components = Object.fromEntries(resolved);
-  const auxiliaryResolved = await Promise.all(Object.entries(AUXILIARY_ARTIFACTS).map(async ([name, repository]) => {
+  const auxiliaryResolved = await Promise.all(Object.entries(auxiliaryCatalogForAnchor(anchor)).map(async ([name, repository]) => {
     report(onProgress, { type: 'auxiliary-start', component: name, repository, reference: bom.releaseTag });
     const inspected = await resolveImageFn(repository, bom.releaseTag, {
       registryCredentials,

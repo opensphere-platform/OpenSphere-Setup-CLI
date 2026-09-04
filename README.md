@@ -7,18 +7,18 @@ OpenSphere OS Console의 신뢰 가능한 최초 설치, 재개, 검증, 업그�
 
 Setup CLI는 Windows에 설치해 상시 사용하는 프로그램이 아니다. 필요한 때 실행해 Kubernetes의 Console을 준비·설치·검증하고 종료한다. **Setup 설치, PATH 등록, 서비스 등록은 하지 않는다.**
 
-현재 소스 버전은 `0.5.0-edge.27`이며 OpenSphere 전용 OAuth App의 Device Flow를 포함한다. 이번 버전은 Console 초기 설치의 DB 접근·Registry 발견 조건과 Storage 검증을 수정한다. [변경 사항](docs/CONSOLE-INSTALL-RESUME-EDGE27.md)을 참고한다.
+현재 소스 버전은 `0.5.0-edge.28`이며 OpenSphere 전용 OAuth App의 Device Flow를 포함한다. 이번 버전은 Main Index 콘텐츠를 Console 실행 이미지와 독립적으로 잠그고, Docker Desktop의 Kubernetes API endpoint 변경을 최소 권한으로 복구한다. [변경 사항](docs/CONSOLE-INDEX-CONTENT-EDGE28.md)을 참고한다.
 
-**현재 수정 범위:** edge.25 API 이미지에서 runtime/package.json이 누락돼 CommonJS 파일이 ESM으로 해석되는 패키징 오류를 edge.26에서 수정했다. 완성된 API 이미지의 실제 PostgreSQL 연결·HTTP Ready 및 잘못된 DB 인증 거부를 CI와 로컬 채널 전환 조건으로 추가했다. 설치 순서·credential·공급망·Ready 기준은 유지한다. 현재 발행·삭제 상태는 위 기록을 따른다. 이미지 기동 검증을 전체 Kubernetes bootstrap 성공으로 표시하지 않는다.
+**현재 수정 범위:** edge.28은 Console 실행 이미지와 Main Index 콘텐츠의 릴리스 단위를 분리하되 하나의 installation lock으로 검증한다. 첫 도입은 renderer와 콘텐츠를 원자적으로 전환하고, 이후 콘텐츠 전용 변경은 Console Deployment만 다시 적용한다. Extension Controller는 Docker Desktop 재기동으로 바뀐 Kubernetes API endpoint를 exact host CIDR로 복구한다. 이미지 기동이나 단위 시험만으로 전체 Kubernetes 설치 성공을 표시하지 않는다.
 
 ### Windows amd64 — 한 번 다운로드하고 재사용하는 포터블 실행 파일
 
-[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.27/opensphere-setup.exe)
+[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.28/opensphere-setup.exe)
 
 ```powershell
 .\opensphere-setup.exe version
 .\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --registry-auth oauth
-.\opensphere-setup.exe --version 0.5.0-edge.27 resolve --release edge --registry-auth oauth
+.\opensphere-setup.exe --version 0.5.0-edge.28 resolve --release edge --registry-auth oauth
 ```
 
 버전·채널 선택자는 명령 앞에 두며 상호 배타적이다. 옵션을 생략하면 EXE가 발행된 exact Release를 사용한다. `--release`와 `--lock`은 Console 배포 선택자다.
@@ -70,7 +70,7 @@ macOS 준비·설치·인증서 신뢰 절차는
 Setup은 태그를 그대로 설치하지 않는다.
 
 1. 선택 채널의 Release BOM 또는 local-edge release lock을 조회한다.
-2. canonical 18개와 auxiliary 3개의 source revision, repository, exact image digest, release scope를 검증한다.
+2. canonical 18개와 renderer-aware auxiliary 4개의 source revision, repository, exact image digest, release scope를 검증한다. 이전 3개 auxiliary 설치 lock은 rollback·원자적 전환을 위해 계속 읽을 수 있다.
 3. installation 상태를 `Preparing`으로 만들고 immutable lock과 materialized source를 준비한다.
 4. Supabase, Gitea, Beszel bootstrap core를 설치하고 migration, control-plane seed, monitoring bootstrap Job을 완료한다.
 5. Console API(C_API), Extension Controller(C_EXT), Registry, OS CLI와 Main Shell을 digest-pinned image로 설치한다.
@@ -96,7 +96,7 @@ Release BOM의 canonical component는 18개다. 이 중 Setup이 fresh bootstrap
 
 나머지 canonical 5개는 lock에 exact digest를 보존하되 Setup이 암묵 배포하지 않는다. Console이 설치 후 `osaaGateway`, `osdst`, `osaaGovernedAdapter`, `notificationDispatcher`, `recovery`를 활성화한다.
 
-Auxiliary artifact는 `cliArtifacts`, `osShellControl`, `osShellRuntime` 3개다. Setup은 `cliArtifacts`를 lock에서 검증하지만 호스트에는 자동 설치하지 않는다. `install-cli`를 명시한 경우에만 내려받는다. OS Shell 2개는 Console 활성화에 필요한 digest를 lock에서 제공하며 bootstrap core에는 포함하지 않는다.
+Auxiliary artifact는 `cliArtifacts`, `osShellControl`, `osShellRuntime`, `consoleIndexContent` 4개다. Setup은 `cliArtifacts`를 lock에서 검증하지만 호스트에는 자동 설치하지 않는다. `install-cli`를 명시한 경우에만 내려받는다. OS Shell 2개는 Console 활성화에 필요한 digest를 lock에서 제공하며 bootstrap core에는 포함하지 않는다. `consoleIndexContent`는 Console Pod의 initContainer가 Main Index 정적 콘텐츠를 공유 볼륨에 투영하며, 콘텐츠만 바꿀 때 Console 실행 이미지를 다시 만들지 않는다.
 
 Supabase Auth의 `auth.users.id`가 사용자 canonical subject다. Supabase PostgreSQL은 Console state, RBAC와 audit을 소유하고 Supabase Storage는 object storage를 소유한다. Gitea는 선언형 desired state, review와 signed change history를 소유한다. Kubernetes Secret은 runtime credential 전달 수단이며 사용자 identity authority가 아니다.
 
@@ -148,7 +148,7 @@ v1.30+, Ready 노드와 권한, StorageClass, 신규 설치 포트와 채널별 
 
 `edge`는 개발 클러스터의 Linux 노드 아키텍처만 포함한 host-native 이미지도 허용한다.
 로컬 발행본은 `localhost`, `pre-ga`, `ga-eligible=false`, 날짜 태그와 전체 source
-revision 라벨 및 immutable release tag가 canonical 18개와 auxiliary 3개에서 일치해야 한다.
+revision 라벨 및 immutable release tag가 canonical 18개와 renderer-aware auxiliary 4개에서 일치해야 한다.
 각 artifact의 `io.opensphere.release-scope`도 canonical 또는 auxiliary 역할과 일치해야 한다.
 local-edge lock은 서명된 Release BOM이라고 주장하지 않는다. 따라서 Supabase migration
 manifest는 exact source revision과 per-file SHA-256, manifest set digest, v2 predecessor

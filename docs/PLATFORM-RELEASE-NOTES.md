@@ -1,6 +1,6 @@
 # OpenSphere Setup CLI 0.5.0-edge.26 — verify the packaged Console API
 
-This edge prerelease targets the Console fix for a packaging error: the API image copied CommonJS contract files without their runtime/package.json. Node inherited the parent ESM setting and the API exited immediately. The runtime manifest is now included and explicitly declares commonjs.
+This edge prerelease adds a governed, independently updatable Main Index content artifact and exact Kubernetes API endpoint recovery for the Extension Controller. The first renderer/content transition is atomic; later content-only releases reuse the Console workload without rebuilding its runtime image.
 
 The validation boundary is also corrected. A new gate starts the built image using its normal entrypoint and UID 1001 against isolated PostgreSQL. It requires HTTP 200/Ready with a real restricted runtime DB connection, and HTTP 503 with an invalid DB credential. It uses no Kubernetes data, host ports, or host source mounts. Temporary test containers, volumes and network are removed.
 
@@ -10,7 +10,7 @@ Governed Console source: `101f770c5691ac905838c4bd2476d5b0bd02e1e8`, Console ver
 
 [Publication, validation and clean-install record](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/blob/main/docs/CONSOLE-INSTALL-IMAGE-STARTUP-EDGE26.md). The image gate verifies API startup and DB-backed readiness, not a completed Kubernetes bootstrap or every Console feature. Candidate/stable remain on HOLD.
 
-Download the [Windows portable EXE](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.26/opensphere-setup.exe), then start the prepared local installation:
+Download the [Windows portable EXE](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.28/opensphere-setup.exe), then start the prepared local installation:
 
 ```powershell
 .\opensphere-setup.exe --version 0.5.0-edge.26 bootstrap `

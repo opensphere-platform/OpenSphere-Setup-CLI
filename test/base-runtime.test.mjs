@@ -8,6 +8,8 @@ import {
   baseManifestSpecs,
   BESZEL_MANIFEST,
   CONSOLE_API_MANIFEST,
+  componentReleaseManifestSpecs,
+  componentReleaseWorkloadComponents,
   coreRolloutsForLock,
   CORE_ROLLOUTS,
   EXTENSION_CONTROLLER_MANIFEST,
@@ -49,6 +51,9 @@ function localReleaseLock() {
     auxiliaryArtifacts: {
       cliArtifacts: {
         image: `ghcr.io/opensphere-platform/${AUXILIARY_ARTIFACTS.cliArtifacts}@sha256:${'f'.repeat(64)}`
+      },
+      consoleIndexContent: {
+        image: `ghcr.io/opensphere-platform/${AUXILIARY_ARTIFACTS.consoleIndexContent}@sha256:${'e'.repeat(64)}`
       }
     }
   };
@@ -273,6 +278,17 @@ test('custom Console endpoint renders into C_API and Main Shell authorities', ()
     assert.doesNotMatch(rendered, /__OPENSPHERE_CONSOLE_URL__/);
     assert.match(rendered, /https:\/\/localhost:18090/);
   }
+});
+
+test('Main Index-only release reuses the Console workload without rebuilding its image', () => {
+  const lock = localReleaseLock();
+  lock.releaseScope = 'component';
+  lock.changedComponents = [];
+  lock.changedAuxiliaryArtifacts = ['consoleIndexContent'];
+  lock.components.console.sourceRevision = lock.sourceRevision;
+  assert.deepEqual(componentReleaseWorkloadComponents(lock), ['console']);
+  const specs = componentReleaseManifestSpecs(lock);
+  assert.deepEqual(specs.base.map(({ path }) => path), ['deploy/opensphere-console.yaml']);
 });
 
 test('selected StorageClass is rendered into every Supabase PVC', () => {

@@ -538,9 +538,17 @@ function manifestSpecComponents(spec) {
   ]);
 }
 
+export function componentReleaseWorkloadComponents(lock) {
+  const selected = new Set(lock?.changedComponents ?? []);
+  if ((lock?.changedAuxiliaryArtifacts ?? []).includes('consoleIndexContent')) {
+    selected.add('console');
+  }
+  return [...selected].sort();
+}
+
 export function componentReleaseManifestSpecs(
   lock,
-  changedComponents = lock.changedComponents
+  changedComponents = componentReleaseWorkloadComponents(lock)
 ) {
   if (!Array.isArray(changedComponents) || changedComponents.length === 0) {
     throw new Error('Component release requires a non-empty changed component set');
@@ -912,6 +920,13 @@ export function renderManifest(
   yaml = yaml.replaceAll('__OPENSPHERE_STORAGE_CLASS__', storageClass);
   const normalizedConsoleUrl = normalizeConsoleUrl(consoleUrl);
   yaml = yaml.replaceAll('__OPENSPHERE_CONSOLE_URL__', normalizedConsoleUrl);
+  if (yaml.includes('__OPENSPHERE_CONSOLE_INDEX_CONTENT_IMAGE__')) {
+    const image = lock.auxiliaryArtifacts?.consoleIndexContent?.image;
+    if (!/^ghcr\.io\/opensphere-platform\/opensphere-console-index-content@sha256:[a-f0-9]{64}$/.test(image ?? '')) {
+      throw new Error('Console renderer requires a digest-pinned consoleIndexContent auxiliary artifact');
+    }
+    yaml = yaml.replaceAll('__OPENSPHERE_CONSOLE_INDEX_CONTENT_IMAGE__', image);
+  }
   yaml = yaml.replaceAll('__OPENSPHERE_SUPABASE_NAMESPACE__', 'opensphere-console-data');
   yaml = yaml.replaceAll('https://localhost:8090', normalizedConsoleUrl);
   yaml = yaml.replaceAll('https://localhost:1114', normalizedConsoleUrl);
@@ -1280,7 +1295,7 @@ function escapeExpression(value) {
 export function componentReleaseWorkloadManifests(
   lock,
   prepared,
-  changedComponents = lock.changedComponents
+  changedComponents = componentReleaseWorkloadComponents(lock)
 ) {
   if (!Array.isArray(changedComponents) || changedComponents.length === 0) {
     throw new Error('Component release requires a non-empty changed component set');
@@ -1935,7 +1950,7 @@ export async function prepareComponentRelease(
   consoleUrl,
   authEnvironment,
   {
-    changedComponents = lock.changedComponents,
+    changedComponents = componentReleaseWorkloadComponents(lock),
     includeMigrations = true,
     sourceArtifactCredential = null
   } = {}
@@ -2436,14 +2451,17 @@ export async function upgrade(
   const initialAdmin = config.initialAdmin;
   const componentTransition = targetLock.releaseScope === RELEASE_SCOPE_COMPONENT;
   const changedComponents = componentTransition ? targetLock.changedComponents : [];
+  const changedWorkloadComponents = componentTransition
+    ? componentReleaseWorkloadComponents(targetLock)
+    : [];
   const agentIdentityCutover = componentTransition
     && isAgentIdentityCutover(previousLock.components, targetLock.components);
   const introducedComponents = componentTransition
     ? changedComponents.filter((component) => !previousLock.components?.[component])
     : [];
   const rollbackChangedComponents = agentIdentityCutover
-    ? changedComponents.map(installedNameForCanonicalComponent)
-    : changedComponents.filter((component) => !introducedComponents.includes(component));
+    ? changedWorkloadComponents.map(installedNameForCanonicalComponent)
+    : changedWorkloadComponents.filter((component) => !introducedComponents.includes(component));
   const targetWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-target-'));
   const rollbackWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-rollback-'));
   try {
@@ -2456,7 +2474,7 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           config.authEnvironment,
-          { changedComponents, includeMigrations: true, sourceArtifactCredential }
+          { changedComponents: changedWorkloadComponents, includeMigrations: true, sourceArtifactCredential }
         ),
         rollbackChangedComponents.length > 0
           ? operations.prepareComponentRelease(
@@ -2524,7 +2542,7 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           '업그레이드',
-          changedComponents,
+          changedWorkloadComponents,
           undefined,
           { applyMigrations: !agentIdentityCutover }
         );
@@ -2549,12 +2567,12 @@ export async function upgrade(
         config.shellTlsSecret,
         'Installing'
       );
-      if (componentTransition) operations.waitForComponentRollouts(changedComponents);
+      if (componentTransition) operations.waitForComponentRollouts(changedWorkloadComponents);
       else operations.waitForCoreRollouts(targetLock);
       const evidence = await operations.verifyInstallation(targetLock, {
         consoleUrl: effectiveConsoleUrl,
         requireZeroRestarts: false,
-        componentSelection: componentTransition ? changedComponents : null
+        componentSelection: componentTransition ? changedWorkloadComponents : null
       });
       if (agentIdentityCutover) {
         operations.pruneReleaseResources(previousComponentInventory, targetComponentInventory);

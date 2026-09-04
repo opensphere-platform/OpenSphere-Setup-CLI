@@ -69,6 +69,7 @@ function releaseLabels(repository, {
   overrides = {}
 } = {}) {
   return {
+    ...(repository === 'opensphere-console' ? { 'io.opensphere.console-index-content': 'console-index-renderer/v1' } : {}),
     'io.opensphere.channel': 'edge',
     'io.opensphere.release-tag': releaseTag,
     'io.opensphere.source-revision': revision,
@@ -101,6 +102,7 @@ function signedArtifact(repository, image, {
     image,
     sourceRevision: revision,
     labels: {
+      ...(repository === 'opensphere-console' ? { 'io.opensphere.console-index-content': 'console-index-renderer/v1' } : {}),
       'io.opensphere.release-tag': releaseTag,
       'io.opensphere.source-revision': revision,
       'io.opensphere.release-scope': artifactScope(repository)
@@ -228,7 +230,8 @@ test('canonical release set contains the full target Console distribution', () =
   assert.deepEqual(AUXILIARY_ARTIFACTS, {
     cliArtifacts: 'opensphere-os-cli',
     osShellControl: 'opensphere-console-os-shell-control',
-    osShellRuntime: 'opensphere-os-shell-runtime'
+    osShellRuntime: 'opensphere-os-shell-runtime',
+    consoleIndexContent: 'opensphere-console-index-content'
   });
 });
 
@@ -937,7 +940,7 @@ test('localhost edge rejects any auxiliary artifact from another source revision
   }), /opensphere-os-cli source revision differs from the Console anchor/u);
 });
 
-test('current locks require the exact digest-bound three-artifact auxiliary set', () => {
+test('current locks require a complete legacy or renderer-aware auxiliary set', () => {
   const signed = validLock();
   assert.equal(validateLock(signed), signed);
 
@@ -967,7 +970,7 @@ test('current locks require the exact digest-bound three-artifact auxiliary set'
   assert.throws(() => validateLock(local), /not digest-pinned/u);
 });
 
-test('component release preserves every auxiliary artifact byte-for-byte', () => {
+test('component release preserves every unlisted auxiliary artifact byte-for-byte', () => {
   const { base, target } = validComponentTransition(['consoleApi']);
   assert.equal(validateReleaseTransition(base, target), target);
   target.auxiliaryArtifacts.osShellControl.image =
@@ -984,7 +987,79 @@ test('component release preserves every auxiliary artifact byte-for-byte', () =>
       auxiliaryArtifacts: target.auxiliaryArtifacts
     }
   );
-  assert.throws(() => validateReleaseTransition(base, target), /cannot change auxiliary runtime artifacts/u);
+  assert.throws(() => validateReleaseTransition(base, target), /Unlisted auxiliary artifact/u);
+});
+
+test('Console index content can update independently after its renderer contract is installed', () => {
+  const { base, target } = validComponentTransition(['consoleApi']);
+  target.changedComponents = [];
+  target.components = structuredClone(base.components);
+  target.changedAuxiliaryArtifacts = ['consoleIndexContent'];
+  target.auxiliaryArtifacts.consoleIndexContent.image =
+    `ghcr.io/opensphere-platform/opensphere-console-index-content@sha256:${'d'.repeat(64)}`;
+  target.auxiliaryArtifacts.consoleIndexContent.sourceRevision = target.sourceRevision;
+  target.releaseDigest = calculateReleaseDigest(
+    target.channel,
+    target.components,
+    target.trust,
+    undefined,
+    {
+      releaseScope: target.releaseScope,
+      baseReleaseDigest: target.baseReleaseDigest,
+      changedComponents: target.changedComponents,
+      changedAuxiliaryArtifacts: target.changedAuxiliaryArtifacts,
+      auxiliaryArtifacts: target.auxiliaryArtifacts
+    }
+  );
+  assert.equal(validateLock(target), target);
+  assert.equal(validateReleaseTransition(base, target), target);
+});
+
+test('first Console index content introduction is atomic with the Console renderer', () => {
+  const { base, target } = validComponentTransition(['console']);
+  delete base.auxiliaryArtifacts.consoleIndexContent;
+  base.releaseDigest = calculateReleaseDigest(
+    base.channel,
+    base.components,
+    base.trust,
+    undefined,
+    { auxiliaryArtifacts: base.auxiliaryArtifacts }
+  );
+  target.baseReleaseDigest = base.releaseDigest;
+  target.changedAuxiliaryArtifacts = ['consoleIndexContent'];
+  target.auxiliaryArtifacts.consoleIndexContent.sourceRevision = target.sourceRevision;
+  target.releaseDigest = calculateReleaseDigest(
+    target.channel,
+    target.components,
+    target.trust,
+    undefined,
+    {
+      releaseScope: target.releaseScope,
+      baseReleaseDigest: target.baseReleaseDigest,
+      changedComponents: target.changedComponents,
+      changedAuxiliaryArtifacts: target.changedAuxiliaryArtifacts,
+      auxiliaryArtifacts: target.auxiliaryArtifacts
+    }
+  );
+  assert.equal(validateReleaseTransition(base, target), target);
+
+  const hiddenRenderer = structuredClone(target);
+  hiddenRenderer.changedComponents = [];
+  hiddenRenderer.components.console = structuredClone(base.components.console);
+  hiddenRenderer.releaseDigest = calculateReleaseDigest(
+    hiddenRenderer.channel,
+    hiddenRenderer.components,
+    hiddenRenderer.trust,
+    undefined,
+    {
+      releaseScope: hiddenRenderer.releaseScope,
+      baseReleaseDigest: hiddenRenderer.baseReleaseDigest,
+      changedComponents: hiddenRenderer.changedComponents,
+      changedAuxiliaryArtifacts: hiddenRenderer.changedAuxiliaryArtifacts,
+      auxiliaryArtifacts: hiddenRenderer.auxiliaryArtifacts
+    }
+  );
+  assert.throws(() => validateReleaseTransition(base, hiddenRenderer), /must change the Console component manifest/u);
 });
 
 test('localhost edge fails closed when any image lacks its development trust labels', async () => {
