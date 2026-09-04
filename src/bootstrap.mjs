@@ -289,7 +289,8 @@ export const LEGACY_BASE_MANIFESTS = Object.freeze([
 ]);
 
 export const SUPABASE_MIGRATION_MANIFEST = 'migrations/manifest.json';
-export const LEGACY_SUPABASE_MIGRATION_MANIFEST = 'backend/supabase/migrations/manifest.json';
+export const SUPABASE_RUNTIME_MIGRATION_MANIFEST = 'backend/supabase/migrations/manifest.json';
+export const LEGACY_SUPABASE_MIGRATION_MANIFEST = SUPABASE_RUNTIME_MIGRATION_MANIFEST;
 const MIGRATION_OWNER_COMPONENTS = Object.freeze(['consoleApi', 'extensionController']);
 
 function sha256Text(value) {
@@ -2003,7 +2004,7 @@ export async function prepareComponentRelease(
       root,
       migrationSourceRevision,
       undefined,
-      undefined,
+      SUPABASE_RUNTIME_MIGRATION_MANIFEST,
       { sourceArtifactCredential }
     );
   }
