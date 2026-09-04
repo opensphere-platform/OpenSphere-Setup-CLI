@@ -5,6 +5,7 @@ import { resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   BASE_MANIFESTS,
+  assertComponentMigrationPrefix,
   baseManifestSpecs,
   BESZEL_MANIFEST,
   CONSOLE_API_MANIFEST,
@@ -20,7 +21,6 @@ import {
   renderManifest,
   supabaseServerSecretManifest,
   SUPABASE_MIGRATION_MANIFEST,
-  SUPABASE_RUNTIME_MIGRATION_MANIFEST,
   SUPABASE_MANIFEST,
   verifySupabaseMigrationArtifact,
 } from '../src/bootstrap.mjs';
@@ -281,33 +281,33 @@ test('custom Console endpoint renders into C_API and Main Shell authorities', ()
   }
 });
 
-test('component upgrades materialize the runtime migration manifest beside migrate-only.ps1', () => {
-  assert.equal(
-    SUPABASE_RUNTIME_MIGRATION_MANIFEST,
-    'backend/supabase/migrations/manifest.json'
-  );
+test('component upgrades use the current global migration lineage and renderer', () => {
   const runtimeManifest = parseSupabaseMigrationManifest(
-    readFileSync(new URL(SUPABASE_RUNTIME_MIGRATION_MANIFEST, CONSOLE_SOURCE), 'utf8')
+    readFileSync(new URL(SUPABASE_MIGRATION_MANIFEST, CONSOLE_SOURCE), 'utf8')
   );
-  assert.equal(runtimeManifest.schemaVersion, 2);
-  assert.equal(runtimeManifest.migrationCount, runtimeManifest.migrations.length);
-
-  const migrateOnly = readFileSync(
-    new URL('backend/supabase/migrate-only.ps1', CONSOLE_SOURCE),
-    'utf8'
+  const rows = runtimeManifest.migrations.slice(0, 2).map((entry) => [
+    entry.globalId,
+    entry.semanticKey,
+    entry.predecessorGlobalId || '',
+    entry.sha256,
+    entry.sourceRevision,
+    entry.setDigest,
+    String(entry.setSize)
+  ]);
+  assert.equal(assertComponentMigrationPrefix(runtimeManifest, rows), 2);
+  const drifted = structuredClone(rows);
+  drifted[1][3] = 'f'.repeat(64);
+  assert.throws(
+    () => assertComponentMigrationPrefix(runtimeManifest, drifted),
+    /ledger mismatch/u
   );
-  assert.match(migrateOnly, /Join-Path \$here 'migrations'/u);
-  assert.match(migrateOnly, /Join-Path \$migrationDirectory 'manifest\.json'/u);
-
   const bootstrap = readFileSync(new URL('../src/bootstrap.mjs', import.meta.url), 'utf8');
   const componentPrepare = bootstrap.slice(
     bootstrap.indexOf('export async function prepareComponentRelease'),
     bootstrap.indexOf('export async function preflightReleaseArtifacts')
   );
-  assert.match(
-    componentPrepare,
-    /materializeSupabaseMigrationSet\([\s\S]*SUPABASE_RUNTIME_MIGRATION_MANIFEST/u
-  );
+  assert.match(componentPrepare, /fetchReleaseArtifact\(lock, 'scripts\/console-migrations\.mjs'/u);
+  assert.doesNotMatch(componentPrepare, /migrate-only\.ps1/u);
 });
 
 test('Main Index-only release reuses the Console workload without rebuilding its image', () => {

@@ -289,8 +289,7 @@ export const LEGACY_BASE_MANIFESTS = Object.freeze([
 ]);
 
 export const SUPABASE_MIGRATION_MANIFEST = 'migrations/manifest.json';
-export const SUPABASE_RUNTIME_MIGRATION_MANIFEST = 'backend/supabase/migrations/manifest.json';
-export const LEGACY_SUPABASE_MIGRATION_MANIFEST = SUPABASE_RUNTIME_MIGRATION_MANIFEST;
+export const LEGACY_SUPABASE_MIGRATION_MANIFEST = 'backend/supabase/migrations/manifest.json';
 const MIGRATION_OWNER_COMPONENTS = Object.freeze(['consoleApi', 'extensionController']);
 
 function sha256Text(value) {
@@ -1194,18 +1193,89 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
   progress?.item('완료', 'fresh migration prefix 및 최소권한 C_API/C_EXT runtime');
 }
 
+export function assertComponentMigrationPrefix(manifest, rows) {
+  if (rows.length > manifest.migrations.length) {
+    throw new Error('Database migration ledger is ahead of the component release manifest');
+  }
+  for (const [index, row] of rows.entries()) {
+    const entry = manifest.migrations[index];
+    const expected = [
+      entry.globalId,
+      entry.semanticKey,
+      entry.predecessorGlobalId || '',
+      entry.sha256,
+      entry.sourceRevision,
+      entry.setDigest,
+      String(entry.setSize)
+    ];
+    if (JSON.stringify(row) !== JSON.stringify(expected)) {
+      throw new Error(`Database migration ledger mismatch at ${entry.globalId}`);
+    }
+  }
+  return rows.length;
+}
+
+function runComponentMigrationSql(pod, sql, { transaction = false } = {}) {
+  const command = [
+    'PGPASSWORD="$POSTGRES_PASSWORD" exec psql -X -h 127.0.0.1',
+    '-U supabase_admin -d postgres -v ON_ERROR_STOP=1',
+    transaction ? '--single-transaction' : '-tA'
+  ].join(' ');
+  return kubectl([
+    '-n', 'opensphere-console-data', 'exec', '-i', pod, '--', 'sh', '-ec', command
+  ], { capture: true, input: sql });
+}
+
 function runComponentMigrations(foundation, progress) {
   if (!foundation.migration || foundation.target) return;
-  const context = process.env.OPENSPHERE_KUBE_CONTEXT || '';
-  const args = [
-    '-NoProfile', '-NonInteractive', '-File',
-    join(foundation.root, 'backend', 'supabase', 'migrate-only.ps1'),
-    '-Namespace', 'opensphere-console-data',
-    '-SourceRevision', foundation.migration.sourceRevision
-  ];
-  if (context) args.push('-KubeContext', context);
+  const manifest = foundation.migration.manifest;
+  if (manifest.schemaVersion !== 1) {
+    throw new Error('Component release requires the current global migration manifest');
+  }
+  const pods = JSON.parse(kubectl([
+    '-n', 'opensphere-console-data', 'get', 'pods',
+    '-l', 'app=opensphere-supabase-postgres', '-o', 'json'
+  ], { capture: true }));
+  const ready = (pods.items ?? []).filter((pod) => pod.status?.phase === 'Running'
+    && (pod.status?.conditions ?? []).some((condition) => condition.type === 'Ready' && condition.status === 'True'));
+  if (ready.length !== 1) throw new Error('Component migration requires exactly one Ready Supabase PostgreSQL pod');
+  const pod = ready[0].metadata.name;
+  const ledgerExists = runComponentMigrationSql(
+    pod,
+    "SELECT CASE WHEN to_regclass('console_migration.applied_migration') IS NULL THEN 'absent' ELSE 'present' END;"
+  );
+  if (ledgerExists !== 'present') {
+    throw new Error('Component release requires the current global migration ledger before mutation');
+  }
+  const readRows = () => {
+    const output = runComponentMigrationSql(pod, [
+      "SELECT global_id || '|' || semantic_key || '|' || COALESCE(predecessor_global_id, '') || '|' ||",
+      "       file_sha256 || '|' || source_revision || '|' || migration_set_digest || '|' || migration_set_size::text",
+      'FROM console_migration.applied_migration ORDER BY applied_sequence;'
+    ].join('\n'));
+    return output ? output.split(/\r?\n/u).map((row) => row.split('|')) : [];
+  };
+  let rows = readRows();
+  let applied = 0;
+  assertComponentMigrationPrefix(manifest, rows);
   progress?.item('마이그레이션', `Supabase ${foundation.migration.manifest.setDigest}`);
-  run('pwsh', args);
+  const renderer = join(foundation.root, 'scripts', 'console-migrations.mjs');
+  for (const entry of manifest.migrations.slice(rows.length)) {
+    const sql = run('node', [
+      renderer, 'render', entry.globalId, '--verified-materialized-release'
+    ], { capture: true });
+    runComponentMigrationSql(pod, sql, { transaction: true });
+    applied += 1;
+    rows = readRows();
+    assertComponentMigrationPrefix(manifest, rows);
+  }
+  if (rows.length !== manifest.migrationCount
+      || rows.at(-1)?.[0] !== manifest.latestGlobalId
+      || rows.at(-1)?.[5] !== manifest.setDigest) {
+    throw new Error('Component migration did not reach the exact target migration lineage');
+  }
+  if (applied > 0) runComponentMigrationSql(pod, "NOTIFY pgrst, 'reload schema';", { transaction: true });
+  progress?.item('완료', `Supabase migration applied=${applied} total=${rows.length}`);
 }
 
 async function materializeBaseRelease(
@@ -1994,17 +2064,17 @@ export async function prepareComponentRelease(
   ]);
   let migration = null;
   if (migrationSourceRevision) {
-    const script = await fetchReleaseArtifact(lock, 'backend/supabase/migrate-only.ps1', {
+    const script = await fetchReleaseArtifact(lock, 'scripts/console-migrations.mjs', {
       sourceRevision: migrationSourceRevision,
       sourceArtifactCredential
     });
-    await writeReleaseArtifact(root, 'backend/supabase/migrate-only.ps1', script);
+    await writeReleaseArtifact(root, 'scripts/console-migrations.mjs', script);
     migration = await materializeSupabaseMigrationSet(
       lock,
       root,
       migrationSourceRevision,
       undefined,
-      SUPABASE_RUNTIME_MIGRATION_MANIFEST,
+      undefined,
       { sourceArtifactCredential }
     );
   }
