@@ -468,6 +468,9 @@ export function calculateReleaseDigest(
     ...(contract?.releaseScope ? { releaseScope: contract.releaseScope } : {}),
     ...(contract?.baseReleaseDigest ? { baseReleaseDigest: contract.baseReleaseDigest } : {}),
     ...(contract?.changedComponents ? { changedComponents: contract.changedComponents } : {}),
+    ...(contract?.changedAuxiliaryArtifacts
+      ? { changedAuxiliaryArtifacts: contract.changedAuxiliaryArtifacts }
+      : {}),
     ...(contract?.auxiliaryArtifacts ? { auxiliaryArtifacts: contract.auxiliaryArtifacts } : {})
   });
   return `sha256:${createHash('sha256').update(payload).digest('hex')}`;

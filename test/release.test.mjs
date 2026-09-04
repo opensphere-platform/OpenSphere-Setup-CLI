@@ -1013,6 +1013,16 @@ test('Console index content can update independently after its renderer contract
   );
   assert.equal(validateLock(target), target);
   assert.equal(validateReleaseTransition(base, target), target);
+  assert.notEqual(
+    calculateReleaseDigest(target.channel, target.components, target.trust, undefined, {
+      releaseScope: target.releaseScope,
+      baseReleaseDigest: target.baseReleaseDigest,
+      changedComponents: target.changedComponents,
+      auxiliaryArtifacts: target.auxiliaryArtifacts,
+    }),
+    target.releaseDigest,
+    'changedAuxiliaryArtifacts must be cryptographically bound into the release digest',
+  );
 });
 
 test('first Console index content introduction is atomic with the Console renderer', () => {
