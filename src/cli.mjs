@@ -117,7 +117,7 @@ async function readLock(lockPath) {
 }
 
 function help() {
-  console.log(`OpenSphere Setup CLI 0.5.0-edge.28
+  console.log(`OpenSphere Setup CLI 0.5.0-edge.29
 
 Usage:
   opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
@@ -202,7 +202,7 @@ async function main() {
   }
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
-  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.28');
+  if (command === 'version' || command === '--version') return console.log('opensphere-setup 0.5.0-edge.29');
   if (['--registry-auth','--github-client-id'].some(hasOption) && !['resolve','doctor','bootstrap','upgrade'].includes(command)) {
     throw new Error('Registry authentication options are accepted only by resolve, doctor, bootstrap and upgrade; status queries Kubernetes only');
   }

@@ -1,21 +1,34 @@
-# OpenSphere Setup CLI 0.5.0-edge.26 — verify the packaged Console API
+# OpenSphere Setup CLI 0.5.0-edge.29 — Console R2D2 baseline gate
 
-This edge prerelease adds a governed, independently updatable Main Index content artifact and exact Kubernetes API endpoint recovery for the Extension Controller. The first renderer/content transition is atomic; later content-only releases reuse the Console workload without rebuilding its runtime image.
+This edge prerelease binds Setup to governed Console source
+`be3c2a05bdd8aeeb457d3e5c1132b6cd4a5289a4`.
 
-The validation boundary is also corrected. A new gate starts the built image using its normal entrypoint and UID 1001 against isolated PostgreSQL. It requires HTTP 200/Ready with a real restricted runtime DB connection, and HTTP 503 with an invalid DB credential. It uses no Kubernetes data, host ports, or host source mounts. Temporary test containers, volumes and network are removed.
+The Console baseline now treats LLM credential custody as an installable contract. A key is
+stored only in a namespaced Kubernetes Secret, read projections expose only metadata and a
+fingerprint, and the corresponding audit event is written through the fresh Supabase migration
+lineage. Local development may use the documented exact exception to user MFA; this does not
+weaken runtime service authentication or expand the exception to candidate/stable.
 
-CI runs this gate after building the API image. The local edge publisher runs it against the exact image digest before moving date/edge tags, including reused images. OCI metadata inspection is no longer described as an application startup check. The previously published broken image was rejected by this gate; the fixed local image passed.
+Operational Graph, Incident, Durable Operation and Engineering Remediation execution are
+Cluster Manager capabilities. Before Cluster Manager installs their schema, dedicated database
+login and reconcile scope, Console reports them as explicitly `OFF`. Read endpoints return safe
+empty projections instead of HTTP 503. Enabling any capability without its authority still fails
+closed.
 
-Governed Console source: `101f770c5691ac905838c4bd2476d5b0bd02e1e8`, Console version `202609031742`. Earlier installer order and null-output fixes remain in place. No DB schema, RBAC, network-policy, credential or readiness requirement is weakened.
+This release does not declare the complete Console installation reproduced. Completion still
+requires one integrated release anchor, Setup upgrade/verify against that anchor, full page and
+feature acceptance, then a clean installation that reaches the same verified state.
 
-[Publication, validation and clean-install record](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/blob/main/docs/CONSOLE-INSTALL-IMAGE-STARTUP-EDGE26.md). The image gate verifies API startup and DB-backed readiness, not a completed Kubernetes bootstrap or every Console feature. Candidate/stable remain on HOLD.
+[Detailed change and verification record](CONSOLE-R2D2-BASELINE-EDGE29.md).
 
-Download the [Windows portable EXE](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.28/opensphere-setup.exe), then start the prepared local installation:
+Download the [Windows portable EXE](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.29/opensphere-setup.exe), then run:
 
 ```powershell
-.\opensphere-setup.exe --version 0.5.0-edge.26 bootstrap `
+.\opensphere-setup.exe --version 0.5.0-edge.29 bootstrap `
   --release edge --context docker-desktop `
   --storage-class standard --registry-auth oauth
 ```
 
-Approve the displayed new GitHub device code. The public Client ID is built in; no PAT or client secret is bundled. Windows remains portable with verified per-version runtime reuse, no host Setup installation, PATH change or service registration. The first use of a new version downloads about 166 MiB once. Tokens are not kept in the portable runtime cache. Windows edge executables are not Authenticode signed and macOS ad-hoc signatures are not notarization.
+Approve the displayed GitHub device code. The public Client ID is built in; no PAT or client
+secret is bundled. Windows remains portable with verified per-version runtime reuse, no Setup
+installation, PATH change or service registration. Candidate/stable remain on HOLD.
