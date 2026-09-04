@@ -935,7 +935,14 @@ export function renderManifest(
   yaml = yaml.replace(/storageClassName:\s*standard/g, `storageClassName: ${storageClass}`);
   yaml = yaml.replaceAll('__OPENSPHERE_STORAGE_CLASS__', storageClass);
   const normalizedConsoleUrl = normalizeConsoleUrl(consoleUrl);
+  const normalizedAuthEnvironment = validateAuthEnvironment(authEnvironment);
+  if (yaml.includes('__OPENSPHERE_RELEASE_CHANNEL__')
+      && !['edge', 'candidate', 'stable', 'ga'].includes(String(lock.channel || ''))) {
+    throw new Error(`Manifest ${spec.path} has an invalid release channel`);
+  }
   yaml = yaml.replaceAll('__OPENSPHERE_CONSOLE_URL__', normalizedConsoleUrl);
+  yaml = yaml.replaceAll('__OPENSPHERE_RELEASE_CHANNEL__', String(lock.channel));
+  yaml = yaml.replaceAll('__OPENSPHERE_AUTH_ENVIRONMENT__', normalizedAuthEnvironment);
   if (yaml.includes('__OPENSPHERE_CONSOLE_INDEX_CONTENT_IMAGE__')) {
     const image = lock.auxiliaryArtifacts?.consoleIndexContent?.image;
     if (!/^ghcr\.io\/opensphere-platform\/opensphere-console-index-content@sha256:[a-f0-9]{64}$/.test(image ?? '')) {
@@ -958,7 +965,7 @@ export function renderManifest(
   }
   yaml = yaml.replaceAll(
     'name: AUTH_ENVIRONMENT, value: "development"',
-    `name: AUTH_ENVIRONMENT, value: "${validateAuthEnvironment(authEnvironment)}"`
+    `name: AUTH_ENVIRONMENT, value: "${normalizedAuthEnvironment}"`
   );
   if (/__OPENSPHERE_[A-Z0-9_]+__/.test(yaml)) {
     throw new Error(`Manifest ${spec.path} has an unresolved Setup placeholder`);

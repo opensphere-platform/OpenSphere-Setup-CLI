@@ -17,6 +17,7 @@ import {
   FOUNDATION_ARTIFACT_PATHS,
   GITEA_MANIFEST,
   MANAGED_CLUSTER_RBAC,
+  OSAA_GATEWAY_MANIFEST,
   parseSupabaseMigrationManifest,
   renderManifest,
   supabaseServerSecretManifest,
@@ -47,6 +48,7 @@ function localReleaseLock() {
     ]
   ));
   return {
+    channel: 'edge',
     sourceRevision: '1'.repeat(40),
     components,
     auxiliaryArtifacts: {
@@ -279,6 +281,19 @@ test('custom Console endpoint renders into C_API and Main Shell authorities', ()
     assert.doesNotMatch(rendered, /__OPENSPHERE_CONSOLE_URL__/);
     assert.match(rendered, /https:\/\/localhost:18090/);
   }
+});
+
+test('OSAA runtime profile is rendered from the verified release and install inputs', () => {
+  const lock = localReleaseLock();
+  const spec = OSAA_GATEWAY_MANIFEST;
+  const source = readFileSync(new URL(spec.path, CONSOLE_SOURCE), 'utf8');
+  const rendered = renderManifest(
+    lock, spec, source, 'hostpath', 'https://localhost:1114', 'development'
+  );
+  assert.match(rendered, /name: OPENSPHERE_RELEASE_CHANNEL, value: "edge"/u);
+  assert.match(rendered, /name: OPENSPHERE_AUTH_ENVIRONMENT, value: "development"/u);
+  assert.match(rendered, /name: OPENSPHERE_CONSOLE_ORIGIN, value: "https:\/\/localhost:1114"/u);
+  assert.doesNotMatch(rendered, /__OPENSPHERE_(?:RELEASE_CHANNEL|AUTH_ENVIRONMENT|CONSOLE_URL)__/u);
 });
 
 test('component upgrades use the current global migration lineage and renderer', () => {
