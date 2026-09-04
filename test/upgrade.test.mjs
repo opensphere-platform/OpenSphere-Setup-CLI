@@ -344,13 +344,12 @@ test('component release preparation selects only target-owned current manifests'
   assert.deepEqual(selected.base, []);
 
   const optional = componentTarget(previous, '2'.repeat(40), ['osaaGateway']);
-  assert.throws(
-    () => componentReleaseManifestSpecs(optional),
-    /no governed manifest for: osaaGateway/
-  );
+  const optionalSelected = componentReleaseManifestSpecs(optional);
+  assert.deepEqual(optionalSelected.foundation, []);
+  assert.deepEqual(optionalSelected.base.map(({ path }) => path), ['apps/osaa-gateway/deploy.yaml']);
 });
 
-test('component rollout mapping contains current bootstrap workloads and excludes Console-activated modules', () => {
+test('component rollout mapping covers bootstrap workloads and the activated OSAA Gateway', () => {
   assert.deepEqual(COMPONENT_ROLLOUTS.consoleApi, [
     ['opensphere-console', 'deployment/opensphere-console-api', '600s']
   ]);
@@ -364,7 +363,9 @@ test('component rollout mapping contains current bootstrap workloads and exclude
     ['opensphere-monitoring', 'daemonset/beszel-agent', '600s']
   ]);
   assert.equal(Object.hasOwn(COMPONENT_ROLLOUTS, 'dupaController'), false);
-  assert.deepEqual(COMPONENT_ROLLOUTS.osaaGateway, []);
+  assert.deepEqual(COMPONENT_ROLLOUTS.osaaGateway, [
+    ['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']
+  ]);
   assert.equal(Object.hasOwn(COMPONENT_ROLLOUTS, 'backend'), false);
 });
 

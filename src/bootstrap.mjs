@@ -441,6 +441,19 @@ export const BESZEL_MANIFEST = Object.freeze({
   ]
 });
 
+// Console-activated modules are not part of a fresh bootstrap. Once a module
+// is present in the installed release lock, its own component release still
+// needs an authoritative manifest and rollout contract so Setup can update it
+// without rebuilding or reapplying the Console core.
+export const OSAA_GATEWAY_MANIFEST = Object.freeze({
+  path: 'apps/osaa-gateway/deploy.yaml',
+  replacements: [['__OPENSPHERE_OSAA_GATEWAY_IMAGE__', 'osaaGateway']]
+});
+
+const ACTIVATED_MODULE_MANIFESTS = Object.freeze([
+  OSAA_GATEWAY_MANIFEST
+]);
+
 const TARGET_FOUNDATION_MANIFESTS = Object.freeze([
   SUPABASE_MANIFEST,
   CONSOLE_API_MANIFEST,
@@ -572,7 +585,10 @@ export function componentReleaseManifestSpecs(
     return [{ ...spec, artifactSourceRevision: [...sourceRevisions][0] }];
   });
   const foundation = selectRequestedSpecs(foundationManifestSpecs(lock));
-  const base = selectRequestedSpecs(baseManifestSpecs(lock));
+  const base = selectRequestedSpecs([
+    ...baseManifestSpecs(lock),
+    ...ACTIVATED_MODULE_MANIFESTS
+  ]);
   const exposed = new Set(
     [...foundation, ...base].flatMap((spec) => [...manifestSpecComponents(spec)])
   );
@@ -642,7 +658,7 @@ export const COMPONENT_ROLLOUTS = Object.freeze({
   beszelHub: [['opensphere-monitoring', 'statefulset/beszel-hub', '600s']],
   beszelAgent: [['opensphere-monitoring', 'daemonset/beszel-agent', '600s']],
   beszelBootstrap: [],
-  osaaGateway: [],
+  osaaGateway: [['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']],
   osdst: [],
   osaaGovernedAdapter: [],
   notificationDispatcher: [],

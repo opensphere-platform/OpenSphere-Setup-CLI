@@ -94,7 +94,7 @@ Release BOM의 canonical component는 18개다. 이 중 Setup이 fresh bootstrap
 | `gitea`, `giteaPostgres` | 선언 변경, review와 이력 권위 |
 | `beszelHub`, `beszelAgent`, `beszelBootstrap` | baseline host observability |
 
-나머지 canonical 5개는 lock에 exact digest를 보존하되 Setup이 암묵 배포하지 않는다. Console이 설치 후 `osaaGateway`, `osdst`, `osaaGovernedAdapter`, `notificationDispatcher`, `recovery`를 활성화한다.
+나머지 canonical 5개는 lock에 exact digest를 보존하되 Setup이 암묵 배포하지 않는다. Console이 설치 후 `osaaGateway`, `osdst`, `osaaGovernedAdapter`, `notificationDispatcher`, `recovery`를 활성화한다. 활성화된 `osaaGateway`는 이후 구성 단위 릴리스에서 전용 매니페스트와 롤아웃 계약으로 갱신하며, Console core를 재배포하지 않는다.
 
 Auxiliary artifact는 `cliArtifacts`, `osShellControl`, `osShellRuntime`, `consoleIndexContent` 4개다. Setup은 `cliArtifacts`를 lock에서 검증하지만 호스트에는 자동 설치하지 않는다. `install-cli`를 명시한 경우에만 내려받는다. OS Shell 2개는 Console 활성화에 필요한 digest를 lock에서 제공하며 bootstrap core에는 포함하지 않는다. `consoleIndexContent`는 Console Pod의 initContainer가 Main Index 정적 콘텐츠를 공유 볼륨에 투영하며, 콘텐츠만 바꿀 때 Console 실행 이미지를 다시 만들지 않는다.
 
