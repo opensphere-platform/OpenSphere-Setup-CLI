@@ -1372,6 +1372,7 @@ export function componentReleaseWorkloadManifests(
     throw new Error('Component release requires a non-empty changed component set');
   }
   const sources = [...prepared.foundation.release, ...prepared.base];
+  const releaseSpecs = [...foundationManifestSpecs(lock), ...baseManifestSpecs(lock)];
   const selected = new Map();
   for (const component of changedComponents) {
     const image = lock.components?.[component]?.image;
@@ -1382,10 +1383,10 @@ export function componentReleaseWorkloadManifests(
     );
     let found = false;
     for (const source of sources) {
-      const baseSpec = baseManifestSpecs(lock).find(({ path }) => path === source.path);
-      const completeOwners = baseSpec ? manifestSpecComponents(baseSpec) : new Set();
+      const releaseSpec = releaseSpecs.find(({ path }) => path === source.path);
+      const completeOwners = releaseSpec ? manifestSpecComponents(releaseSpec) : new Set();
       if (
-        baseSpec?.applyWholeForComponentRelease === true
+        releaseSpec?.applyWholeForComponentRelease === true
         && completeOwners.size === 1
         && completeOwners.has(component)
       ) {
@@ -1571,12 +1572,17 @@ export function workloadReady(workload) {
 
 function waitForRollouts(rollouts, progress) {
   for (const [namespace, resource, timeout] of rollouts) {
-    progress?.wait(`${namespace}/${resource} rollout`, `timeout=${timeout}`);
+    const label = `${namespace}/${resource}`;
+    if (progress) progress.wait(`${label} rollout`, `timeout=${timeout}`);
+    else console.log(`[대기] ${label} rollout (최대 ${timeout})`);
     const deadline = Date.now() + Number.parseInt(timeout, 10) * 1000;
+    const startedAt = Date.now();
+    let nextReportAt = startedAt;
     while (true) {
       const workload = JSON.parse(kubectl(['-n', namespace, 'get', resource, '-o', 'json'], { capture: true }));
       if (workloadReady(workload)) {
-        progress?.item('준비', `${namespace}/${resource}`);
+        if (progress) progress.item('준비', label);
+        else console.log(`[준비] ${label}`);
         break;
       }
       const selector = Object.entries(workload.spec?.selector?.matchLabels ?? {})
@@ -1586,6 +1592,20 @@ function waitForRollouts(rollouts, progress) {
       ], { capture: true }));
       const terminal = terminalPodError(pods);
       if (terminal) throw new Error(`${resource} has a terminal pod error: ${terminal}`);
+      if (!progress && Date.now() >= nextReportAt) {
+        const desired = Number(workload.spec?.replicas ?? workload.status?.desiredNumberScheduled ?? 0);
+        const ready = Number(workload.status?.readyReplicas ?? workload.status?.numberReady ?? 0);
+        const podStates = (pods.items ?? []).map((pod) => {
+          const containers = (pod.status?.containerStatuses ?? []).map((container) => {
+            const reason = container.state?.waiting?.reason || container.state?.terminated?.reason || '';
+            return `${container.name}:${container.ready ? 'ready' : reason || 'not-ready'}`;
+          });
+          return `${pod.metadata?.name ?? 'unknown'}[${containers.join(',') || pod.status?.phase || 'unknown'}]`;
+        });
+        const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+        console.log(`[대기] ${label} ready=${ready}/${desired} elapsed=${elapsed}s pods=${podStates.join(';') || 'none'}`);
+        nextReportAt = Date.now() + 15_000;
+      }
       if (Date.now() >= deadline) {
         throw new Error(`${resource} did not reach its current generation and exact replica readiness within ${timeout}`);
       }

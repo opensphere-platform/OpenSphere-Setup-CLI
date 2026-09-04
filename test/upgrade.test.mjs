@@ -368,7 +368,7 @@ test('component rollout mapping contains current bootstrap workloads and exclude
   assert.equal(Object.hasOwn(COMPONENT_ROLLOUTS, 'backend'), false);
 });
 
-test('component release applies only documents containing the changed exact C_API image', () => {
+test('component release applies the complete single-owner C_API authority manifest', () => {
   const previous = lock('1'.repeat(40), 'a');
   const target = componentTarget(previous, '2'.repeat(40), ['consoleApi']);
   const image = target.components.consoleApi.image;
@@ -390,15 +390,6 @@ test('component release applies only documents containing the changed exact C_AP
           '      containers:',
           '        - name: api',
           `          image: ${image}`,
-          '---',
-          'apiVersion: apps/v1',
-          'kind: Deployment',
-          'metadata: { name: unrelated }',
-          'spec:',
-          '  template:',
-          '    spec:',
-          '      containers:',
-          `        - { name: other, image: ${previous.components.console.image} }`
         ].join('\n')
       }]
     },
@@ -407,8 +398,7 @@ test('component release applies only documents containing the changed exact C_AP
   assert.equal(selected.length, 1);
   assert.match(selected[0].yaml, /name: opensphere-console-api/);
   assert.match(selected[0].yaml, new RegExp(image.replaceAll('.', '\\.')));
-  assert.doesNotMatch(selected[0].yaml, /name: unrelated/);
-  assert.doesNotMatch(selected[0].yaml, /kind: Service/);
+  assert.match(selected[0].yaml, /kind: Service/);
 });
 
 test('component release refuses to overwrite a missing complete release inventory', async () => {
