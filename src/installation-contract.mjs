@@ -21,10 +21,14 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     'clusterrolebinding/opensphere-registry',
     'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
     'clusterrolebinding/opensphere-shell-runtime-token-reviewer',
+    'clusterrolebinding/opensphere-cluster-manager-runtime',
+    'clusterrolebinding/opensphere-extension-installation-profile-reader',
     'clusterrole/opensphere-extension-controller-cli-downloads',
     'clusterrole/opensphere-registry',
     'clusterrole/opensphere-console-osaa-gateway-environment-reader',
-    'clusterrole/opensphere-shell-runtime-token-reviewer'
+    'clusterrole/opensphere-shell-runtime-token-reviewer',
+    'clusterrole/opensphere-cluster-manager-runtime',
+    'clusterrole/opensphere-extension-installation-profile-reader'
   ]),
   admissionPolicies: Object.freeze([
     'validatingadmissionpolicybinding/opensphere-console-manual-ui-contract',

@@ -47,7 +47,9 @@ test('edge E2E cleanup owns the exact target cluster-scoped set', () => {
     'opensphere-extension-controller-cli-downloads',
     'opensphere-registry',
     'opensphere-console-osaa-gateway-environment-reader',
-    'opensphere-shell-runtime-token-reviewer'
+    'opensphere-shell-runtime-token-reviewer',
+    'opensphere-cluster-manager-runtime',
+    'opensphere-extension-installation-profile-reader'
   ];
   assert.deepEqual(powershellArray('ClusterRoles'), clusterRbac);
   assert.deepEqual(powershellArray('ClusterRoleBindings'), clusterRbac);

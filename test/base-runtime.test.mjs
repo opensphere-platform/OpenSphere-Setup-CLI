@@ -95,10 +95,14 @@ test('Setup owns the exact cluster-scoped C_EXT CLI download authority it instal
     'clusterrolebinding/opensphere-registry',
     'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
     'clusterrolebinding/opensphere-shell-runtime-token-reviewer',
+    'clusterrolebinding/opensphere-cluster-manager-runtime',
+    'clusterrolebinding/opensphere-extension-installation-profile-reader',
     'clusterrole/opensphere-extension-controller-cli-downloads',
     'clusterrole/opensphere-registry',
     'clusterrole/opensphere-console-osaa-gateway-environment-reader',
-    'clusterrole/opensphere-shell-runtime-token-reviewer'
+    'clusterrole/opensphere-shell-runtime-token-reviewer',
+    'clusterrole/opensphere-cluster-manager-runtime',
+    'clusterrole/opensphere-extension-installation-profile-reader'
   ]);
   assert.equal(MANAGED_CLUSTER_RBAC.includes(`clusterrole/${authority}`), true);
   assert.equal(MANAGED_CLUSTER_RBAC.includes(`clusterrolebinding/${authority}`), true);

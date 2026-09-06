@@ -39,10 +39,14 @@ test('managed cluster RBAC owns every cluster authority installed by Console boo
     'clusterrolebinding/opensphere-registry',
     'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
     'clusterrolebinding/opensphere-shell-runtime-token-reviewer',
+    'clusterrolebinding/opensphere-cluster-manager-runtime',
+    'clusterrolebinding/opensphere-extension-installation-profile-reader',
     'clusterrole/opensphere-extension-controller-cli-downloads',
     'clusterrole/opensphere-registry',
     'clusterrole/opensphere-console-osaa-gateway-environment-reader',
-    'clusterrole/opensphere-shell-runtime-token-reviewer'
+    'clusterrole/opensphere-shell-runtime-token-reviewer',
+    'clusterrole/opensphere-cluster-manager-runtime',
+    'clusterrole/opensphere-extension-installation-profile-reader'
   ]);
   assert.equal(MANAGED_CLUSTER_RBAC.some((resource) => resource.includes('backend')), false);
 });
