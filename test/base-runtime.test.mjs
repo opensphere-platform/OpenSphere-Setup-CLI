@@ -90,20 +90,9 @@ test('Setup owns the exact cluster-scoped C_EXT CLI download authority it instal
   const authority = 'opensphere-extension-controller-cli-downloads';
   assert.match(source, /kind: ClusterRole\r?\nmetadata:\r?\n  name: opensphere-extension-controller-cli-downloads/u);
   assert.match(source, /kind: ClusterRoleBinding\r?\nmetadata:\r?\n  name: opensphere-extension-controller-cli-downloads/u);
-  assert.deepEqual(MANAGED_CLUSTER_RBAC, [
-    'clusterrolebinding/opensphere-extension-controller-cli-downloads',
-    'clusterrolebinding/opensphere-registry',
-    'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
-    'clusterrolebinding/opensphere-shell-runtime-token-reviewer',
-    'clusterrolebinding/opensphere-cluster-manager-runtime',
-    'clusterrolebinding/opensphere-extension-installation-profile-reader',
-    'clusterrole/opensphere-extension-controller-cli-downloads',
-    'clusterrole/opensphere-registry',
-    'clusterrole/opensphere-console-osaa-gateway-environment-reader',
-    'clusterrole/opensphere-shell-runtime-token-reviewer',
-    'clusterrole/opensphere-cluster-manager-runtime',
-    'clusterrole/opensphere-extension-installation-profile-reader'
-  ]);
+  // The full removal inventory is checked in uninstall.test.mjs. This provider
+  // contract checks that the two authorities actually installed by C_EXT are
+  // both owned, without copying an unrelated inventory into a second test.
   assert.equal(MANAGED_CLUSTER_RBAC.includes(`clusterrole/${authority}`), true);
   assert.equal(MANAGED_CLUSTER_RBAC.includes(`clusterrolebinding/${authority}`), true);
 });

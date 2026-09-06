@@ -1,0 +1,2 @@
+# Exact-byte prerequisite contract: do not rewrite it when checking out on Windows.
+test/fixtures/hiss-execution-profile.v1.proposed.json -text

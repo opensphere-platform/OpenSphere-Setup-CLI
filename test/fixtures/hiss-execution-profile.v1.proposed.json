@@ -1,0 +1,3339 @@
+{
+  "schemaVersion": 1,
+  "status": "proposed-not-applied",
+  "scope": "docker-desktop/localhost/edge",
+  "notes": [
+    "No resources were applied.",
+    "Namespace objects are create-if-absent; preserve existing metadata and security policy.",
+    "Controller prerequisites are retained; no Helm hooks or automatic takeover.",
+    "This profile is not an uninstall inventory."
+  ],
+  "operations": [
+    {
+      "id": "ingress-nginx",
+      "namespace": "ingress-nginx",
+      "role": "opensphere-hiss-ingress-nginx-executor",
+      "resources": [
+        {
+          "kind": "ConfigMap",
+          "names": [
+            "ingress-nginx-controller"
+          ]
+        },
+        {
+          "kind": "Service",
+          "names": [
+            "ingress-nginx-controller",
+            "ingress-nginx-controller-admission"
+          ]
+        },
+        {
+          "kind": "Deployment",
+          "names": [
+            "ingress-nginx-controller"
+          ]
+        },
+        {
+          "kind": "IngressClass",
+          "names": [
+            "nginx"
+          ]
+        },
+        {
+          "kind": "ValidatingWebhookConfiguration",
+          "names": [
+            "ingress-nginx-admission"
+          ]
+        },
+        {
+          "kind": "Job",
+          "names": [
+            "ingress-nginx-admission-create",
+            "ingress-nginx-admission-patch"
+          ]
+        }
+      ],
+      "systemServices": []
+    },
+    {
+      "id": "metrics-server",
+      "namespace": "metrics-server",
+      "role": "opensphere-hiss-metrics-server-executor",
+      "resources": [
+        {
+          "kind": "Service",
+          "names": [
+            "metrics-server"
+          ]
+        },
+        {
+          "kind": "Deployment",
+          "names": [
+            "metrics-server"
+          ]
+        },
+        {
+          "kind": "APIService",
+          "names": [
+            "v1beta1.metrics.k8s.io"
+          ]
+        }
+      ],
+      "systemServices": []
+    },
+    {
+      "id": "kube-prometheus-stack",
+      "namespace": "monitoring",
+      "role": "opensphere-hiss-kube-prometheus-stack-executor",
+      "resources": [
+        {
+          "kind": "CustomResourceDefinition",
+          "names": [
+            "alertmanagerconfigs.monitoring.coreos.com",
+            "alertmanagers.monitoring.coreos.com",
+            "podmonitors.monitoring.coreos.com",
+            "probes.monitoring.coreos.com",
+            "prometheusagents.monitoring.coreos.com",
+            "prometheuses.monitoring.coreos.com",
+            "prometheusrules.monitoring.coreos.com",
+            "scrapeconfigs.monitoring.coreos.com",
+            "servicemonitors.monitoring.coreos.com",
+            "thanosrulers.monitoring.coreos.com"
+          ]
+        },
+        {
+          "kind": "NetworkPolicy",
+          "names": [
+            "opensphere-alertmanager-access",
+            "opensphere-grafana-access",
+            "opensphere-his-loki-ingress",
+            "opensphere-his-otel-collector-ingress",
+            "opensphere-his-tempo-ingress",
+            "opensphere-prometheus-access"
+          ]
+        },
+        {
+          "kind": "Secret",
+          "names": [
+            "alertmanager-kube-prometheus-stack-alertmanager",
+            "kube-prometheus-stack-grafana"
+          ]
+        },
+        {
+          "kind": "ConfigMap",
+          "names": [
+            "kube-prometheus-stack-alertmanager-overview",
+            "kube-prometheus-stack-apiserver",
+            "kube-prometheus-stack-cluster-total",
+            "kube-prometheus-stack-controller-manager",
+            "kube-prometheus-stack-etcd",
+            "kube-prometheus-stack-grafana",
+            "kube-prometheus-stack-grafana-config-dashboards",
+            "kube-prometheus-stack-grafana-datasource",
+            "kube-prometheus-stack-grafana-overview",
+            "kube-prometheus-stack-k8s-coredns",
+            "kube-prometheus-stack-k8s-resources-cluster",
+            "kube-prometheus-stack-k8s-resources-multicluster",
+            "kube-prometheus-stack-k8s-resources-namespace",
+            "kube-prometheus-stack-k8s-resources-node",
+            "kube-prometheus-stack-k8s-resources-nodes-overview",
+            "kube-prometheus-stack-k8s-resources-pod",
+            "kube-prometheus-stack-k8s-resources-workload",
+            "kube-prometheus-stack-k8s-resources-workloads-namespace",
+            "kube-prometheus-stack-kubelet",
+            "kube-prometheus-stack-namespace-by-pod",
+            "kube-prometheus-stack-namespace-by-workload",
+            "kube-prometheus-stack-node-cluster-rsrc-use",
+            "kube-prometheus-stack-node-rsrc-use",
+            "kube-prometheus-stack-nodes",
+            "kube-prometheus-stack-nodes-aix",
+            "kube-prometheus-stack-nodes-darwin",
+            "kube-prometheus-stack-persistentvolumesusage",
+            "kube-prometheus-stack-pod-total",
+            "kube-prometheus-stack-prometheus",
+            "kube-prometheus-stack-proxy",
+            "kube-prometheus-stack-scheduler",
+            "kube-prometheus-stack-workload-total",
+            "opensphere-his-grafana-datasources",
+            "opensphere-his-loki-config",
+            "opensphere-his-otel-collector-config",
+            "opensphere-his-tempo-config"
+          ]
+        },
+        {
+          "kind": "PersistentVolumeClaim",
+          "names": [
+            "kube-prometheus-stack-grafana",
+            "opensphere-his-loki-data",
+            "opensphere-his-tempo-data"
+          ]
+        },
+        {
+          "kind": "Service",
+          "names": [
+            "kube-prometheus-stack-alertmanager",
+            "kube-prometheus-stack-grafana",
+            "kube-prometheus-stack-kube-state-metrics",
+            "kube-prometheus-stack-operator",
+            "kube-prometheus-stack-prometheus",
+            "kube-prometheus-stack-prometheus-node-exporter",
+            "opensphere-his-loki",
+            "opensphere-his-otel-collector",
+            "opensphere-his-tempo"
+          ]
+        },
+        {
+          "kind": "DaemonSet",
+          "names": [
+            "kube-prometheus-stack-prometheus-node-exporter"
+          ]
+        },
+        {
+          "kind": "Deployment",
+          "names": [
+            "kube-prometheus-stack-grafana",
+            "kube-prometheus-stack-kube-state-metrics",
+            "kube-prometheus-stack-operator",
+            "opensphere-his-loki",
+            "opensphere-his-otel-collector",
+            "opensphere-his-tempo"
+          ]
+        },
+        {
+          "kind": "Alertmanager",
+          "names": [
+            "kube-prometheus-stack-alertmanager"
+          ]
+        },
+        {
+          "kind": "MutatingWebhookConfiguration",
+          "names": [
+            "kube-prometheus-stack-admission"
+          ]
+        },
+        {
+          "kind": "Prometheus",
+          "names": [
+            "kube-prometheus-stack-prometheus"
+          ]
+        },
+        {
+          "kind": "PrometheusRule",
+          "names": [
+            "kube-prometheus-stack-alertmanager.rules",
+            "kube-prometheus-stack-config-reloaders",
+            "kube-prometheus-stack-etcd",
+            "kube-prometheus-stack-general.rules",
+            "kube-prometheus-stack-k8s.rules.container-cpu-usage-seconds-tot",
+            "kube-prometheus-stack-k8s.rules.container-memory-cache",
+            "kube-prometheus-stack-k8s.rules.container-memory-rss",
+            "kube-prometheus-stack-k8s.rules.container-memory-swap",
+            "kube-prometheus-stack-k8s.rules.container-memory-working-set-by",
+            "kube-prometheus-stack-k8s.rules.container-resource",
+            "kube-prometheus-stack-k8s.rules.pod-owner",
+            "kube-prometheus-stack-kube-apiserver-availability.rules",
+            "kube-prometheus-stack-kube-apiserver-burnrate.rules",
+            "kube-prometheus-stack-kube-apiserver-histogram.rules",
+            "kube-prometheus-stack-kube-apiserver-slos",
+            "kube-prometheus-stack-kube-prometheus-general.rules",
+            "kube-prometheus-stack-kube-prometheus-node-recording.rules",
+            "kube-prometheus-stack-kube-scheduler.rules",
+            "kube-prometheus-stack-kube-state-metrics",
+            "kube-prometheus-stack-kubelet.rules",
+            "kube-prometheus-stack-kubernetes-apps",
+            "kube-prometheus-stack-kubernetes-resources",
+            "kube-prometheus-stack-kubernetes-storage",
+            "kube-prometheus-stack-kubernetes-system",
+            "kube-prometheus-stack-kubernetes-system-apiserver",
+            "kube-prometheus-stack-kubernetes-system-controller-manager",
+            "kube-prometheus-stack-kubernetes-system-kube-proxy",
+            "kube-prometheus-stack-kubernetes-system-kubelet",
+            "kube-prometheus-stack-kubernetes-system-scheduler",
+            "kube-prometheus-stack-node-exporter",
+            "kube-prometheus-stack-node-exporter.rules",
+            "kube-prometheus-stack-node-network",
+            "kube-prometheus-stack-node.rules",
+            "kube-prometheus-stack-prometheus",
+            "kube-prometheus-stack-prometheus-operator"
+          ]
+        },
+        {
+          "kind": "ServiceMonitor",
+          "names": [
+            "kube-prometheus-stack-alertmanager",
+            "kube-prometheus-stack-apiserver",
+            "kube-prometheus-stack-coredns",
+            "kube-prometheus-stack-grafana",
+            "kube-prometheus-stack-kube-controller-manager",
+            "kube-prometheus-stack-kube-etcd",
+            "kube-prometheus-stack-kube-proxy",
+            "kube-prometheus-stack-kube-scheduler",
+            "kube-prometheus-stack-kube-state-metrics",
+            "kube-prometheus-stack-kubelet",
+            "kube-prometheus-stack-operator",
+            "kube-prometheus-stack-prometheus",
+            "kube-prometheus-stack-prometheus-node-exporter",
+            "opensphere-his-loki-metrics",
+            "opensphere-his-otel-collector-metrics",
+            "opensphere-his-tempo-metrics"
+          ]
+        },
+        {
+          "kind": "ValidatingWebhookConfiguration",
+          "names": [
+            "kube-prometheus-stack-admission"
+          ]
+        },
+        {
+          "kind": "Job",
+          "names": [
+            "kube-prometheus-stack-admission-create",
+            "kube-prometheus-stack-admission-patch"
+          ]
+        },
+        {
+          "kind": "Ingress",
+          "names": [
+            "kube-prometheus-stack-grafana"
+          ]
+        }
+      ],
+      "systemServices": [
+        "kube-prometheus-stack-coredns",
+        "kube-prometheus-stack-kube-controller-manager",
+        "kube-prometheus-stack-kube-etcd",
+        "kube-prometheus-stack-kube-proxy",
+        "kube-prometheus-stack-kube-scheduler"
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "apiVersion": "v1",
+      "kind": "Namespace",
+      "metadata": {
+        "name": "ingress-nginx"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "labels": {
+          "helm.sh/chart": "ingress-nginx-4.15.1",
+          "app.kubernetes.io/name": "ingress-nginx",
+          "app.kubernetes.io/instance": "ingress-nginx",
+          "app.kubernetes.io/version": "1.15.1",
+          "app.kubernetes.io/part-of": "ingress-nginx",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/component": "controller",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        },
+        "name": "ingress-nginx",
+        "namespace": "ingress-nginx"
+      },
+      "automountServiceAccountToken": true
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "labels": {
+          "helm.sh/chart": "ingress-nginx-4.15.1",
+          "app.kubernetes.io/name": "ingress-nginx",
+          "app.kubernetes.io/instance": "ingress-nginx",
+          "app.kubernetes.io/version": "1.15.1",
+          "app.kubernetes.io/part-of": "ingress-nginx",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        },
+        "name": "ingress-nginx"
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps",
+            "endpoints",
+            "nodes",
+            "pods",
+            "secrets",
+            "namespaces"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "coordination.k8s.io"
+          ],
+          "resources": [
+            "leases"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "nodes"
+          ],
+          "verbs": [
+            "get"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingresses"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "events"
+          ],
+          "verbs": [
+            "create",
+            "patch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingresses/status"
+          ],
+          "verbs": [
+            "update"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingressclasses"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "discovery.k8s.io"
+          ],
+          "resources": [
+            "endpointslices"
+          ],
+          "verbs": [
+            "list",
+            "watch",
+            "get"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "labels": {
+          "helm.sh/chart": "ingress-nginx-4.15.1",
+          "app.kubernetes.io/name": "ingress-nginx",
+          "app.kubernetes.io/instance": "ingress-nginx",
+          "app.kubernetes.io/version": "1.15.1",
+          "app.kubernetes.io/part-of": "ingress-nginx",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        },
+        "name": "ingress-nginx"
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "ingress-nginx"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "ingress-nginx",
+          "namespace": "ingress-nginx"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "labels": {
+          "helm.sh/chart": "ingress-nginx-4.15.1",
+          "app.kubernetes.io/name": "ingress-nginx",
+          "app.kubernetes.io/instance": "ingress-nginx",
+          "app.kubernetes.io/version": "1.15.1",
+          "app.kubernetes.io/part-of": "ingress-nginx",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/component": "controller",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        },
+        "name": "ingress-nginx",
+        "namespace": "ingress-nginx"
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "namespaces"
+          ],
+          "verbs": [
+            "get"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps",
+            "pods",
+            "secrets",
+            "endpoints"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingresses"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingresses/status"
+          ],
+          "verbs": [
+            "update"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingressclasses"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "coordination.k8s.io"
+          ],
+          "resources": [
+            "leases"
+          ],
+          "resourceNames": [
+            "ingress-nginx-leader"
+          ],
+          "verbs": [
+            "get",
+            "update"
+          ]
+        },
+        {
+          "apiGroups": [
+            "coordination.k8s.io"
+          ],
+          "resources": [
+            "leases"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "events"
+          ],
+          "verbs": [
+            "create",
+            "patch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "discovery.k8s.io"
+          ],
+          "resources": [
+            "endpointslices"
+          ],
+          "verbs": [
+            "list",
+            "watch",
+            "get"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "labels": {
+          "helm.sh/chart": "ingress-nginx-4.15.1",
+          "app.kubernetes.io/name": "ingress-nginx",
+          "app.kubernetes.io/instance": "ingress-nginx",
+          "app.kubernetes.io/version": "1.15.1",
+          "app.kubernetes.io/part-of": "ingress-nginx",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/component": "controller",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        },
+        "name": "ingress-nginx",
+        "namespace": "ingress-nginx"
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "ingress-nginx"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "ingress-nginx",
+          "namespace": "ingress-nginx"
+        }
+      ]
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "ingress-nginx-admission",
+        "namespace": "ingress-nginx",
+        "labels": {
+          "helm.sh/chart": "ingress-nginx-4.15.1",
+          "app.kubernetes.io/name": "ingress-nginx",
+          "app.kubernetes.io/instance": "ingress-nginx",
+          "app.kubernetes.io/version": "1.15.1",
+          "app.kubernetes.io/part-of": "ingress-nginx",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/component": "admission-webhook",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "automountServiceAccountToken": true
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "ingress-nginx-admission",
+        "labels": {
+          "helm.sh/chart": "ingress-nginx-4.15.1",
+          "app.kubernetes.io/name": "ingress-nginx",
+          "app.kubernetes.io/instance": "ingress-nginx",
+          "app.kubernetes.io/version": "1.15.1",
+          "app.kubernetes.io/part-of": "ingress-nginx",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/component": "admission-webhook",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "validatingwebhookconfigurations"
+          ],
+          "verbs": [
+            "get",
+            "update"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "ingress-nginx-admission",
+        "labels": {
+          "helm.sh/chart": "ingress-nginx-4.15.1",
+          "app.kubernetes.io/name": "ingress-nginx",
+          "app.kubernetes.io/instance": "ingress-nginx",
+          "app.kubernetes.io/version": "1.15.1",
+          "app.kubernetes.io/part-of": "ingress-nginx",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/component": "admission-webhook",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "ingress-nginx-admission"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "ingress-nginx-admission",
+          "namespace": "ingress-nginx"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "ingress-nginx-admission",
+        "namespace": "ingress-nginx",
+        "labels": {
+          "helm.sh/chart": "ingress-nginx-4.15.1",
+          "app.kubernetes.io/name": "ingress-nginx",
+          "app.kubernetes.io/instance": "ingress-nginx",
+          "app.kubernetes.io/version": "1.15.1",
+          "app.kubernetes.io/part-of": "ingress-nginx",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/component": "admission-webhook",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "secrets"
+          ],
+          "verbs": [
+            "get",
+            "create"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "ingress-nginx-admission",
+        "namespace": "ingress-nginx",
+        "labels": {
+          "helm.sh/chart": "ingress-nginx-4.15.1",
+          "app.kubernetes.io/name": "ingress-nginx",
+          "app.kubernetes.io/instance": "ingress-nginx",
+          "app.kubernetes.io/version": "1.15.1",
+          "app.kubernetes.io/part-of": "ingress-nginx",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/component": "admission-webhook",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "ingress-nginx-admission"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "ingress-nginx-admission",
+          "namespace": "ingress-nginx"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "opensphere-hiss-ingress-nginx-executor",
+        "namespace": "ingress-nginx",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "ingress-nginx-controller"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "deployments"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "deployments"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "ingress-nginx-controller"
+          ]
+        },
+        {
+          "apiGroups": [
+            "batch"
+          ],
+          "resources": [
+            "jobs"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "batch"
+          ],
+          "resources": [
+            "jobs"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "ingress-nginx-admission-create",
+            "ingress-nginx-admission-patch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "ingress-nginx-controller",
+            "ingress-nginx-controller-admission"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "secrets"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "update",
+            "patch",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "pods",
+            "events"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "opensphere-hiss-ingress-nginx-executor",
+        "namespace": "ingress-nginx",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "opensphere-hiss-ingress-nginx-executor"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-cluster-manager-runtime",
+          "namespace": "opensphere-console"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "opensphere-hiss-ingress-nginx-executor",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingressclasses"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingressclasses"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "nginx"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "validatingwebhookconfigurations"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "validatingwebhookconfigurations"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "ingress-nginx-admission"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "opensphere-hiss-ingress-nginx-executor",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "opensphere-hiss-ingress-nginx-executor"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-cluster-manager-runtime",
+          "namespace": "opensphere-console"
+        }
+      ]
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Namespace",
+      "metadata": {
+        "name": "metrics-server"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "metrics-server",
+        "namespace": "metrics-server",
+        "labels": {
+          "helm.sh/chart": "metrics-server-3.13.1",
+          "app.kubernetes.io/name": "metrics-server",
+          "app.kubernetes.io/instance": "metrics-server",
+          "app.kubernetes.io/version": "0.8.1",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      }
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "system:metrics-server-aggregated-reader",
+        "labels": {
+          "helm.sh/chart": "metrics-server-3.13.1",
+          "app.kubernetes.io/name": "metrics-server",
+          "app.kubernetes.io/instance": "metrics-server",
+          "app.kubernetes.io/version": "0.8.1",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "rbac.authorization.k8s.io/aggregate-to-admin": "true",
+          "rbac.authorization.k8s.io/aggregate-to-edit": "true",
+          "rbac.authorization.k8s.io/aggregate-to-view": "true",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            "metrics.k8s.io"
+          ],
+          "resources": [
+            "pods",
+            "nodes"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "system:metrics-server",
+        "labels": {
+          "helm.sh/chart": "metrics-server-3.13.1",
+          "app.kubernetes.io/name": "metrics-server",
+          "app.kubernetes.io/instance": "metrics-server",
+          "app.kubernetes.io/version": "0.8.1",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "nodes/metrics"
+          ],
+          "verbs": [
+            "get"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "pods",
+            "nodes",
+            "namespaces",
+            "configmaps"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "metrics-server:system:auth-delegator",
+        "labels": {
+          "helm.sh/chart": "metrics-server-3.13.1",
+          "app.kubernetes.io/name": "metrics-server",
+          "app.kubernetes.io/instance": "metrics-server",
+          "app.kubernetes.io/version": "0.8.1",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "system:auth-delegator"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "metrics-server",
+          "namespace": "metrics-server"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "system:metrics-server",
+        "labels": {
+          "helm.sh/chart": "metrics-server-3.13.1",
+          "app.kubernetes.io/name": "metrics-server",
+          "app.kubernetes.io/instance": "metrics-server",
+          "app.kubernetes.io/version": "0.8.1",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "system:metrics-server"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "metrics-server",
+          "namespace": "metrics-server"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "metrics-server-auth-reader",
+        "namespace": "kube-system",
+        "labels": {
+          "helm.sh/chart": "metrics-server-3.13.1",
+          "app.kubernetes.io/name": "metrics-server",
+          "app.kubernetes.io/instance": "metrics-server",
+          "app.kubernetes.io/version": "0.8.1",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "extension-apiserver-authentication-reader"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "metrics-server",
+          "namespace": "metrics-server"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "opensphere-hiss-metrics-server-executor",
+        "namespace": "metrics-server",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "deployments"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "deployments"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "metrics-server"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "metrics-server"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "secrets"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "update",
+            "patch",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "pods",
+            "events"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "opensphere-hiss-metrics-server-executor",
+        "namespace": "metrics-server",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "opensphere-hiss-metrics-server-executor"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-cluster-manager-runtime",
+          "namespace": "opensphere-console"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "opensphere-hiss-metrics-server-executor",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            "apiregistration.k8s.io"
+          ],
+          "resources": [
+            "apiservices"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apiregistration.k8s.io"
+          ],
+          "resources": [
+            "apiservices"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "v1beta1.metrics.k8s.io"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "opensphere-hiss-metrics-server-executor",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "opensphere-hiss-metrics-server-executor"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-cluster-manager-runtime",
+          "namespace": "opensphere-console"
+        }
+      ]
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Namespace",
+      "metadata": {
+        "name": "monitoring"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "automountServiceAccountToken": true,
+      "metadata": {
+        "labels": {
+          "helm.sh/chart": "grafana-12.8.0",
+          "app.kubernetes.io/name": "grafana",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "13.1.1",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        },
+        "name": "kube-prometheus-stack-grafana",
+        "namespace": "monitoring"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "automountServiceAccountToken": true,
+      "metadata": {
+        "labels": {
+          "helm.sh/chart": "kube-state-metrics-8.0.0",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/component": "metrics",
+          "app.kubernetes.io/part-of": "kube-state-metrics",
+          "app.kubernetes.io/name": "kube-state-metrics",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "2.19.1",
+          "release": "kube-prometheus-stack",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        },
+        "name": "kube-prometheus-stack-kube-state-metrics",
+        "namespace": "monitoring"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "kube-prometheus-stack-prometheus-node-exporter",
+        "namespace": "monitoring",
+        "labels": {
+          "helm.sh/chart": "prometheus-node-exporter-4.56.1",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/component": "metrics",
+          "app.kubernetes.io/part-of": "prometheus-node-exporter",
+          "app.kubernetes.io/name": "prometheus-node-exporter",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "1.12.1",
+          "release": "kube-prometheus-stack",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "automountServiceAccountToken": false
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "kube-prometheus-stack-alertmanager",
+        "namespace": "monitoring",
+        "labels": {
+          "app": "kube-prometheus-stack-alertmanager",
+          "app.kubernetes.io/name": "kube-prometheus-stack-alertmanager",
+          "app.kubernetes.io/component": "alertmanager",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "87.19.1",
+          "app.kubernetes.io/part-of": "kube-prometheus-stack",
+          "chart": "kube-prometheus-stack-87.19.1",
+          "release": "kube-prometheus-stack",
+          "heritage": "Helm",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "automountServiceAccountToken": true
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "kube-prometheus-stack-operator",
+        "namespace": "monitoring",
+        "labels": {
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "87.19.1",
+          "app.kubernetes.io/part-of": "kube-prometheus-stack",
+          "chart": "kube-prometheus-stack-87.19.1",
+          "release": "kube-prometheus-stack",
+          "heritage": "Helm",
+          "app": "kube-prometheus-stack-operator",
+          "app.kubernetes.io/name": "kube-prometheus-stack-prometheus-operator",
+          "app.kubernetes.io/component": "prometheus-operator",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "automountServiceAccountToken": true
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "kube-prometheus-stack-prometheus",
+        "namespace": "monitoring",
+        "labels": {
+          "app": "kube-prometheus-stack-prometheus",
+          "app.kubernetes.io/name": "kube-prometheus-stack-prometheus",
+          "app.kubernetes.io/component": "prometheus",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "87.19.1",
+          "app.kubernetes.io/part-of": "kube-prometheus-stack",
+          "chart": "kube-prometheus-stack-87.19.1",
+          "release": "kube-prometheus-stack",
+          "heritage": "Helm",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "automountServiceAccountToken": true
+    },
+    {
+      "kind": "ClusterRole",
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "metadata": {
+        "labels": {
+          "helm.sh/chart": "grafana-12.8.0",
+          "app.kubernetes.io/name": "grafana",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "13.1.1",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        },
+        "name": "kube-prometheus-stack-grafana-clusterrole"
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps",
+            "secrets"
+          ],
+          "verbs": [
+            "get",
+            "watch",
+            "list"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "labels": {
+          "helm.sh/chart": "kube-state-metrics-8.0.0",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/component": "metrics",
+          "app.kubernetes.io/part-of": "kube-state-metrics",
+          "app.kubernetes.io/name": "kube-state-metrics",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "2.19.1",
+          "release": "kube-prometheus-stack",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        },
+        "name": "kube-prometheus-stack-kube-state-metrics"
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            "certificates.k8s.io"
+          ],
+          "resources": [
+            "certificatesigningrequests"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "batch"
+          ],
+          "resources": [
+            "cronjobs"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "daemonsets"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "deployments"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "discovery.k8s.io"
+          ],
+          "resources": [
+            "endpointslices"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "autoscaling"
+          ],
+          "resources": [
+            "horizontalpodautoscalers"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingresses"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "batch"
+          ],
+          "resources": [
+            "jobs"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "coordination.k8s.io"
+          ],
+          "resources": [
+            "leases"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "limitranges"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "mutatingwebhookconfigurations"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "namespaces"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "networkpolicies"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "nodes"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "persistentvolumeclaims"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "persistentvolumes"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "policy"
+          ],
+          "resources": [
+            "poddisruptionbudgets"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "pods"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "replicasets"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "replicationcontrollers"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "resourcequotas"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "secrets"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "statefulsets"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "storage.k8s.io"
+          ],
+          "resources": [
+            "storageclasses"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "validatingwebhookconfigurations"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "storage.k8s.io"
+          ],
+          "resources": [
+            "volumeattachments"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "kube-prometheus-stack-operator",
+        "labels": {
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "87.19.1",
+          "app.kubernetes.io/part-of": "kube-prometheus-stack",
+          "chart": "kube-prometheus-stack-87.19.1",
+          "release": "kube-prometheus-stack",
+          "heritage": "Helm",
+          "app": "kube-prometheus-stack-operator",
+          "app.kubernetes.io/name": "kube-prometheus-stack-prometheus-operator",
+          "app.kubernetes.io/component": "prometheus-operator",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            "monitoring.coreos.com"
+          ],
+          "resources": [
+            "alertmanagers",
+            "alertmanagers/finalizers",
+            "alertmanagers/status",
+            "alertmanagerconfigs",
+            "prometheuses",
+            "prometheuses/finalizers",
+            "prometheuses/status",
+            "prometheusagents",
+            "prometheusagents/finalizers",
+            "prometheusagents/status",
+            "thanosrulers",
+            "thanosrulers/finalizers",
+            "thanosrulers/status",
+            "scrapeconfigs",
+            "scrapeconfigs/status",
+            "servicemonitors",
+            "servicemonitors/status",
+            "podmonitors",
+            "podmonitors/status",
+            "probes",
+            "probes/status",
+            "prometheusrules",
+            "prometheusrules/status"
+          ],
+          "verbs": [
+            "*"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "statefulsets"
+          ],
+          "verbs": [
+            "*"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps",
+            "secrets"
+          ],
+          "verbs": [
+            "*"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "pods"
+          ],
+          "verbs": [
+            "list",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services",
+            "services/finalizers",
+            "endpoints"
+          ],
+          "verbs": [
+            "get",
+            "create",
+            "update",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "nodes"
+          ],
+          "verbs": [
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "namespaces"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "",
+            "events.k8s.io"
+          ],
+          "resources": [
+            "events"
+          ],
+          "verbs": [
+            "patch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingresses"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "storage.k8s.io"
+          ],
+          "resources": [
+            "storageclasses"
+          ],
+          "verbs": [
+            "get"
+          ]
+        },
+        {
+          "apiGroups": [
+            "discovery.k8s.io"
+          ],
+          "resources": [
+            "endpointslices"
+          ],
+          "verbs": [
+            "get",
+            "create",
+            "list",
+            "watch",
+            "update",
+            "delete"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "kube-prometheus-stack-prometheus",
+        "labels": {
+          "app": "kube-prometheus-stack-prometheus",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "87.19.1",
+          "app.kubernetes.io/part-of": "kube-prometheus-stack",
+          "chart": "kube-prometheus-stack-87.19.1",
+          "release": "kube-prometheus-stack",
+          "heritage": "Helm",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "nodes",
+            "nodes/metrics",
+            "services",
+            "endpoints",
+            "pods"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "discovery.k8s.io"
+          ],
+          "resources": [
+            "endpointslices"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingresses"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "nonResourceURLs": [
+            "/metrics",
+            "/metrics/cadvisor"
+          ],
+          "verbs": [
+            "get"
+          ]
+        }
+      ]
+    },
+    {
+      "kind": "ClusterRoleBinding",
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "metadata": {
+        "name": "kube-prometheus-stack-grafana-clusterrolebinding",
+        "labels": {
+          "helm.sh/chart": "grafana-12.8.0",
+          "app.kubernetes.io/name": "grafana",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "13.1.1",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "kube-prometheus-stack-grafana",
+          "namespace": "monitoring"
+        }
+      ],
+      "roleRef": {
+        "kind": "ClusterRole",
+        "name": "kube-prometheus-stack-grafana-clusterrole",
+        "apiGroup": "rbac.authorization.k8s.io"
+      }
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "labels": {
+          "helm.sh/chart": "kube-state-metrics-8.0.0",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/component": "metrics",
+          "app.kubernetes.io/part-of": "kube-state-metrics",
+          "app.kubernetes.io/name": "kube-state-metrics",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "2.19.1",
+          "release": "kube-prometheus-stack",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        },
+        "name": "kube-prometheus-stack-kube-state-metrics"
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "kube-prometheus-stack-kube-state-metrics"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "kube-prometheus-stack-kube-state-metrics",
+          "namespace": "monitoring"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "kube-prometheus-stack-operator",
+        "labels": {
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "87.19.1",
+          "app.kubernetes.io/part-of": "kube-prometheus-stack",
+          "chart": "kube-prometheus-stack-87.19.1",
+          "release": "kube-prometheus-stack",
+          "heritage": "Helm",
+          "app": "kube-prometheus-stack-operator",
+          "app.kubernetes.io/name": "kube-prometheus-stack-prometheus-operator",
+          "app.kubernetes.io/component": "prometheus-operator",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "kube-prometheus-stack-operator"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "kube-prometheus-stack-operator",
+          "namespace": "monitoring"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "kube-prometheus-stack-prometheus",
+        "labels": {
+          "app": "kube-prometheus-stack-prometheus",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "87.19.1",
+          "app.kubernetes.io/part-of": "kube-prometheus-stack",
+          "chart": "kube-prometheus-stack-87.19.1",
+          "release": "kube-prometheus-stack",
+          "heritage": "Helm",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "kube-prometheus-stack-prometheus"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "kube-prometheus-stack-prometheus",
+          "namespace": "monitoring"
+        }
+      ]
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "kube-prometheus-stack-admission",
+        "namespace": "monitoring",
+        "labels": {
+          "app": "kube-prometheus-stack-admission",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "87.19.1",
+          "app.kubernetes.io/part-of": "kube-prometheus-stack",
+          "chart": "kube-prometheus-stack-87.19.1",
+          "release": "kube-prometheus-stack",
+          "heritage": "Helm",
+          "app.kubernetes.io/name": "kube-prometheus-stack-prometheus-operator",
+          "app.kubernetes.io/component": "prometheus-operator-webhook",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "automountServiceAccountToken": true
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "kube-prometheus-stack-admission",
+        "labels": {
+          "app": "kube-prometheus-stack-admission",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "87.19.1",
+          "app.kubernetes.io/part-of": "kube-prometheus-stack",
+          "chart": "kube-prometheus-stack-87.19.1",
+          "release": "kube-prometheus-stack",
+          "heritage": "Helm",
+          "app.kubernetes.io/name": "kube-prometheus-stack-prometheus-operator",
+          "app.kubernetes.io/component": "prometheus-operator-webhook",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "validatingwebhookconfigurations",
+            "mutatingwebhookconfigurations"
+          ],
+          "verbs": [
+            "get",
+            "update",
+            "patch"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "kube-prometheus-stack-admission",
+        "labels": {
+          "app": "kube-prometheus-stack-admission",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "87.19.1",
+          "app.kubernetes.io/part-of": "kube-prometheus-stack",
+          "chart": "kube-prometheus-stack-87.19.1",
+          "release": "kube-prometheus-stack",
+          "heritage": "Helm",
+          "app.kubernetes.io/name": "kube-prometheus-stack-prometheus-operator",
+          "app.kubernetes.io/component": "prometheus-operator-webhook",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "kube-prometheus-stack-admission"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "kube-prometheus-stack-admission",
+          "namespace": "monitoring"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "kube-prometheus-stack-admission",
+        "namespace": "monitoring",
+        "labels": {
+          "app": "kube-prometheus-stack-admission",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "87.19.1",
+          "app.kubernetes.io/part-of": "kube-prometheus-stack",
+          "chart": "kube-prometheus-stack-87.19.1",
+          "release": "kube-prometheus-stack",
+          "heritage": "Helm",
+          "app.kubernetes.io/name": "kube-prometheus-stack-prometheus-operator",
+          "app.kubernetes.io/component": "prometheus-operator-webhook",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "secrets"
+          ],
+          "verbs": [
+            "get",
+            "create"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "kube-prometheus-stack-admission",
+        "namespace": "monitoring",
+        "labels": {
+          "app": "kube-prometheus-stack-admission",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/instance": "kube-prometheus-stack",
+          "app.kubernetes.io/version": "87.19.1",
+          "app.kubernetes.io/part-of": "kube-prometheus-stack",
+          "chart": "kube-prometheus-stack-87.19.1",
+          "release": "kube-prometheus-stack",
+          "heritage": "Helm",
+          "app.kubernetes.io/name": "kube-prometheus-stack-prometheus-operator",
+          "app.kubernetes.io/component": "prometheus-operator-webhook",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "kube-prometheus-stack-admission"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "kube-prometheus-stack-admission",
+          "namespace": "monitoring"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "opensphere-hiss-kube-prometheus-stack-executor",
+        "namespace": "monitoring",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            "monitoring.coreos.com"
+          ],
+          "resources": [
+            "alertmanagers"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "monitoring.coreos.com"
+          ],
+          "resources": [
+            "alertmanagers"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "kube-prometheus-stack-alertmanager"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "kube-prometheus-stack-alertmanager-overview",
+            "kube-prometheus-stack-apiserver",
+            "kube-prometheus-stack-cluster-total",
+            "kube-prometheus-stack-controller-manager",
+            "kube-prometheus-stack-etcd",
+            "kube-prometheus-stack-grafana",
+            "kube-prometheus-stack-grafana-config-dashboards",
+            "kube-prometheus-stack-grafana-datasource",
+            "kube-prometheus-stack-grafana-overview",
+            "kube-prometheus-stack-k8s-coredns",
+            "kube-prometheus-stack-k8s-resources-cluster",
+            "kube-prometheus-stack-k8s-resources-multicluster",
+            "kube-prometheus-stack-k8s-resources-namespace",
+            "kube-prometheus-stack-k8s-resources-node",
+            "kube-prometheus-stack-k8s-resources-nodes-overview",
+            "kube-prometheus-stack-k8s-resources-pod",
+            "kube-prometheus-stack-k8s-resources-workload",
+            "kube-prometheus-stack-k8s-resources-workloads-namespace",
+            "kube-prometheus-stack-kubelet",
+            "kube-prometheus-stack-namespace-by-pod",
+            "kube-prometheus-stack-namespace-by-workload",
+            "kube-prometheus-stack-node-cluster-rsrc-use",
+            "kube-prometheus-stack-node-rsrc-use",
+            "kube-prometheus-stack-nodes",
+            "kube-prometheus-stack-nodes-aix",
+            "kube-prometheus-stack-nodes-darwin",
+            "kube-prometheus-stack-persistentvolumesusage",
+            "kube-prometheus-stack-pod-total",
+            "kube-prometheus-stack-prometheus",
+            "kube-prometheus-stack-proxy",
+            "kube-prometheus-stack-scheduler",
+            "kube-prometheus-stack-workload-total",
+            "opensphere-his-grafana-datasources",
+            "opensphere-his-loki-config",
+            "opensphere-his-otel-collector-config",
+            "opensphere-his-tempo-config"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "daemonsets"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "daemonsets"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "kube-prometheus-stack-prometheus-node-exporter"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "deployments"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "deployments"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "kube-prometheus-stack-grafana",
+            "kube-prometheus-stack-kube-state-metrics",
+            "kube-prometheus-stack-operator",
+            "opensphere-his-loki",
+            "opensphere-his-otel-collector",
+            "opensphere-his-tempo"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingresses"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "ingresses"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "kube-prometheus-stack-grafana"
+          ]
+        },
+        {
+          "apiGroups": [
+            "batch"
+          ],
+          "resources": [
+            "jobs"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "batch"
+          ],
+          "resources": [
+            "jobs"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "kube-prometheus-stack-admission-create",
+            "kube-prometheus-stack-admission-patch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "networkpolicies"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "networkpolicies"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "opensphere-alertmanager-access",
+            "opensphere-grafana-access",
+            "opensphere-his-loki-ingress",
+            "opensphere-his-otel-collector-ingress",
+            "opensphere-his-tempo-ingress",
+            "opensphere-prometheus-access"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "persistentvolumeclaims"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "persistentvolumeclaims"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            "monitoring.coreos.com"
+          ],
+          "resources": [
+            "prometheuses"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "monitoring.coreos.com"
+          ],
+          "resources": [
+            "prometheuses"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "kube-prometheus-stack-prometheus"
+          ]
+        },
+        {
+          "apiGroups": [
+            "monitoring.coreos.com"
+          ],
+          "resources": [
+            "prometheusrules"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "monitoring.coreos.com"
+          ],
+          "resources": [
+            "prometheusrules"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "kube-prometheus-stack-alertmanager.rules",
+            "kube-prometheus-stack-config-reloaders",
+            "kube-prometheus-stack-etcd",
+            "kube-prometheus-stack-general.rules",
+            "kube-prometheus-stack-k8s.rules.container-cpu-usage-seconds-tot",
+            "kube-prometheus-stack-k8s.rules.container-memory-cache",
+            "kube-prometheus-stack-k8s.rules.container-memory-rss",
+            "kube-prometheus-stack-k8s.rules.container-memory-swap",
+            "kube-prometheus-stack-k8s.rules.container-memory-working-set-by",
+            "kube-prometheus-stack-k8s.rules.container-resource",
+            "kube-prometheus-stack-k8s.rules.pod-owner",
+            "kube-prometheus-stack-kube-apiserver-availability.rules",
+            "kube-prometheus-stack-kube-apiserver-burnrate.rules",
+            "kube-prometheus-stack-kube-apiserver-histogram.rules",
+            "kube-prometheus-stack-kube-apiserver-slos",
+            "kube-prometheus-stack-kube-prometheus-general.rules",
+            "kube-prometheus-stack-kube-prometheus-node-recording.rules",
+            "kube-prometheus-stack-kube-scheduler.rules",
+            "kube-prometheus-stack-kube-state-metrics",
+            "kube-prometheus-stack-kubelet.rules",
+            "kube-prometheus-stack-kubernetes-apps",
+            "kube-prometheus-stack-kubernetes-resources",
+            "kube-prometheus-stack-kubernetes-storage",
+            "kube-prometheus-stack-kubernetes-system",
+            "kube-prometheus-stack-kubernetes-system-apiserver",
+            "kube-prometheus-stack-kubernetes-system-controller-manager",
+            "kube-prometheus-stack-kubernetes-system-kube-proxy",
+            "kube-prometheus-stack-kubernetes-system-kubelet",
+            "kube-prometheus-stack-kubernetes-system-scheduler",
+            "kube-prometheus-stack-node-exporter",
+            "kube-prometheus-stack-node-exporter.rules",
+            "kube-prometheus-stack-node-network",
+            "kube-prometheus-stack-node.rules",
+            "kube-prometheus-stack-prometheus",
+            "kube-prometheus-stack-prometheus-operator"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "kube-prometheus-stack-alertmanager",
+            "kube-prometheus-stack-grafana",
+            "kube-prometheus-stack-kube-state-metrics",
+            "kube-prometheus-stack-operator",
+            "kube-prometheus-stack-prometheus",
+            "kube-prometheus-stack-prometheus-node-exporter",
+            "opensphere-his-loki",
+            "opensphere-his-otel-collector",
+            "opensphere-his-tempo"
+          ]
+        },
+        {
+          "apiGroups": [
+            "monitoring.coreos.com"
+          ],
+          "resources": [
+            "servicemonitors"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "monitoring.coreos.com"
+          ],
+          "resources": [
+            "servicemonitors"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "kube-prometheus-stack-alertmanager",
+            "kube-prometheus-stack-apiserver",
+            "kube-prometheus-stack-coredns",
+            "kube-prometheus-stack-grafana",
+            "kube-prometheus-stack-kube-controller-manager",
+            "kube-prometheus-stack-kube-etcd",
+            "kube-prometheus-stack-kube-proxy",
+            "kube-prometheus-stack-kube-scheduler",
+            "kube-prometheus-stack-kube-state-metrics",
+            "kube-prometheus-stack-kubelet",
+            "kube-prometheus-stack-operator",
+            "kube-prometheus-stack-prometheus",
+            "kube-prometheus-stack-prometheus-node-exporter",
+            "opensphere-his-loki-metrics",
+            "opensphere-his-otel-collector-metrics",
+            "opensphere-his-tempo-metrics"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "secrets"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create",
+            "update",
+            "patch",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "pods",
+            "events"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "opensphere-hiss-kube-prometheus-stack-executor",
+        "namespace": "monitoring",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "opensphere-hiss-kube-prometheus-stack-executor"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-cluster-manager-runtime",
+          "namespace": "opensphere-console"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "opensphere-hiss-kube-prometheus-stack-executor",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            "apiextensions.k8s.io"
+          ],
+          "resources": [
+            "customresourcedefinitions"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apiextensions.k8s.io"
+          ],
+          "resources": [
+            "customresourcedefinitions"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "alertmanagerconfigs.monitoring.coreos.com",
+            "alertmanagers.monitoring.coreos.com",
+            "podmonitors.monitoring.coreos.com",
+            "probes.monitoring.coreos.com",
+            "prometheusagents.monitoring.coreos.com",
+            "prometheuses.monitoring.coreos.com",
+            "prometheusrules.monitoring.coreos.com",
+            "scrapeconfigs.monitoring.coreos.com",
+            "servicemonitors.monitoring.coreos.com",
+            "thanosrulers.monitoring.coreos.com"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "mutatingwebhookconfigurations"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "mutatingwebhookconfigurations"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "kube-prometheus-stack-admission"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "validatingwebhookconfigurations"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "validatingwebhookconfigurations"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "kube-prometheus-stack-admission"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "opensphere-hiss-kube-prometheus-stack-executor",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "opensphere-hiss-kube-prometheus-stack-executor"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-cluster-manager-runtime",
+          "namespace": "opensphere-console"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "opensphere-hiss-kube-prometheus-stack-scrape-executor",
+        "namespace": "kube-system",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ],
+          "resourceNames": [
+            "kube-prometheus-stack-coredns",
+            "kube-prometheus-stack-kube-controller-manager",
+            "kube-prometheus-stack-kube-etcd",
+            "kube-prometheus-stack-kube-proxy",
+            "kube-prometheus-stack-kube-scheduler"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "opensphere-hiss-kube-prometheus-stack-scrape-executor",
+        "namespace": "kube-system",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "opensphere-hiss-kube-prometheus-stack-scrape-executor"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-cluster-manager-runtime",
+          "namespace": "opensphere-console"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "opensphere-hiss-operation-recorder",
+        "namespace": "opensphere-console",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "get",
+            "update"
+          ],
+          "resourceNames": [
+            "opensphere-his-config-kube-prometheus-stack",
+            "opensphere-his-operation-cert-manager",
+            "opensphere-his-operation-cluster-dns",
+            "opensphere-his-operation-cluster-network",
+            "opensphere-his-operation-cluster-nodes",
+            "opensphere-his-operation-csi-snapshot",
+            "opensphere-his-operation-ingress-nginx",
+            "opensphere-his-operation-kube-prometheus-stack",
+            "opensphere-his-operation-kubernetes-api",
+            "opensphere-his-operation-metrics-server",
+            "opensphere-his-operation-storage",
+            "opensphere-his-profile-selection"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "opensphere-hiss-operation-recorder",
+        "namespace": "opensphere-console",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "opensphere-hiss-operation-recorder"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-cluster-manager-runtime",
+          "namespace": "opensphere-console"
+        }
+      ]
+    }
+  ]
+}
