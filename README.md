@@ -7,7 +7,7 @@ OpenSphere OS Console의 신뢰 가능한 최초 설치, 재개, 검증, 업그�
 
 Setup CLI는 Windows에 설치해 상시 사용하는 프로그램이 아니다. 필요한 때 실행해 Kubernetes의 Console을 준비·설치·검증하고 종료한다. **Setup 설치, PATH 등록, 서비스 등록은 하지 않는다.**
 
-현재 소스 버전은 `0.5.0-edge.32`입니다. 기존 OAuth·포터블 실행 계약을 유지하며 **Ceph 연결 준비를 22 → OS Shell → Cluster Manager로 실행하기 위한 고정 Job 프로필**을 포함합니다. [이번 변경과 경계](docs/CEPH-PREPARATION-EDGE32.md)를 참고하십시오.
+현재 소스 버전은 `0.5.0-edge.33`입니다. 기존 OAuth·포터블 실행 계약을 유지하며 **Ceph 연결 준비를 22 → OS Shell → Cluster Manager로 실행하기 위한 고정 Job 프로필**을 포함합니다. [이번 변경과 경계](docs/CEPH-REPRESENTATIVE-EDGE33.md)를 참고하십시오.
 
 Setup은 최초 Console bootstrap에서 실행 프로필만 준비합니다. Rook·CSI의 실제 설치는 Console의 22 또는 같은 OS Shell 명령으로 요청합니다. 기존 localhost edge Console에는 아래 명령으로 프로필을 보완할 수 있습니다.
 
@@ -20,12 +20,12 @@ Setup은 최초 Console bootstrap에서 실행 프로필만 준비합니다. Roo
 
 ### Windows amd64 — 한 번 다운로드하고 재사용하는 포터블 실행 파일
 
-[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.32/opensphere-setup.exe)
+[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.33/opensphere-setup.exe)
 
 ```powershell
 .\opensphere-setup.exe version
 .\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --registry-auth oauth
-.\opensphere-setup.exe --version 0.5.0-edge.32 resolve --release edge --registry-auth oauth
+.\opensphere-setup.exe --version 0.5.0-edge.33 resolve --release edge --registry-auth oauth
 ```
 
 버전·채널 선택자는 명령 앞에 두며 상호 배타적이다. 옵션을 생략하면 EXE가 발행된 exact Release를 사용한다. `--release`와 `--lock`은 Console 배포 선택자다.
