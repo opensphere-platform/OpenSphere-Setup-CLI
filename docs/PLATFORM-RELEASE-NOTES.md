@@ -1,35 +1,34 @@
-# OpenSphere Setup CLI 0.5.0-edge.30 — Console native runtime bootstrap
+# OpenSphere Setup CLI 0.5.0-edge.31 — HISS and Platform Support prerequisites
 
-This edge prerelease binds Setup to governed Console source
-`1b2f63cd533fdad621f82294a82f3e81b7cb4d06` and the integrated Console edge anchor
-published as immutable release `202609050056`.
+This edge prerelease pins Console source `baeac27377a5e843d8ffe82992894bee53864e34`.
+It includes the reviewed HISS preparation, separate L4 trust and fixed Core preparation
+contracts, and the Crossplane consumer observer correction. It does not install L4
+workloads by itself: after Console is ready, use 22 → OS Shell → the module owner.
 
-Fresh bootstrap now installs the Console native core in one governed flow: OSAA Gateway, OSDST,
-OS Shell API, OS Shell Gateway and OS Shell Reconciler. Setup provisions six dedicated
-`NOINHERIT` database logins, workload-specific Kubernetes Secrets, four P-256 TLS leaf
-certificates under one local CA, and the GHCR pull credential required by ephemeral shell
-sessions. The canonical C_API retains its projected service-account identity and mounts only the
-two declared TLS Secret volumes.
+The observer consists of exactly one ClusterRole and one ClusterRoleBinding named
+`opensphere-platform-support-core-observer`, assigned only to the Console Cluster Manager
+runtime service account. It adds cluster-wide get/list for Crossplane Providers, Functions,
+ProviderConfigs, Releases, Compositions and CompositeResourceDefinitions. This observer
+adds no Secret access, writes, wildcard, bind or escalate permissions. The separately
+reviewed fixed Core preparation contains controller execution authority; it is not a
+read-only profile. Existing Core artifact bytes and automatic removal scope are unchanged.
 
-Migration `opensphere-console/20260905/0035` introduces the owner-only Setup activation
-procedure. Native workloads are accepted only when the migration ledger, exact source revision,
-release digest, component image digests and declared replica counts agree. Setup verification
-also checks all native services, workloads, Secrets and registry scopes.
+Validation: 350 Setup tests and 26 observer/profile/deployment contract tests pass.
+The exact two observer resources are applied on localhost, and replay of the existing
+Core preparation created 0 resources and preserved all 53. Argo CD Core has been verified
+Ready with a no-change reinstall. Crossplane Core installation via 22 passed the previous
+403 check but is not accepted: this PC's Docker Desktop registry mirror returned empty
+image responses. No full clean-install reproducibility or Gitea delivery completion is claimed.
 
-LLM credential custody from edge.29 remains intact. Operational Graph, Incident, Durable
-Operation and Engineering Remediation remain Cluster Manager capabilities and stay explicitly
-`OFF` until that component installs their schema and authority.
+Windows remains a portable executable, with checksum-verified runtime reuse and no
+Windows application installation, PATH modification or permanent service. GitHub device
+OAuth remains supported. Setup `--version` / `--channel` selectors remain independent
+of Console `--release`. Candidate and stable remain on HOLD.
 
-Download the [Windows portable EXE](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.30/opensphere-setup.exe), then run:
+[Windows portable launcher](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.31/opensphere-setup.exe)
 
 ```powershell
-.\opensphere-setup.exe --version 0.5.0-edge.30 bootstrap `
-  --release edge --context docker-desktop `
-  --storage-class standard --registry-auth oauth
+.\opensphere-setup.exe --version 0.5.0-edge.31 status --context docker-desktop
 ```
 
-Approve the displayed GitHub device code. The public Client ID is built in; no PAT or client
-secret is bundled. Windows remains portable with verified per-version runtime reuse, no Setup
-installation, PATH change or service registration. Candidate/stable remain on HOLD.
-
-[Detailed change and verification record](CONSOLE-NATIVE-RUNTIME-EDGE30.md).
+A successful Setup update is not evidence that optional Crossplane or L5 services are ready.
