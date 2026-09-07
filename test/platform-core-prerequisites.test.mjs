@@ -1,0 +1,22 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {resolve} from 'node:path';
+import {PLATFORM_CORE_ARTIFACT,preparePlatformCorePrerequisites} from '../src/platform-core-prerequisites.mjs';
+const consoleRoot=process.env.OPENSPHERE_CONSOLE_SOURCE||resolve(import.meta.dirname,'../../OpenSphere-Console');
+const raw=readFileSync(resolve(consoleRoot,PLATFORM_CORE_ARTIFACT),'utf8'),profile=JSON.parse(raw),scope={context:'docker-desktop',channel:'edge',consoleUrl:'https://localhost:1114'};
+const id=r=>`${r.apiVersion}/${r.kind}/${r.metadata.namespace||''}/${r.metadata.name}`;
+function client(present=[]){let serial=0;const state=new Map(),creates=[];const put=r=>{r=structuredClone(r);r.metadata.uid||='uid-'+(++serial);if(r.kind==='CustomResourceDefinition')r.spec={conversion:{strategy:'None'},...r.spec};state.set(id(r),r);return structuredClone(r);};
+ for(const n of ['opensphere-console','argocd','crossplane-system'])put({apiVersion:'v1',kind:'Namespace',metadata:{name:n}});
+ for(const name of ['opensphere-cluster-manager-runtime','opensphere-platform-support-runtime'])put({apiVersion:'v1',kind:'ServiceAccount',metadata:{name,namespace:'opensphere-console'}});
+ present.forEach(put);return {state,creates,put,reads:0,async read(items){this.reads++;await this.beforeRead?.(items);return items.flatMap(r=>state.has(id(r))?[structuredClone(state.get(id(r)))]:[]);},async create(r){assert(!state.has(id(r)));creates.push(id(r));const out=put(r);if(this.uncertain){this.uncertain=false;throw Error('timeout');}return out;}};
+}
+const run=(c,opts={})=>preparePlatformCorePrerequisites(raw,scope,{client:c,...opts});
+test('exact Core bytes and localhost scope are enforced before I/O',async()=>{const c=client();await assert.rejects(preparePlatformCorePrerequisites(raw+'\n',scope,{client:c,apply:true}),{code:'UNTRUSTED_PROFILE'});for(const change of [{channel:'stable'},{context:'production'},{consoleUrl:'https://localhost:1115'},{consoleUrl:'https://user@localhost:1114'},{extra:true}])await assert.rejects(preparePlatformCorePrerequisites(raw,{...scope,...change},{client:c,apply:true}),{code:'INVALID_SCOPE'});assert.equal(c.reads,0);assert.equal(c.creates.length,0);});
+test('Core plans are read-only, preparation creates 53 fixed objects, replay creates none',async()=>{const c=client();assert.equal((await run(c)).status,'NeedsPreparation');assert.equal(c.creates.length,0);const first=await run(c,{apply:true});assert.equal(first.created.length,53);assert.equal(first.installationComplete,false);const second=await run(c,{apply:true});assert.equal(second.created.length,0);assert.equal(second.preserved.length,53);assert.equal(c.creates.length,53);});
+test('RBAC drift, webhook conversion, and aggregation selector drift prevent writes',async()=>{
+ for(const mutate of [p=>p.find(r=>r.kind==='Role').rules.push({apiGroups:[''],resources:['secrets'],verbs:['*']}),p=>p.find(r=>r.kind==='CustomResourceDefinition').spec.conversion={strategy:'Webhook'},p=>p.find(r=>r.aggregationRule).aggregationRule={clusterRoleSelectors:[{matchLabels:{unreviewed:'true'}}]}]){const p=structuredClone(profile.resources);mutate(p);const c=client(p);await assert.rejects(run(c,{apply:true}),{code:'PRECONDITION_FAILED'});assert.equal(c.creates.length,0);}
+});
+test('missing dependency or failed observation does not infer safe absence',async()=>{const c=client();c.state.delete('v1/Namespace//argocd');await assert.rejects(run(c,{apply:true}),{code:'PRECONDITION_FAILED'});assert.equal(c.creates.length,0);const down=client();down.read=async()=>{throw Error('503');};await assert.rejects(run(down,{apply:true}),{code:'OBSERVATION_UNAVAILABLE'});assert.equal(down.creates.length,0);});
+test('unknown create result is not blindly retried and later preparation observes it',async()=>{const c=client();c.uncertain=true;await assert.rejects(run(c,{apply:true}),{code:'PREPARATION_INCOMPLETE'});assert.equal(c.creates.length,1);const final=await run(c,{apply:true});assert.equal(final.preserved.length,1);assert.equal(c.creates.length,53);});
+test('replacement during preparation is rejected and existing authority is not overwritten',async()=>{const c=client(profile.resources);c.beforeRead=items=>{if(c.reads===2)c.state.get(id(items[0])).metadata.uid='replacement';};await assert.rejects(run(c,{apply:true}),{code:'PREPARATION_INCOMPLETE'});assert.equal(c.creates.length,0);});

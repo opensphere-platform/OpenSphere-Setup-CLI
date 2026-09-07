@@ -146,6 +146,7 @@ test('Setup consumes the Console global migration manifest and materialized-rele
   assert.throws(() => parseSupabaseMigrationManifest(openSchema), /Unsupported Console migration manifest/);
 
   assert.deepEqual(FOUNDATION_ARTIFACT_PATHS, [
+    'deploy/installation-profiles/platform-core.json',
     'deploy/installation-profiles/hiss-execution.json',
     'deploy/installation-profiles/hiss-validation.yaml',
     'scripts/Install-ConsoleApiRuntime.ps1',

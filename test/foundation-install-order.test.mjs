@@ -83,14 +83,16 @@ assert.ok(preparedBegin>=0 && preparedEnd>preparedBegin);
 const crdPath='apps/extension-controller/crds/ui-plugin-crds.yaml';
 const trustPath='apps/extension-controller/config/trusted-keys.yaml';
 const preparedFixture={foundation:{target:true},base:[crdPath,trustPath,'deploy/opensphere-console.yaml'].map(path=>({path,yaml:'verified '+path}))};
-function preparedHarness({failEstablishment=false,failHiss=false}={}) {
+function preparedHarness({failEstablishment=false,failHiss=false,failCore=false}={}) {
   const state={applied:[],established:false,foundation:false};
   const fn=vm.runInNewContext('('+source.slice(preparedBegin,preparedEnd)+')',{
     join,readFileSync:()=> 'verified-artifact',
     HISS_EXECUTION_PROFILE:{consoleArtifactPath:'hiss-execution.json'},HISS_VALIDATION_ARTIFACT:'hiss-validation.yaml',
+    PLATFORM_CORE_ARTIFACT:'platform-core.json',
     verifyHissValidationArtifact:()=>{},createHissPrerequisiteClient:()=>({}),
     prepareHissPrerequisites:async()=>{assert.equal(state.foundation,true);await Promise.resolve();if(failHiss)throw Error('HISS preparation conflict');state.hiss=true;},
     prepareHissValidation:()=>{assert.equal(state.hiss,true);state.validation=true;},
+    preparePlatformCorePrerequisites:async()=>{assert.equal(state.validation,true);await Promise.resolve();if(failCore)throw Error('Core preparation conflict');state.core=true;},
     TRUST_CONFIGMAP_PATH:trustPath,
     applyRelease:(items,_label,_progress,options)=>{
       assert.equal(options.preserveHostLocalEdgeTrust,true);
@@ -143,6 +145,9 @@ test('legacy prepared releases keep their apply sequence without target CRD prer
 test('HISS authority preparation is awaited and a conflict prevents later Main Shell deployment',async()=>{
   const prepared={...preparedFixture,foundation:{target:true,root:'/verified',hissScope:{context:'docker-desktop',channel:'edge',consoleUrl:'https://localhost:1114'}}};
   const ok=preparedHarness();await ok.run(prepared);assert.equal(ok.state.validation,true);
+  assert.equal(ok.state.core,true);
+  const coreFailure=preparedHarness({failCore:true});await assert.rejects(coreFailure.run(prepared),/Core preparation conflict/);
+  assert.ok(!coreFailure.state.applied.includes('deploy/opensphere-console.yaml'));
   const failed=preparedHarness({failHiss:true});await assert.rejects(failed.run(prepared),/HISS preparation conflict/);
   assert.equal(failed.state.validation,undefined);assert.ok(!failed.state.applied.includes('deploy/opensphere-console.yaml'));
 });

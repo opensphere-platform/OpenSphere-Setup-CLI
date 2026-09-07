@@ -50,6 +50,7 @@ import {
 import { reportReleaseProgress } from './progress.mjs';
 import { materializeRuntimeAsset } from './runtime-assets.mjs';
 import {HISS_EXECUTION_PROFILE,HISS_VALIDATION_ARTIFACT,verifyHissExecutionProfile,verifyHissValidationArtifact,prepareHissPrerequisites,prepareHissValidation,createHissPrerequisiteClient} from './hiss-prerequisites.mjs';
+import {PLATFORM_CORE_ARTIFACT,verifyPlatformCoreProfile,preparePlatformCorePrerequisites} from './platform-core-prerequisites.mjs';
 import {
   CANONICAL_AGENT_NAMESPACE,
   hasLegacyInstalledAgentIdentity,
@@ -474,6 +475,7 @@ const LEGACY_SUPABASE_MANIFEST = Object.freeze({
 });
 
 export const FOUNDATION_ARTIFACT_PATHS = Object.freeze([
+  PLATFORM_CORE_ARTIFACT,
   HISS_EXECUTION_PROFILE.consoleArtifactPath,
   HISS_VALIDATION_ARTIFACT,
   'scripts/Install-ConsoleApiRuntime.ps1',
@@ -1122,6 +1124,7 @@ async function materializeFoundationInstallers(
   if (prepareHiss) {
     verifyHissExecutionProfile(artifacts.find(a=>a.path===HISS_EXECUTION_PROFILE.consoleArtifactPath)?.contents,hissScope);
     verifyHissValidationArtifact(artifacts.find(a=>a.path===HISS_VALIDATION_ARTIFACT)?.contents);
+    verifyPlatformCoreProfile(artifacts.find(a=>a.path===PLATFORM_CORE_ARTIFACT)?.contents,hissScope);
   }
   const migration = await materializeSupabaseMigrationSet(
     lock,
@@ -2219,6 +2222,10 @@ async function installPreparedRelease(lock, prepared, storageClass, consoleUrl, 
     await prepareHissPrerequisites(raw,prepared.foundation.hissScope,{client:createHissPrerequisiteClient(prepared.foundation.hissScope),apply:true,
       onProgress:event=>progress?.item('HISS 준비',`${event.state}: ${event.identity}`)});
     prepareHissValidation(validation,prepared.foundation.hissScope);
+    progress?.item('설치','L4 Core 고정 준비물 53개 확인·준비 (실제 설치는 22 → OS Shell)');
+    const core=readFileSync(join(prepared.foundation.root,PLATFORM_CORE_ARTIFACT),'utf8');
+    await preparePlatformCorePrerequisites(core,prepared.foundation.hissScope,{client:createHissPrerequisiteClient(prepared.foundation.hissScope),apply:true,
+      onProgress:event=>progress?.item('L4 준비',`${event.state}: ${event.identity}`)});
   }
   applyRelease(prepared.base.filter(item => !prerequisitePaths.includes(item.path)), label, progress, options);
 }
