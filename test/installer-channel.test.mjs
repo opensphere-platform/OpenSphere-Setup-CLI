@@ -29,3 +29,12 @@ test('Setup package selectors remain separate from Console release selection', (
   assert.match(documentation, /상호 배타적/);
   assert.match(documentation, /Console.*--release.*--lock/s);
 });
+test('executed CLI reports the package version for version and help',async()=>{
+  const {spawnSync}=await import('node:child_process');
+  for(const arg of ['version','--help']) {
+    const result=spawnSync(process.execPath,['src/cli.mjs',arg],{cwd:new URL('..',import.meta.url),encoding:'utf8'});
+    assert.equal(result.status,0,result.stderr);
+    assert.ok(result.stdout.includes(pkg.version),result.stdout);
+    if(arg==='version')assert.equal(result.stdout.trim(),`opensphere-setup ${pkg.version}`);
+  }
+});
