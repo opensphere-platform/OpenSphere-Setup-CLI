@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { run } from './process.mjs';
 
-// Local candidate implementation. Not imported by bootstrap/cli yet: applying
-// this privileged profile still needs the separately requested authorization.
+// Approved 2026-09-07 for docker-desktop / HTTPS localhost / edge.
+// Setup prepares authority; actual chart operations remain 22 -> OS Shell -> owner.
 // No caller-supplied URL, chart, source path or arbitrary manifest is accepted.
 export const HISS_EXECUTION_PROFILE = Object.freeze({
   id: 'hiss-chart-execution-v1',
@@ -11,7 +11,7 @@ export const HISS_EXECUTION_PROFILE = Object.freeze({
   sourcePath: 'deploy/hiss-execution-profile.proposed.json',
   // Console delivery must use the release's Console revision, never the owner
   // revision above. This path is metadata only; no artifact is fetched here.
-  consoleArtifactPath: 'packages/contracts/fixtures/hiss-execution/hiss-execution-profile.v1.proposed.json',
+  consoleArtifactPath: 'deploy/installation-profiles/hiss-execution.json',
   sha256: '2695b1a044d62c91946a74f05dc105190afb00cece0e4750cbeb8baec5be1f6b',
 });
 const groups = {Namespace:['v1','namespaces'],ServiceAccount:['v1','serviceaccounts'],
@@ -27,6 +27,26 @@ const projection = r=>({apiVersion:r.apiVersion,kind:r.kind,name:r.metadata?.nam
   automountServiceAccountToken:r.kind==='ServiceAccount'?r.automountServiceAccountToken!==false:undefined,
   imagePullSecrets:r.imagePullSecrets||[],aggregateLabels:Object.fromEntries(Object.entries(r.metadata?.labels||{}).filter(([k])=>k.startsWith('rbac.authorization.k8s.io/aggregate-to-')))});
 const fail = (code,message,evidence)=>Object.assign(new Error(message),{code,...(evidence?{evidence}:{})});
+export const HISS_VALIDATION_ARTIFACT = 'deploy/installation-profiles/hiss-validation.yaml';
+const VALIDATION_SHA256 = 'f079f22c8420c196f7ad834f42fc0d8acddf8b4c5134d9522fc5499fa219957d';
+
+export function verifyHissValidationArtifact(raw) {
+  if (typeof raw !== 'string' || digest(raw) !== VALIDATION_SHA256) throw fail('UNTRUSTED_PROFILE','HISS validation bytes differ from the approved contract');
+  return raw;
+}
+
+export function prepareHissValidation(raw, scope, {runner=run}={}) {
+  // Reuse the same target boundary; validate before any API call.
+  let url; try { url=new URL(scope.consoleUrl); } catch { throw fail('INVALID_SCOPE','Invalid Console URL'); }
+  if(scope.context!=='docker-desktop'||scope.channel!=='edge'||url.origin!=='https://localhost:1114'
+    ||url.pathname!=='/'||url.search||url.hash||url.username||url.password) throw fail('INVALID_SCOPE','HISS validation is restricted to HTTPS localhost:1114, edge and docker-desktop');
+  verifyHissValidationArtifact(raw);
+  // Server-side apply makes the default ServiceAccount upsert atomic with the
+  // namespace controller. Never force conflicts or modify unrelated fields.
+  runner('kubectl',['--context','docker-desktop','apply','--server-side','--field-manager=opensphere-setup-hiss','-f','-','--request-timeout=20s'],
+    {capture:true,input:raw});
+  return {applied:true,resourceCount:7,installationComplete:false};
+}
 const reference = (kind,name,namespace)=>({apiVersion:groups[kind][0],kind,metadata:{name,...(namespace?{namespace}:{})}});
 
 function observationIndex(returned, requested) {
@@ -46,7 +66,7 @@ function observationIndex(returned, requested) {
   return byId;
 }
 
-function loadProfile(raw,scope) {
+export function verifyHissExecutionProfile(raw,scope) {
   let url;try{url=new URL(scope.consoleUrl);}catch{throw fail('INVALID_SCOPE','Invalid Console URL');}
   if(scope.context!=='docker-desktop'||scope.channel!=='edge'||url.protocol!=='https:'||url.hostname!=='localhost'
     ||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw fail('INVALID_SCOPE','HISS candidate preparation is restricted to HTTPS localhost, edge and docker-desktop');
@@ -96,7 +116,7 @@ function publicPlan(observation,scope) {
 
 export async function prepareHissPrerequisites(raw,scope,{client,apply=false,onProgress=()=>{}}) {
   scope={...scope};
-  const profile=loadProfile(raw,scope),dependencies=references(profile.resources);
+  const profile=verifyHissExecutionProfile(raw,scope),dependencies=references(profile.resources);
   const initial=await observe(profile,dependencies,client),plan=publicPlan(initial,scope);
   if(!apply)return {...plan,applied:false,created:[],preserved:[]};
   if(plan.status==='Blocked')throw fail('PRECONDITION_FAILED','HISS prerequisite conflicts or missing dependencies must be resolved before preparation',plan);

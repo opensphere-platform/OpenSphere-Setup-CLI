@@ -49,6 +49,7 @@ import {
 } from './registry-pull-secret.mjs';
 import { reportReleaseProgress } from './progress.mjs';
 import { materializeRuntimeAsset } from './runtime-assets.mjs';
+import {HISS_EXECUTION_PROFILE,HISS_VALIDATION_ARTIFACT,verifyHissExecutionProfile,verifyHissValidationArtifact,prepareHissPrerequisites,prepareHissValidation,createHissPrerequisiteClient} from './hiss-prerequisites.mjs';
 import {
   CANONICAL_AGENT_NAMESPACE,
   hasLegacyInstalledAgentIdentity,
@@ -473,6 +474,8 @@ const LEGACY_SUPABASE_MANIFEST = Object.freeze({
 });
 
 export const FOUNDATION_ARTIFACT_PATHS = Object.freeze([
+  HISS_EXECUTION_PROFILE.consoleArtifactPath,
+  HISS_VALIDATION_ARTIFACT,
   'scripts/Install-ConsoleApiRuntime.ps1',
   'scripts/Install-ConsoleNativeRuntime.ps1',
   'scripts/console-migrations.mjs',
@@ -1114,6 +1117,12 @@ async function materializeFoundationInstallers(
     return contents === null ? null : { path, contents };
   }))).filter(Boolean);
   for (const artifact of artifacts) await writeReleaseArtifact(root, artifact.path, artifact.contents);
+  const prepareHiss = target && lock.channel === 'edge' && consoleUrl === 'https://localhost:1114';
+  const hissScope = prepareHiss ? {context:currentKubeContext(),channel:lock.channel,consoleUrl} : null;
+  if (prepareHiss) {
+    verifyHissExecutionProfile(artifacts.find(a=>a.path===HISS_EXECUTION_PROFILE.consoleArtifactPath)?.contents,hissScope);
+    verifyHissValidationArtifact(artifacts.find(a=>a.path===HISS_VALIDATION_ARTIFACT)?.contents);
+  }
   const migration = await materializeSupabaseMigrationSet(
     lock,
     root,
@@ -1132,6 +1141,7 @@ async function materializeFoundationInstallers(
   return {
     root,
     target,
+    hissScope: prepareHiss ? hissScope : null,
     migration,
     release: manifestArtifacts.map(({ spec, rendered }) => ({
       path: spec.path,
@@ -2184,7 +2194,7 @@ export async function preflightReleaseArtifacts(lock, {
   }
 }
 
-function installPreparedRelease(lock, prepared, storageClass, consoleUrl, label, progress) {
+async function installPreparedRelease(lock, prepared, storageClass, consoleUrl, label, progress) {
   const options = { preserveHostLocalEdgeTrust: lock.channel === 'edge' };
   const prerequisitePaths = prepared.foundation.target ? [
     'apps/extension-controller/crds/ui-plugin-crds.yaml',
@@ -2201,6 +2211,15 @@ function installPreparedRelease(lock, prepared, storageClass, consoleUrl, label,
     progress?.item('완료', 'Extension Controller CRD Established');
   }
   runFoundationInstallers(lock, prepared.foundation, storageClass, consoleUrl, progress);
+  if (prepared.foundation.hissScope) {
+    progress?.item('설치','HISS 실행·검증 준비물 61개 확인·준비 (기능 설치는 OS Shell에서 실행)');
+    const raw = readFileSync(join(prepared.foundation.root,HISS_EXECUTION_PROFILE.consoleArtifactPath),'utf8');
+    const validation = readFileSync(join(prepared.foundation.root,HISS_VALIDATION_ARTIFACT),'utf8');
+    verifyHissValidationArtifact(validation);
+    await prepareHissPrerequisites(raw,prepared.foundation.hissScope,{client:createHissPrerequisiteClient(prepared.foundation.hissScope),apply:true,
+      onProgress:event=>progress?.item('HISS 준비',`${event.state}: ${event.identity}`)});
+    prepareHissValidation(validation,prepared.foundation.hissScope);
+  }
   applyRelease(prepared.base.filter(item => !prerequisitePaths.includes(item.path)), label, progress, options);
 }
 
@@ -2423,7 +2442,7 @@ export async function bootstrap(lock, {
       'Installing',
       { baselineObservabilitySecurity: cluster.baselineObservabilitySecurity }
     );
-    installPreparedRelease(
+    await installPreparedRelease(
       lock,
       prepared,
       cluster.storageClass,
@@ -2698,7 +2717,7 @@ export async function upgrade(
           agentIdentityMigrationCommitted = true;
         }
       } else {
-        operations.installPreparedRelease(
+        await operations.installPreparedRelease(
           targetLock, target, config.storageClass, effectiveConsoleUrl, '업그레이드'
         );
       }
@@ -2780,7 +2799,7 @@ export async function upgrade(
             { applyMigrations: false }
           );
         } else {
-          if (!componentTransition) operations.installPreparedRelease(
+          if (!componentTransition) await operations.installPreparedRelease(
             previousLock, rollback, config.storageClass, effectiveConsoleUrl, '롤백'
           );
         }

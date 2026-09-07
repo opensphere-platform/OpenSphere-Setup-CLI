@@ -77,15 +77,20 @@ test('legacy rollback keeps its existing foundation installer path',()=>{
   assert.equal(h.state.legacy,true);
   assert.equal(h.state.calls.length,0);
 });
-const preparedBegin=source.indexOf('function installPreparedRelease(');
+const preparedBegin=source.indexOf('async function installPreparedRelease(');
 const preparedEnd=source.indexOf('\nexport async function bootstrap(',preparedBegin);
 assert.ok(preparedBegin>=0 && preparedEnd>preparedBegin);
 const crdPath='apps/extension-controller/crds/ui-plugin-crds.yaml';
 const trustPath='apps/extension-controller/config/trusted-keys.yaml';
 const preparedFixture={foundation:{target:true},base:[crdPath,trustPath,'deploy/opensphere-console.yaml'].map(path=>({path,yaml:'verified '+path}))};
-function preparedHarness({failEstablishment=false}={}) {
+function preparedHarness({failEstablishment=false,failHiss=false}={}) {
   const state={applied:[],established:false,foundation:false};
   const fn=vm.runInNewContext('('+source.slice(preparedBegin,preparedEnd)+')',{
+    join,readFileSync:()=> 'verified-artifact',
+    HISS_EXECUTION_PROFILE:{consoleArtifactPath:'hiss-execution.json'},HISS_VALIDATION_ARTIFACT:'hiss-validation.yaml',
+    verifyHissValidationArtifact:()=>{},createHissPrerequisiteClient:()=>({}),
+    prepareHissPrerequisites:async()=>{assert.equal(state.foundation,true);await Promise.resolve();if(failHiss)throw Error('HISS preparation conflict');state.hiss=true;},
+    prepareHissValidation:()=>{assert.equal(state.hiss,true);state.validation=true;},
     TRUST_CONFIGMAP_PATH:trustPath,
     applyRelease:(items,_label,_progress,options)=>{
       assert.equal(options.preserveHostLocalEdgeTrust,true);
@@ -110,27 +115,34 @@ function preparedHarness({failEstablishment=false}={}) {
   });
   return {state,run:(prepared=preparedFixture)=>fn({channel:'edge'},prepared,'standard','https://localhost:1114','apply')};
 }
-test('controller definitions and trust are ready before foundation readiness; Main Shell follows',()=>{
-  const h=preparedHarness();h.run();
+test('controller definitions and trust are ready before foundation readiness; Main Shell follows',async()=>{
+  const h=preparedHarness();await h.run();
   assert.equal(h.state.foundation,true);
   assert.deepEqual(h.state.applied,[crdPath,trustPath,'deploy/opensphere-console.yaml']);
 });
-test('unestablished controller definitions stop before any foundation workload',()=>{
+test('unestablished controller definitions stop before any foundation workload',async()=>{
   const h=preparedHarness({failEstablishment:true});
-  assert.throws(()=>h.run(),/CRD did not establish/);
+  await assert.rejects(h.run(),/CRD did not establish/);
   assert.equal(h.state.foundation,false);
   assert.equal(h.state.applied.includes('deploy/opensphere-console.yaml'),false);
 });
-test('missing verified controller prerequisites fail before any cluster mutation',()=>{
+test('missing verified controller prerequisites fail before any cluster mutation',async()=>{
   const h=preparedHarness();
-  assert.throws(()=>h.run({...preparedFixture,base:preparedFixture.base.filter(item=>item.path!==crdPath)}),/lacks Extension Controller prerequisites/);
+  await assert.rejects(h.run({...preparedFixture,base:preparedFixture.base.filter(item=>item.path!==crdPath)}),/lacks Extension Controller prerequisites/);
   assert.deepEqual(h.state.applied,[]);
   assert.equal(h.state.foundation,false);
 });
-test('legacy prepared releases keep their apply sequence without target CRD prerequisites',()=>{
+test('legacy prepared releases keep their apply sequence without target CRD prerequisites',async()=>{
   const h=preparedHarness();
-  h.run({foundation:{target:false},base:[{path:'legacy.yaml',yaml:'legacy'}]});
+  await h.run({foundation:{target:false},base:[{path:'legacy.yaml',yaml:'legacy'}]});
   assert.equal(h.state.foundation,true);
   assert.equal(h.state.established,false);
   assert.deepEqual(h.state.applied,['legacy.yaml']);
+});
+
+test('HISS authority preparation is awaited and a conflict prevents later Main Shell deployment',async()=>{
+  const prepared={...preparedFixture,foundation:{target:true,root:'/verified',hissScope:{context:'docker-desktop',channel:'edge',consoleUrl:'https://localhost:1114'}}};
+  const ok=preparedHarness();await ok.run(prepared);assert.equal(ok.state.validation,true);
+  const failed=preparedHarness({failHiss:true});await assert.rejects(failed.run(prepared),/HISS preparation conflict/);
+  assert.equal(failed.state.validation,undefined);assert.ok(!failed.state.applied.includes('deploy/opensphere-console.yaml'));
 });
