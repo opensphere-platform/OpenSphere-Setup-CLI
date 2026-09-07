@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import setupPackage from '../package.json' with { type: 'json' };
+import {prepareCephExecutionProfile} from './ceph-prerequisites.mjs';
 import {createGitHubRegistryAuth} from './github-registry-auth.mjs';
 import {GITHUB_OAUTH_CLIENT_ID} from './github-oauth-app.mjs';
 import './portable-runtime.mjs';
@@ -132,6 +133,7 @@ Usage:
       [--registry-username <github-login> --registry-token-stdin]
   opensphere-setup bootstrap --release <channel> [--lock <verified-lock-file>]
   opensphere-setup bootstrap -r <channel> [--lock <verified-lock-file>]
+  opensphere-setup prepare-ceph --context docker-desktop --channel edge [--apply]
       [--context <kube-context>] [--admin-username <name>]
        [--admin-display-name <name>] [--admin-email <email>]
        [--storage-class <name>] [--console <https-origin|loopback-http-origin>]
@@ -204,6 +206,10 @@ async function main() {
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
   if (command === 'version' || command === '--version') return console.log(`opensphere-setup ${setupPackage.version}`);
+  if (command === 'prepare-ceph') {
+    const result=prepareCephExecutionProfile({context:context||'docker-desktop',channel:option('--channel','edge'),consoleUrl:option('--console-url','https://localhost:1114')},{apply:hasOption('--apply')});
+    console.log(JSON.stringify(result,null,2));return;
+  }
   if (['--registry-auth','--github-client-id'].some(hasOption) && !['resolve','doctor','bootstrap','upgrade'].includes(command)) {
     throw new Error('Registry authentication options are accepted only by resolve, doctor, bootstrap and upgrade; status queries Kubernetes only');
   }

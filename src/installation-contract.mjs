@@ -1,3 +1,4 @@
+import {CEPH_PREPARATION_CLUSTER_RBAC,CEPH_PREPARATION_ADMISSION} from './ceph-preparation-inventory.mjs';
 export const INSTALLATION_LOCK_CONFIGMAP = 'opensphere-installation-lock';
 export const INSTALLATION_EVIDENCE_CONFIGMAP = 'opensphere-installation-evidence';
 
@@ -17,6 +18,7 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     'uipluginregistrations.plugins.opensphere.io'
   ]),
   clusterRbac: Object.freeze([
+    ...CEPH_PREPARATION_CLUSTER_RBAC,
     'clusterrolebinding/opensphere-extension-controller-cli-downloads',
     'clusterrolebinding/opensphere-registry',
     'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
@@ -31,6 +33,7 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     'clusterrole/opensphere-extension-installation-profile-reader'
   ]),
   admissionPolicies: Object.freeze([
+    ...CEPH_PREPARATION_ADMISSION,
     'validatingadmissionpolicybinding/opensphere-console-manual-ui-contract',
     'validatingadmissionpolicy/opensphere-console-manual-ui-contract',
     'validatingadmissionpolicybinding/opensphere-console-image-integrity-workload',

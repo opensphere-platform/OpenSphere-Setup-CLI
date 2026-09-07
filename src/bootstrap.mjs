@@ -50,6 +50,7 @@ import {
 import { reportReleaseProgress } from './progress.mjs';
 import { materializeRuntimeAsset } from './runtime-assets.mjs';
 import {HISS_EXECUTION_PROFILE,HISS_VALIDATION_ARTIFACT,verifyHissExecutionProfile,verifyHissValidationArtifact,prepareHissPrerequisites,prepareHissValidation,createHissPrerequisiteClient} from './hiss-prerequisites.mjs';
+import {prepareCephExecutionProfile} from './ceph-prerequisites.mjs';
 import {PLATFORM_CORE_ARTIFACT,verifyPlatformCoreProfile,preparePlatformCorePrerequisites} from './platform-core-prerequisites.mjs';
 import {
   CANONICAL_AGENT_NAMESPACE,
@@ -2226,6 +2227,8 @@ async function installPreparedRelease(lock, prepared, storageClass, consoleUrl, 
     const core=readFileSync(join(prepared.foundation.root,PLATFORM_CORE_ARTIFACT),'utf8');
     await preparePlatformCorePrerequisites(core,prepared.foundation.hissScope,{client:createHissPrerequisiteClient(prepared.foundation.hissScope),apply:true,
       onProgress:event=>progress?.item('L4 준비',`${event.state}: ${event.identity}`)});
+    progress?.item('설치','Ceph 고정 실행 프로필 준비 (실제 Rook·CSI 설치는 22 → OS Shell)');
+    prepareCephExecutionProfile(prepared.foundation.hissScope,{apply:true});
   }
   applyRelease(prepared.base.filter(item => !prerequisitePaths.includes(item.path)), label, progress, options);
 }

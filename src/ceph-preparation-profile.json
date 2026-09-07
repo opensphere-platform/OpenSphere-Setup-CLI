@@ -1,0 +1,1475 @@
+{
+  "schema": "opensphere.ceph-preparation-profile/v1",
+  "scope": {
+    "context": "docker-desktop",
+    "channel": "edge",
+    "consoleUrl": "https://localhost:1114"
+  },
+  "bundleDigest": "sha256:93919f8a83d3dbbdab58ac7a1e8f379165bc4a87304ccdcfb6a95fed604930cb",
+  "image": "ghcr.io/opensphere-platform/opensphere-shell-cluster-manager@sha256:80988e7b6ff3bc70c91d915862dc876f3dfddc5511855e2a71c2ea788189896f",
+  "resources": [
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "opensphere-ceph-preparer",
+        "namespace": "opensphere-console",
+        "labels": {
+          "opensphere.io/ceph-preparation": "profile-v1"
+        }
+      },
+      "automountServiceAccountToken": true
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": {
+        "name": "opensphere-ceph-preparation-policy",
+        "namespace": "opensphere-console",
+        "labels": {
+          "opensphere.io/ceph-preparation": "profile-v1"
+        }
+      },
+      "data": {
+        "image": "ghcr.io/opensphere-platform/opensphere-shell-cluster-manager@sha256:80988e7b6ff3bc70c91d915862dc876f3dfddc5511855e2a71c2ea788189896f",
+        "bundleDigest": "sha256:93919f8a83d3dbbdab58ac7a1e8f379165bc4a87304ccdcfb6a95fed604930cb"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ConfigMap",
+      "metadata": {
+        "name": "opensphere-ceph-preparation",
+        "namespace": "opensphere-console",
+        "labels": {
+          "opensphere.io/ceph-preparation": "profile-v1"
+        }
+      },
+      "data": {
+        "operation": "{}"
+      }
+    },
+    {
+      "apiVersion": "admissionregistration.k8s.io/v1",
+      "kind": "ValidatingAdmissionPolicy",
+      "metadata": {
+        "name": "opensphere-ceph-preparation-worker",
+        "labels": {
+          "opensphere.io/ceph-preparation": "profile-v1"
+        }
+      },
+      "spec": {
+        "failurePolicy": "Fail",
+        "matchConstraints": {
+          "resourceRules": [
+            {
+              "apiGroups": [
+                "*"
+              ],
+              "apiVersions": [
+                "*"
+              ],
+              "operations": [
+                "CREATE",
+                "UPDATE"
+              ],
+              "resources": [
+                "*"
+              ]
+            }
+          ]
+        },
+        "matchConditions": [
+          {
+            "name": "installer-only",
+            "expression": "request.userInfo.username == 'system:serviceaccount:opensphere-console:opensphere-ceph-preparer'"
+          }
+        ],
+        "validations": [
+          {
+            "expression": "(request.resource.group == \"\" && request.resource.resource == \"namespaces\" && true && object.metadata.name in [\"opensphere-ceph-imports\",\"opensphere-ceph-verification\",\"rook-ceph\"]) || (request.resource.group == \"apiextensions.k8s.io\" && request.resource.resource == \"customresourcedefinitions\" && true && object.metadata.name in [\"cephblockpoolradosnamespaces.ceph.rook.io\",\"cephblockpools.ceph.rook.io\",\"cephbucketnotifications.ceph.rook.io\",\"cephbuckettopics.ceph.rook.io\",\"cephclients.ceph.rook.io\",\"cephclusters.ceph.rook.io\",\"cephconnections.csi.ceph.io\",\"cephcosidrivers.ceph.rook.io\",\"cephfilesystemmirrors.ceph.rook.io\",\"cephfilesystems.ceph.rook.io\",\"cephfilesystemsubvolumegroups.ceph.rook.io\",\"cephnfses.ceph.rook.io\",\"cephnvmeofgateways.ceph.rook.io\",\"cephobjectrealms.ceph.rook.io\",\"cephobjectstoreaccounts.ceph.rook.io\",\"cephobjectstores.ceph.rook.io\",\"cephobjectstoreusers.ceph.rook.io\",\"cephobjectzonegroups.ceph.rook.io\",\"cephobjectzones.ceph.rook.io\",\"cephrbdmirrors.ceph.rook.io\",\"clientprofilemappings.csi.ceph.io\",\"clientprofiles.csi.ceph.io\",\"drivers.csi.ceph.io\",\"objectbucketclaims.objectbucket.io\",\"objectbuckets.objectbucket.io\",\"operatorconfigs.csi.ceph.io\"]) || (request.resource.group == \"\" && request.resource.resource == \"serviceaccounts\" && request.namespace == \"rook-ceph\" && object.metadata.name in [\"ceph-csi\",\"objectstorage-provisioner\",\"rook-ceph-cephfs-csi-ceph-com-ctrlplugin-sa\",\"rook-ceph-cephfs-csi-ceph-com-nodeplugin-sa\",\"rook-ceph-cmd-reporter\",\"rook-ceph-default\",\"rook-ceph-mgr\",\"rook-ceph-nvmeof\",\"rook-ceph-osd\",\"rook-ceph-purge-osd\",\"rook-ceph-rbd-csi-ceph-com-ctrlplugin-sa\",\"rook-ceph-rbd-csi-ceph-com-nodeplugin-sa\",\"rook-ceph-rgw\",\"rook-ceph-system\"]) || (request.resource.group == \"admissionregistration.k8s.io\" && request.resource.resource == \"validatingadmissionpolicies\" && true && object.metadata.name in [\"opensphere-ceph-consumer-storage\"]) || (request.resource.group == \"admissionregistration.k8s.io\" && request.resource.resource == \"validatingadmissionpolicybindings\" && true && object.metadata.name in [\"opensphere-ceph-consumer-storage\"]) || (request.resource.group == \"networking.k8s.io\" && request.resource.resource == \"networkpolicies\" && request.namespace == \"opensphere-ceph-verification\" && object.metadata.name in [\"opensphere-ceph-verification-default-deny\"]) || (request.resource.group == \"rbac.authorization.k8s.io\" && request.resource.resource == \"clusterrolebindings\" && true && object.metadata.name in [\"ceph-csi-manager-rolebinding\",\"ceph-csi-metrics-auth-rolebinding\",\"objectstorage-provisioner-role-binding\",\"opensphere-ceph-consumer-storage-owner\",\"rook-ceph-cephfs-csi-ceph-com-ctrlplugin-crb\",\"rook-ceph-cephfs-csi-ceph-com-nodeplugin-crb\",\"rook-ceph-global\",\"rook-ceph-mgr-cluster\",\"rook-ceph-object-bucket\",\"rook-ceph-osd\",\"rook-ceph-rbd-csi-ceph-com-ctrlplugin-crb\",\"rook-ceph-rbd-csi-ceph-com-nodeplugin-crb\",\"rook-ceph-system\"]) || (request.resource.group == \"rbac.authorization.k8s.io\" && request.resource.resource == \"clusterroles\" && true && object.metadata.name in [\"ceph-csi-cephconnection-viewer-role\",\"ceph-csi-cephconnections-editor-role\",\"ceph-csi-clientprofile-viewer-role\",\"ceph-csi-clientprofilemapping-editor-role\",\"ceph-csi-clientprofilemapping-viewer-role\",\"ceph-csi-clientprofiles-editor-role\",\"ceph-csi-driver-editor-role\",\"ceph-csi-driver-viewer-role\",\"ceph-csi-manager-role\",\"ceph-csi-metrics-auth-role\",\"ceph-csi-metrics-reader\",\"ceph-csi-operatorconfig-editor-role\",\"ceph-csi-operatorconfig-viewer-role\",\"objectstorage-provisioner-role\",\"opensphere-ceph-consumer-storage-owner\",\"rook-ceph-cephfs-csi-ceph-com-ctrlplugin-cr\",\"rook-ceph-cephfs-csi-ceph-com-nodeplugin-cr\",\"rook-ceph-cluster-mgmt\",\"rook-ceph-global\",\"rook-ceph-mgr-cluster\",\"rook-ceph-mgr-system\",\"rook-ceph-object-bucket\",\"rook-ceph-osd\",\"rook-ceph-rbd-csi-ceph-com-ctrlplugin-cr\",\"rook-ceph-rbd-csi-ceph-com-nodeplugin-cr\",\"rook-ceph-system\"]) || (request.resource.group == \"rbac.authorization.k8s.io\" && request.resource.resource == \"rolebindings\" && request.namespace == \"opensphere-ceph-imports\" && object.metadata.name in [\"opensphere-ceph-import-owner\"]) || (request.resource.group == \"rbac.authorization.k8s.io\" && request.resource.resource == \"roles\" && request.namespace == \"opensphere-ceph-imports\" && object.metadata.name in [\"opensphere-ceph-import-owner\"]) || (request.resource.group == \"rbac.authorization.k8s.io\" && request.resource.resource == \"rolebindings\" && request.namespace == \"opensphere-ceph-verification\" && object.metadata.name in [\"opensphere-ceph-verification-runner\"]) || (request.resource.group == \"rbac.authorization.k8s.io\" && request.resource.resource == \"roles\" && request.namespace == \"opensphere-ceph-verification\" && object.metadata.name in [\"opensphere-ceph-verification-runner\"]) || (request.resource.group == \"rbac.authorization.k8s.io\" && request.resource.resource == \"rolebindings\" && request.namespace == \"opensphere-console\" && object.metadata.name in [\"opensphere-ceph-verification-image-reader\"]) || (request.resource.group == \"rbac.authorization.k8s.io\" && request.resource.resource == \"roles\" && request.namespace == \"opensphere-console\" && object.metadata.name in [\"opensphere-ceph-verification-image-reader\"]) || (request.resource.group == \"rbac.authorization.k8s.io\" && request.resource.resource == \"rolebindings\" && request.namespace == \"rook-ceph\" && object.metadata.name in [\"ceph-csi-leader-election-rolebinding\",\"opensphere-ceph-runtime-owner\",\"rook-ceph-cephfs-csi-ceph-com-ctrlplugin-rb\",\"rook-ceph-cephfs-csi-ceph-com-nodeplugin-rb\",\"rook-ceph-cluster-mgmt\",\"rook-ceph-cmd-reporter\",\"rook-ceph-mgr\",\"rook-ceph-mgr-system\",\"rook-ceph-osd\",\"rook-ceph-purge-osd\",\"rook-ceph-rbd-csi-ceph-com-ctrlplugin-rb\",\"rook-ceph-rbd-csi-ceph-com-nodeplugin-rb\",\"rook-ceph-system\"]) || (request.resource.group == \"rbac.authorization.k8s.io\" && request.resource.resource == \"roles\" && request.namespace == \"rook-ceph\" && object.metadata.name in [\"ceph-csi-leader-election-role\",\"opensphere-ceph-runtime-owner\",\"rook-ceph-cephfs-csi-ceph-com-ctrlplugin-r\",\"rook-ceph-cephfs-csi-ceph-com-nodeplugin-r\",\"rook-ceph-cmd-reporter\",\"rook-ceph-mgr\",\"rook-ceph-osd\",\"rook-ceph-purge-osd\",\"rook-ceph-rbd-csi-ceph-com-ctrlplugin-r\",\"rook-ceph-rbd-csi-ceph-com-nodeplugin-r\",\"rook-ceph-system\"]) || (request.resource.group == \"apps\" && request.resource.resource == \"deployments\" && request.namespace == \"rook-ceph\" && object.metadata.name in [\"ceph-csi-controller-manager\",\"rook-ceph-operator\"]) || (request.resource.group == \"\" && request.resource.resource == \"configmaps\" && request.namespace == \"rook-ceph\" && object.metadata.name in [\"rook-ceph-operator-config\",\"rook-csi-operator-image-set-configmap\"]) || (request.resource.group == \"csi.ceph.io\" && request.resource.resource == \"drivers\" && request.namespace == \"rook-ceph\" && object.metadata.name in [\"rook-ceph.cephfs.csi.ceph.com\",\"rook-ceph.rbd.csi.ceph.com\"]) || (request.resource.group == \"csi.ceph.io\" && request.resource.resource == \"operatorconfigs\" && request.namespace == \"rook-ceph\" && object.metadata.name in [\"ceph-csi-operator-config\"]) || (request.resource.group == '' && request.resource.resource == 'configmaps' && request.namespace == 'opensphere-console' && object.metadata.name == 'opensphere-ceph-preparation')",
+            "message": "Ceph preparer may only write the fixed installation resource identities"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "admissionregistration.k8s.io/v1",
+      "kind": "ValidatingAdmissionPolicyBinding",
+      "metadata": {
+        "name": "opensphere-ceph-preparation-worker",
+        "labels": {
+          "opensphere.io/ceph-preparation": "profile-v1"
+        }
+      },
+      "spec": {
+        "policyName": "opensphere-ceph-preparation-worker",
+        "validationActions": [
+          "Deny"
+        ]
+      }
+    },
+    {
+      "apiVersion": "admissionregistration.k8s.io/v1",
+      "kind": "ValidatingAdmissionPolicy",
+      "metadata": {
+        "name": "opensphere-ceph-preparation-job",
+        "labels": {
+          "opensphere.io/ceph-preparation": "profile-v1"
+        }
+      },
+      "spec": {
+        "failurePolicy": "Fail",
+        "paramKind": {
+          "apiVersion": "v1",
+          "kind": "ConfigMap"
+        },
+        "matchConstraints": {
+          "resourceRules": [
+            {
+              "apiGroups": [
+                "batch"
+              ],
+              "apiVersions": [
+                "v1"
+              ],
+              "operations": [
+                "CREATE",
+                "UPDATE"
+              ],
+              "resources": [
+                "jobs"
+              ]
+            }
+          ]
+        },
+        "matchConditions": [
+          {
+            "name": "cm-console-jobs",
+            "expression": "request.namespace == 'opensphere-console' && request.userInfo.username == 'system:serviceaccount:opensphere-console:opensphere-cluster-manager-runtime'"
+          }
+        ],
+        "variables": [
+          {
+            "name": "p",
+            "expression": "object.spec.template.spec"
+          },
+          {
+            "name": "c",
+            "expression": "variables.p.containers[0]"
+          }
+        ],
+        "validations": [
+          {
+            "expression": "object.metadata.name.matches('^ceph-prepare-' + '[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}' + '$') && object.spec.backoffLimit == 0 && object.spec.activeDeadlineSeconds == 900 && object.spec.ttlSecondsAfterFinished == 86400",
+            "message": "Only bounded Ceph preparation Jobs are permitted"
+          },
+          {
+            "expression": "variables.p.serviceAccountName == 'opensphere-ceph-preparer' && variables.p.restartPolicy == 'Never' && variables.p.containers.size() == 1 && (!has(variables.p.initContainers) || variables.p.initContainers.size() == 0) && (!has(variables.p.ephemeralContainers) || variables.p.ephemeralContainers.size() == 0) && (!has(variables.p.hostNetwork) || !variables.p.hostNetwork) && (!has(variables.p.hostPID) || !variables.p.hostPID) && (!has(variables.p.hostIPC) || !variables.p.hostIPC)",
+            "message": "Only the fixed isolated preparer service account may run"
+          },
+          {
+            "expression": "variables.c.image == params.data.image && variables.c.command == ['node','/app/ceph-preparation-worker.js'] && (!has(variables.c.args) || variables.c.args.size() == 0) && (!has(variables.c.envFrom) || variables.c.envFrom.size() == 0) && !has(variables.c.lifecycle)",
+            "message": "Only the immutable approved worker and entrypoint are permitted"
+          },
+          {
+            "expression": "variables.c.resources.limits.cpu == '500m' && variables.c.resources.limits.memory == '512Mi' && variables.c.resources.requests.cpu == '50m' && variables.c.resources.requests.memory == '128Mi' && (!has(variables.p.nodeName) || variables.p.nodeName == '') && !has(variables.p.runtimeClassName)",
+            "message": "Only the fixed bounded worker resource profile is permitted"
+          },
+          {
+            "expression": "variables.c.env.size() == 1 && variables.c.env[0].name == 'OPERATION_ID' && !has(variables.c.env[0].valueFrom) && variables.c.env[0].value.matches('^' + '[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}' + '$') && object.metadata.name == 'ceph-prepare-' + variables.c.env[0].value",
+            "message": "The sole worker input is its bound operation ID"
+          },
+          {
+            "expression": "variables.c.securityContext.allowPrivilegeEscalation == false && variables.c.securityContext.readOnlyRootFilesystem == true && variables.c.securityContext.capabilities.drop == ['ALL'] && (!has(variables.c.securityContext.capabilities.add) || variables.c.securityContext.capabilities.add.size() == 0) && (!has(variables.c.securityContext.privileged) || !variables.c.securityContext.privileged) && variables.p.securityContext.runAsNonRoot && variables.p.securityContext.runAsUser == 1000 && variables.p.securityContext.seccompProfile.type == 'RuntimeDefault'",
+            "message": "Preparers cannot elevate or modify their executable filesystem"
+          },
+          {
+            "expression": "variables.p.volumes.size() == 1 && variables.p.volumes[0].name == 'tmp' && has(variables.p.volumes[0].emptyDir) && variables.c.volumeMounts.size() == 1 && variables.c.volumeMounts[0].name == 'tmp' && variables.c.volumeMounts[0].mountPath == '/tmp' && variables.p.imagePullSecrets.size() == 1 && variables.p.imagePullSecrets[0].name == 'opensphere-ghcr-pull'",
+            "message": "No arbitrary Secret, host or executable volume mounts are permitted"
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "admissionregistration.k8s.io/v1",
+      "kind": "ValidatingAdmissionPolicyBinding",
+      "metadata": {
+        "name": "opensphere-ceph-preparation-job",
+        "labels": {
+          "opensphere.io/ceph-preparation": "profile-v1"
+        }
+      },
+      "spec": {
+        "policyName": "opensphere-ceph-preparation-job",
+        "paramRef": {
+          "name": "opensphere-ceph-preparation-policy",
+          "namespace": "opensphere-console",
+          "parameterNotFoundAction": "Deny"
+        },
+        "validationActions": [
+          "Deny"
+        ]
+      }
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "opensphere-ceph-preparation-worker",
+        "labels": {
+          "opensphere.io/ceph-preparation": "profile-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "namespaces"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "namespaces"
+          ],
+          "verbs": [
+            "get",
+            "patch"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-imports",
+            "opensphere-ceph-verification",
+            "rook-ceph"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apiextensions.k8s.io"
+          ],
+          "resources": [
+            "customresourcedefinitions"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apiextensions.k8s.io"
+          ],
+          "resources": [
+            "customresourcedefinitions"
+          ],
+          "verbs": [
+            "get",
+            "patch"
+          ],
+          "resourceNames": [
+            "cephblockpoolradosnamespaces.ceph.rook.io",
+            "cephblockpools.ceph.rook.io",
+            "cephbucketnotifications.ceph.rook.io",
+            "cephbuckettopics.ceph.rook.io",
+            "cephclients.ceph.rook.io",
+            "cephclusters.ceph.rook.io",
+            "cephconnections.csi.ceph.io",
+            "cephcosidrivers.ceph.rook.io",
+            "cephfilesystemmirrors.ceph.rook.io",
+            "cephfilesystems.ceph.rook.io",
+            "cephfilesystemsubvolumegroups.ceph.rook.io",
+            "cephnfses.ceph.rook.io",
+            "cephnvmeofgateways.ceph.rook.io",
+            "cephobjectrealms.ceph.rook.io",
+            "cephobjectstoreaccounts.ceph.rook.io",
+            "cephobjectstores.ceph.rook.io",
+            "cephobjectstoreusers.ceph.rook.io",
+            "cephobjectzonegroups.ceph.rook.io",
+            "cephobjectzones.ceph.rook.io",
+            "cephrbdmirrors.ceph.rook.io",
+            "clientprofilemappings.csi.ceph.io",
+            "clientprofiles.csi.ceph.io",
+            "drivers.csi.ceph.io",
+            "objectbucketclaims.objectbucket.io",
+            "objectbuckets.objectbucket.io",
+            "operatorconfigs.csi.ceph.io"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "serviceaccounts"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "serviceaccounts"
+          ],
+          "verbs": [
+            "get",
+            "patch"
+          ],
+          "resourceNames": [
+            "ceph-csi",
+            "objectstorage-provisioner",
+            "rook-ceph-cephfs-csi-ceph-com-ctrlplugin-sa",
+            "rook-ceph-cephfs-csi-ceph-com-nodeplugin-sa",
+            "rook-ceph-cmd-reporter",
+            "rook-ceph-default",
+            "rook-ceph-mgr",
+            "rook-ceph-nvmeof",
+            "rook-ceph-osd",
+            "rook-ceph-purge-osd",
+            "rook-ceph-rbd-csi-ceph-com-ctrlplugin-sa",
+            "rook-ceph-rbd-csi-ceph-com-nodeplugin-sa",
+            "rook-ceph-rgw",
+            "rook-ceph-system"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "validatingadmissionpolicies"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "validatingadmissionpolicies"
+          ],
+          "verbs": [
+            "get",
+            "patch"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-consumer-storage"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "validatingadmissionpolicybindings"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "validatingadmissionpolicybindings"
+          ],
+          "verbs": [
+            "get",
+            "patch"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-consumer-storage"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "networkpolicies"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "networkpolicies"
+          ],
+          "verbs": [
+            "get",
+            "patch"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-verification-default-deny"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "clusterrolebindings"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "clusterrolebindings"
+          ],
+          "verbs": [
+            "get",
+            "patch"
+          ],
+          "resourceNames": [
+            "ceph-csi-manager-rolebinding",
+            "ceph-csi-metrics-auth-rolebinding",
+            "objectstorage-provisioner-role-binding",
+            "opensphere-ceph-consumer-storage-owner",
+            "rook-ceph-cephfs-csi-ceph-com-ctrlplugin-crb",
+            "rook-ceph-cephfs-csi-ceph-com-nodeplugin-crb",
+            "rook-ceph-global",
+            "rook-ceph-mgr-cluster",
+            "rook-ceph-object-bucket",
+            "rook-ceph-osd",
+            "rook-ceph-rbd-csi-ceph-com-ctrlplugin-crb",
+            "rook-ceph-rbd-csi-ceph-com-nodeplugin-crb",
+            "rook-ceph-system"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "clusterroles"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "clusterroles"
+          ],
+          "verbs": [
+            "get",
+            "patch",
+            "bind",
+            "escalate"
+          ],
+          "resourceNames": [
+            "ceph-csi-cephconnection-viewer-role",
+            "ceph-csi-cephconnections-editor-role",
+            "ceph-csi-clientprofile-viewer-role",
+            "ceph-csi-clientprofilemapping-editor-role",
+            "ceph-csi-clientprofilemapping-viewer-role",
+            "ceph-csi-clientprofiles-editor-role",
+            "ceph-csi-driver-editor-role",
+            "ceph-csi-driver-viewer-role",
+            "ceph-csi-manager-role",
+            "ceph-csi-metrics-auth-role",
+            "ceph-csi-metrics-reader",
+            "ceph-csi-operatorconfig-editor-role",
+            "ceph-csi-operatorconfig-viewer-role",
+            "objectstorage-provisioner-role",
+            "opensphere-ceph-consumer-storage-owner",
+            "rook-ceph-cephfs-csi-ceph-com-ctrlplugin-cr",
+            "rook-ceph-cephfs-csi-ceph-com-nodeplugin-cr",
+            "rook-ceph-cluster-mgmt",
+            "rook-ceph-global",
+            "rook-ceph-mgr-cluster",
+            "rook-ceph-mgr-system",
+            "rook-ceph-object-bucket",
+            "rook-ceph-osd",
+            "rook-ceph-rbd-csi-ceph-com-ctrlplugin-cr",
+            "rook-ceph-rbd-csi-ceph-com-nodeplugin-cr",
+            "rook-ceph-system"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "rolebindings"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "rolebindings"
+          ],
+          "verbs": [
+            "get",
+            "patch"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-import-owner"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "roles"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "roles"
+          ],
+          "verbs": [
+            "get",
+            "patch",
+            "bind",
+            "escalate"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-import-owner"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "rolebindings"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "rolebindings"
+          ],
+          "verbs": [
+            "get",
+            "patch"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-verification-runner"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "roles"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "roles"
+          ],
+          "verbs": [
+            "get",
+            "patch",
+            "bind",
+            "escalate"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-verification-runner"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "rolebindings"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "rolebindings"
+          ],
+          "verbs": [
+            "get",
+            "patch"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-verification-image-reader"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "roles"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "roles"
+          ],
+          "verbs": [
+            "get",
+            "patch",
+            "bind",
+            "escalate"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-verification-image-reader"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "rolebindings"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "rolebindings"
+          ],
+          "verbs": [
+            "get",
+            "patch"
+          ],
+          "resourceNames": [
+            "ceph-csi-leader-election-rolebinding",
+            "opensphere-ceph-runtime-owner",
+            "rook-ceph-cephfs-csi-ceph-com-ctrlplugin-rb",
+            "rook-ceph-cephfs-csi-ceph-com-nodeplugin-rb",
+            "rook-ceph-cluster-mgmt",
+            "rook-ceph-cmd-reporter",
+            "rook-ceph-mgr",
+            "rook-ceph-mgr-system",
+            "rook-ceph-osd",
+            "rook-ceph-purge-osd",
+            "rook-ceph-rbd-csi-ceph-com-ctrlplugin-rb",
+            "rook-ceph-rbd-csi-ceph-com-nodeplugin-rb",
+            "rook-ceph-system"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "roles"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "roles"
+          ],
+          "verbs": [
+            "get",
+            "patch",
+            "bind",
+            "escalate"
+          ],
+          "resourceNames": [
+            "ceph-csi-leader-election-role",
+            "opensphere-ceph-runtime-owner",
+            "rook-ceph-cephfs-csi-ceph-com-ctrlplugin-r",
+            "rook-ceph-cephfs-csi-ceph-com-nodeplugin-r",
+            "rook-ceph-cmd-reporter",
+            "rook-ceph-mgr",
+            "rook-ceph-osd",
+            "rook-ceph-purge-osd",
+            "rook-ceph-rbd-csi-ceph-com-ctrlplugin-r",
+            "rook-ceph-rbd-csi-ceph-com-nodeplugin-r",
+            "rook-ceph-system"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "deployments"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "deployments"
+          ],
+          "verbs": [
+            "get",
+            "patch"
+          ],
+          "resourceNames": [
+            "ceph-csi-controller-manager",
+            "rook-ceph-operator"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "get",
+            "patch"
+          ],
+          "resourceNames": [
+            "rook-ceph-operator-config",
+            "rook-csi-operator-image-set-configmap"
+          ]
+        },
+        {
+          "apiGroups": [
+            "csi.ceph.io"
+          ],
+          "resources": [
+            "drivers"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "csi.ceph.io"
+          ],
+          "resources": [
+            "drivers"
+          ],
+          "verbs": [
+            "get",
+            "patch"
+          ],
+          "resourceNames": [
+            "rook-ceph.cephfs.csi.ceph.com",
+            "rook-ceph.rbd.csi.ceph.com"
+          ]
+        },
+        {
+          "apiGroups": [
+            "csi.ceph.io"
+          ],
+          "resources": [
+            "operatorconfigs"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "csi.ceph.io"
+          ],
+          "resources": [
+            "operatorconfigs"
+          ],
+          "verbs": [
+            "get",
+            "patch"
+          ],
+          "resourceNames": [
+            "ceph-csi-operator-config"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "get",
+            "update"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-preparation"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "deployments",
+            "daemonsets"
+          ],
+          "verbs": [
+            "list"
+          ]
+        },
+        {
+          "apiGroups": [
+            "storage.k8s.io"
+          ],
+          "resources": [
+            "csidrivers"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "rook-ceph.rbd.csi.ceph.com",
+            "rook-ceph.cephfs.csi.ceph.com"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "opensphere-ceph-preparation-worker",
+        "labels": {
+          "opensphere.io/ceph-preparation": "profile-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "opensphere-ceph-preparation-worker"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-ceph-preparer",
+          "namespace": "opensphere-console"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "opensphere-ceph-preparation-submit",
+        "namespace": "opensphere-console",
+        "labels": {
+          "opensphere.io/ceph-preparation": "profile-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-preparation",
+            "opensphere-ceph-preparation-policy"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "update"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-preparation"
+          ]
+        },
+        {
+          "apiGroups": [
+            "batch"
+          ],
+          "resources": [
+            "jobs"
+          ],
+          "verbs": [
+            "create",
+            "get"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "opensphere-ceph-preparation-submit",
+        "namespace": "opensphere-console",
+        "labels": {
+          "opensphere.io/ceph-preparation": "profile-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "opensphere-ceph-preparation-submit"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-cluster-manager-runtime",
+          "namespace": "opensphere-console"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "opensphere-ceph-preparation-inspect",
+        "labels": {
+          "opensphere.io/ceph-preparation": "profile-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "namespaces"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-imports",
+            "opensphere-ceph-verification",
+            "rook-ceph"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apiextensions.k8s.io"
+          ],
+          "resources": [
+            "customresourcedefinitions"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "cephblockpoolradosnamespaces.ceph.rook.io",
+            "cephblockpools.ceph.rook.io",
+            "cephbucketnotifications.ceph.rook.io",
+            "cephbuckettopics.ceph.rook.io",
+            "cephclients.ceph.rook.io",
+            "cephclusters.ceph.rook.io",
+            "cephconnections.csi.ceph.io",
+            "cephcosidrivers.ceph.rook.io",
+            "cephfilesystemmirrors.ceph.rook.io",
+            "cephfilesystems.ceph.rook.io",
+            "cephfilesystemsubvolumegroups.ceph.rook.io",
+            "cephnfses.ceph.rook.io",
+            "cephnvmeofgateways.ceph.rook.io",
+            "cephobjectrealms.ceph.rook.io",
+            "cephobjectstoreaccounts.ceph.rook.io",
+            "cephobjectstores.ceph.rook.io",
+            "cephobjectstoreusers.ceph.rook.io",
+            "cephobjectzonegroups.ceph.rook.io",
+            "cephobjectzones.ceph.rook.io",
+            "cephrbdmirrors.ceph.rook.io",
+            "clientprofilemappings.csi.ceph.io",
+            "clientprofiles.csi.ceph.io",
+            "drivers.csi.ceph.io",
+            "objectbucketclaims.objectbucket.io",
+            "objectbuckets.objectbucket.io",
+            "operatorconfigs.csi.ceph.io"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "serviceaccounts"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "ceph-csi",
+            "objectstorage-provisioner",
+            "rook-ceph-cephfs-csi-ceph-com-ctrlplugin-sa",
+            "rook-ceph-cephfs-csi-ceph-com-nodeplugin-sa",
+            "rook-ceph-cmd-reporter",
+            "rook-ceph-default",
+            "rook-ceph-mgr",
+            "rook-ceph-nvmeof",
+            "rook-ceph-osd",
+            "rook-ceph-purge-osd",
+            "rook-ceph-rbd-csi-ceph-com-ctrlplugin-sa",
+            "rook-ceph-rbd-csi-ceph-com-nodeplugin-sa",
+            "rook-ceph-rgw",
+            "rook-ceph-system"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "validatingadmissionpolicies"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-consumer-storage"
+          ]
+        },
+        {
+          "apiGroups": [
+            "admissionregistration.k8s.io"
+          ],
+          "resources": [
+            "validatingadmissionpolicybindings"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-consumer-storage"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "networkpolicies"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-verification-default-deny"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "clusterrolebindings"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "ceph-csi-manager-rolebinding",
+            "ceph-csi-metrics-auth-rolebinding",
+            "objectstorage-provisioner-role-binding",
+            "opensphere-ceph-consumer-storage-owner",
+            "rook-ceph-cephfs-csi-ceph-com-ctrlplugin-crb",
+            "rook-ceph-cephfs-csi-ceph-com-nodeplugin-crb",
+            "rook-ceph-global",
+            "rook-ceph-mgr-cluster",
+            "rook-ceph-object-bucket",
+            "rook-ceph-osd",
+            "rook-ceph-rbd-csi-ceph-com-ctrlplugin-crb",
+            "rook-ceph-rbd-csi-ceph-com-nodeplugin-crb",
+            "rook-ceph-system"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "clusterroles"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "ceph-csi-cephconnection-viewer-role",
+            "ceph-csi-cephconnections-editor-role",
+            "ceph-csi-clientprofile-viewer-role",
+            "ceph-csi-clientprofilemapping-editor-role",
+            "ceph-csi-clientprofilemapping-viewer-role",
+            "ceph-csi-clientprofiles-editor-role",
+            "ceph-csi-driver-editor-role",
+            "ceph-csi-driver-viewer-role",
+            "ceph-csi-manager-role",
+            "ceph-csi-metrics-auth-role",
+            "ceph-csi-metrics-reader",
+            "ceph-csi-operatorconfig-editor-role",
+            "ceph-csi-operatorconfig-viewer-role",
+            "objectstorage-provisioner-role",
+            "opensphere-ceph-consumer-storage-owner",
+            "rook-ceph-cephfs-csi-ceph-com-ctrlplugin-cr",
+            "rook-ceph-cephfs-csi-ceph-com-nodeplugin-cr",
+            "rook-ceph-cluster-mgmt",
+            "rook-ceph-global",
+            "rook-ceph-mgr-cluster",
+            "rook-ceph-mgr-system",
+            "rook-ceph-object-bucket",
+            "rook-ceph-osd",
+            "rook-ceph-rbd-csi-ceph-com-ctrlplugin-cr",
+            "rook-ceph-rbd-csi-ceph-com-nodeplugin-cr",
+            "rook-ceph-system"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "rolebindings"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-import-owner"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "roles"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-import-owner"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "rolebindings"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-verification-runner"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "roles"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-verification-runner"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "rolebindings"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-verification-image-reader"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "roles"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "opensphere-ceph-verification-image-reader"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "rolebindings"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "ceph-csi-leader-election-rolebinding",
+            "opensphere-ceph-runtime-owner",
+            "rook-ceph-cephfs-csi-ceph-com-ctrlplugin-rb",
+            "rook-ceph-cephfs-csi-ceph-com-nodeplugin-rb",
+            "rook-ceph-cluster-mgmt",
+            "rook-ceph-cmd-reporter",
+            "rook-ceph-mgr",
+            "rook-ceph-mgr-system",
+            "rook-ceph-osd",
+            "rook-ceph-purge-osd",
+            "rook-ceph-rbd-csi-ceph-com-ctrlplugin-rb",
+            "rook-ceph-rbd-csi-ceph-com-nodeplugin-rb",
+            "rook-ceph-system"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "roles"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "ceph-csi-leader-election-role",
+            "opensphere-ceph-runtime-owner",
+            "rook-ceph-cephfs-csi-ceph-com-ctrlplugin-r",
+            "rook-ceph-cephfs-csi-ceph-com-nodeplugin-r",
+            "rook-ceph-cmd-reporter",
+            "rook-ceph-mgr",
+            "rook-ceph-osd",
+            "rook-ceph-purge-osd",
+            "rook-ceph-rbd-csi-ceph-com-ctrlplugin-r",
+            "rook-ceph-rbd-csi-ceph-com-nodeplugin-r",
+            "rook-ceph-system"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "deployments"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "ceph-csi-controller-manager",
+            "rook-ceph-operator"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "rook-ceph-operator-config",
+            "rook-csi-operator-image-set-configmap"
+          ]
+        },
+        {
+          "apiGroups": [
+            "csi.ceph.io"
+          ],
+          "resources": [
+            "drivers"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "rook-ceph.cephfs.csi.ceph.com",
+            "rook-ceph.rbd.csi.ceph.com"
+          ]
+        },
+        {
+          "apiGroups": [
+            "csi.ceph.io"
+          ],
+          "resources": [
+            "operatorconfigs"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "ceph-csi-operator-config"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "opensphere-ceph-preparation-inspect",
+        "labels": {
+          "opensphere.io/ceph-preparation": "profile-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "opensphere-ceph-preparation-inspect"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-cluster-manager-runtime",
+          "namespace": "opensphere-console"
+        }
+      ]
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "NetworkPolicy",
+      "metadata": {
+        "name": "opensphere-ceph-preparation-worker",
+        "namespace": "opensphere-console",
+        "labels": {
+          "opensphere.io/ceph-preparation": "profile-v1"
+        }
+      },
+      "spec": {
+        "podSelector": {
+          "matchLabels": {
+            "opensphere.io/ceph-preparation": "v1"
+          }
+        },
+        "policyTypes": [
+          "Ingress",
+          "Egress"
+        ],
+        "ingress": [],
+        "egress": [
+          {
+            "ports": [
+              {
+                "protocol": "TCP",
+                "port": 443
+              },
+              {
+                "protocol": "TCP",
+                "port": 6443
+              }
+            ]
+          },
+          {
+            "to": [
+              {
+                "namespaceSelector": {
+                  "matchLabels": {
+                    "kubernetes.io/metadata.name": "kube-system"
+                  }
+                }
+              }
+            ],
+            "ports": [
+              {
+                "protocol": "UDP",
+                "port": 53
+              },
+              {
+                "protocol": "TCP",
+                "port": 53
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

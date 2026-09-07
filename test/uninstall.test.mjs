@@ -35,6 +35,10 @@ test('uninstall refuses to reach Kubernetes without the explicit destructive con
 
 test('managed cluster RBAC owns every cluster authority installed by Console bootstrap', () => {
   assert.deepEqual(MANAGED_CLUSTER_RBAC, [
+    'clusterrolebinding/opensphere-ceph-preparation-worker',
+    'clusterrolebinding/opensphere-ceph-preparation-inspect',
+    'clusterrole/opensphere-ceph-preparation-worker',
+    'clusterrole/opensphere-ceph-preparation-inspect',
     'clusterrolebinding/opensphere-extension-controller-cli-downloads',
     'clusterrolebinding/opensphere-registry',
     'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
@@ -53,6 +57,10 @@ test('managed cluster RBAC owns every cluster authority installed by Console boo
 
 test('managed uninstall owns only Console bootstrap admission policies', () => {
   assert.deepEqual(MANAGED_CLUSTER_POLICIES, [
+    'validatingadmissionpolicybinding/opensphere-ceph-preparation-job',
+    'validatingadmissionpolicybinding/opensphere-ceph-preparation-worker',
+    'validatingadmissionpolicy/opensphere-ceph-preparation-job',
+    'validatingadmissionpolicy/opensphere-ceph-preparation-worker',
     'validatingadmissionpolicybinding/opensphere-console-manual-ui-contract',
     'validatingadmissionpolicy/opensphere-console-manual-ui-contract',
     'validatingadmissionpolicybinding/opensphere-console-image-integrity-workload',

@@ -7,18 +7,25 @@ OpenSphere OS Console의 신뢰 가능한 최초 설치, 재개, 검증, 업그�
 
 Setup CLI는 Windows에 설치해 상시 사용하는 프로그램이 아니다. 필요한 때 실행해 Kubernetes의 Console을 준비·설치·검증하고 종료한다. **Setup 설치, PATH 등록, 서비스 등록은 하지 않는다.**
 
-현재 소스 버전은 `0.5.0-edge.30`이며 OpenSphere 전용 OAuth App의 Device Flow를 포함한다. 이번 버전은 Console의 네이티브 OSAA·OSDST·OS Shell core와 전용 데이터베이스 권한, TLS, 세션 registry credential을 fresh bootstrap에 포함한다. [변경 사항](docs/CONSOLE-NATIVE-RUNTIME-EDGE30.md)을 참고한다.
+현재 소스 버전은 `0.5.0-edge.32`입니다. 기존 OAuth·포터블 실행 계약을 유지하며 **Ceph 연결 준비를 22 → OS Shell → Cluster Manager로 실행하기 위한 고정 Job 프로필**을 포함합니다. [이번 변경과 경계](docs/CEPH-PREPARATION-EDGE32.md)를 참고하십시오.
 
-**현재 수정 범위:** edge.30은 governed Console source를 `1b2f63cd533fdad621f82294a82f3e81b7cb4d06`으로 잠근다. bootstrap은 canonical C_API와 별도로 OSAA Gateway, OSDST, OS Shell API·Gateway·Reconciler를 설치하고 migration `opensphere-console/20260905/0035`가 exact release evidence를 활성화한 경우에만 native runtime을 Ready로 인정한다. 이미지 기동이나 단위 시험만으로 전체 Kubernetes 설치 성공을 표시하지 않는다.
+Setup은 최초 Console bootstrap에서 실행 프로필만 준비합니다. Rook·CSI의 실제 설치는 Console의 22 또는 같은 OS Shell 명령으로 요청합니다. 기존 localhost edge Console에는 아래 명령으로 프로필을 보완할 수 있습니다.
+
+```powershell
+.\opensphere-setup.exe --channel edge prepare-ceph --context docker-desktop
+.\opensphere-setup.exe --channel edge prepare-ceph --context docker-desktop --apply
+```
+
+첫 명령은 서버 dry-run이며 두 번째만 적용합니다. 이 명령이 성공해도 Rook 설치나 외부 Ceph 연결 완료를 뜻하지 않습니다. Console source lock은 기존 `baeac27377a5e843d8ffe82992894bee53864e34`를 유지합니다.
 
 ### Windows amd64 — 한 번 다운로드하고 재사용하는 포터블 실행 파일
 
-[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.30/opensphere-setup.exe)
+[**opensphere-setup.exe 다운로드**](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.5.0-edge.32/opensphere-setup.exe)
 
 ```powershell
 .\opensphere-setup.exe version
 .\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --registry-auth oauth
-.\opensphere-setup.exe --version 0.5.0-edge.30 resolve --release edge --registry-auth oauth
+.\opensphere-setup.exe --version 0.5.0-edge.32 resolve --release edge --registry-auth oauth
 ```
 
 버전·채널 선택자는 명령 앞에 두며 상호 배타적이다. 옵션을 생략하면 EXE가 발행된 exact Release를 사용한다. `--release`와 `--lock`은 Console 배포 선택자다.
