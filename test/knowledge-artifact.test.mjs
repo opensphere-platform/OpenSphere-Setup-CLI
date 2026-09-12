@@ -7,7 +7,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { extractKnowledgeLayer, materializeKnowledge, renderKnowledgeManifest, KNOWLEDGE_SLOT } from '../src/knowledge-artifact.mjs';
+import { extractKnowledgeLayer, materializeKnowledge, materializeKnowledgeDirectory, renderKnowledgeManifest, KNOWLEDGE_SLOT } from '../src/knowledge-artifact.mjs';
 import contract from '../src/knowledge-package.cjs';
 import { fetchManifest, pruneReleaseResources } from '../src/bootstrap.mjs';
 import { verifyKnowledgeDelivery } from '../src/knowledge-delivery.mjs';
@@ -75,6 +75,16 @@ test('exact data-only OCI bytes become immutable ConfigMaps without Docker, file
     } finally { rmSync(dir, { recursive: true, force: true }); }
   }
 });
+test('native installer receives the exact verified package in its fixed file format', async () => {
+  const f = await fixture(); const dir=mkdtempSync(path.join(os.tmpdir(),'knowledge-native-'));
+  try {
+    await materializeKnowledgeDirectory(f.lock,dir,{fetchImpl:f.fetchImpl});
+    assert.deepEqual(contract.readBundleBytes(dir,fs,path),f.bytes);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir,'lock.json'),'utf8')),f.lock);
+    assert.equal(contract.validatePackage(f.lock,contract.readBundleBytes(dir,fs,path)).version,f.lock.version);
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+});
+
 test('OCI digest and provenance tampering fail before a deployable manifest exists', async () => {
   const f = await fixture(); f.objects.set(f.layerDescriptor.digest, Buffer.from('corrupt'));
   await assert.rejects(materializeKnowledge(f.lock, { fetchImpl: f.fetchImpl }), /digest or length mismatch/);

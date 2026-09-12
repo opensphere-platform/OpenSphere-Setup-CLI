@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
+import {assertForwardRepair,installationRecordDigest} from '../src/forward-repair.mjs';
 import {
   bootstrap,
   COMPONENT_ROLLOUTS,
@@ -285,6 +286,75 @@ function runtime(previous, events, {
     }
   };
 }
+
+function repairFixture() {
+  const {base:previous,target}=JSON.parse(readFileSync(new URL('./fixtures/knowledge-release-v1.json',import.meta.url)));
+  const config={architecture:'supabase-data-identity+gitea-change-authority',channel:'edge',
+    consoleUrl:'https://localhost:1114',storageClass:'standard',authEnvironment:'development',
+    releaseDigest:previous.releaseDigest,initialAdmin:{username:'admin'}};
+  const record={apiVersion:'v1',kind:'ConfigMap',metadata:{namespace:'opensphere-console',
+    name:'opensphere-installation-lock',uid:'original-object',resourceVersion:'10'},
+    data:{'release.json':JSON.stringify(previous),'config.json':JSON.stringify(config),
+      'state.json':JSON.stringify({phase:'Failed'})}};
+  return {previous,target,record,config};
+}
+
+test('forward repair requires the reviewed record and rejects healthy, remote and replaced installations',()=>{
+  const {previous,target,record}=repairFixture();
+  const args={previous,target,record,context:'docker-desktop',expectedRecordDigest:installationRecordDigest(record)};
+  assert.equal(assertForwardRepair(args).rollbackAvailable,false);
+  assert.throws(()=>assertForwardRepair({...args,context:'production'}),/restricted/);
+  assert.throws(()=>assertForwardRepair({...args,expectedRecordDigest:undefined}),/review/);
+  const replaced=structuredClone(record); replaced.metadata.uid='replacement';
+  assert.throws(()=>assertForwardRepair({...args,record:replaced}),/review/);
+  const ready=structuredClone(record);ready.data['state.json']=JSON.stringify({phase:'Ready'});
+  assert.throws(()=>assertForwardRepair({...args,record:ready,expectedRecordDigest:installationRecordDigest(ready)}),/ordinary upgrade/);
+  const wrong=structuredClone(record);const config=JSON.parse(wrong.data['config.json']);config.consoleUrl='https://production.example';
+  wrong.data['config.json']=JSON.stringify(config);
+  assert.throws(()=>assertForwardRepair({...args,record:wrong,expectedRecordDigest:installationRecordDigest(wrong)}),/localhost/);
+});
+
+test('forward repair verifies the target, retains failed state and resumes without restoring or pruning old resources',async()=>{
+  const fixture=repairFixture(),events=[],records=[];let installed=fixture.previous,record=fixture.record,fail=true;
+  const operations=runtime(installed,events,{recordedInventory:[{apiVersion:'v1',kind:'ConfigMap',namespace:'opensphere-console',name:'retained'}]});
+  operations.readInstallationLock=()=>installed;
+  operations.readInstallationConfig=()=>JSON.parse(record.data['config.json']);
+  operations.readInstallationRecord=()=>structuredClone(record);
+  operations.currentKubeContext=()=> 'docker-desktop';
+  operations.recordInstallationState=(release,_sc,_admin,_url,_env,_tls,phase,options)=>{
+    assert.equal(options.recordPrecondition.uid,record.metadata.uid);
+    assert.equal(options.recordPrecondition.resourceVersion,record.metadata.resourceVersion);
+    assert.equal(options.forwardRepair.rollbackAvailable,false);
+    installed=release;record.data['release.json']=JSON.stringify(release);
+    record.data['config.json']=JSON.stringify({...fixture.config,releaseDigest:release.releaseDigest});
+    record.data['state.json']=JSON.stringify({phase});
+    record.metadata.resourceVersion=String(Number(record.metadata.resourceVersion)+1);
+    records.push(phase);
+  };
+  operations.verifyInstallation=async()=>{if(fail)throw Error('owner data unavailable');return {verifiedAt:'2026-09-12T00:00:00Z'};};
+  await assert.rejects(upgrade(installed,fixture.target,{runtime:operations,forwardRepairRecordDigest:installationRecordDigest(record)}),/no automatic rollback/);
+  assert.equal(records.at(-1),'Failed');assert.ok(!records.includes('Ready'));
+  assert.ok(events.filter(e=>e.startsWith('supply:')).length===1);
+  assert.ok(!events.some(e=>e.includes('롤백')||e.startsWith('prune:')||e.startsWith('delete-namespace:')));
+  fail=false;
+  assert.equal((await upgrade(installed,fixture.target,{runtime:operations,forwardRepairRecordDigest:installationRecordDigest(record)})).changed,true);
+  assert.equal(records.at(-1),'Ready');
+});
+
+test('forward repair does not begin when target provenance fails or the reviewed record changes during preparation',async()=>{
+  for(const failure of ['target','record']) {
+    const {previous,target,record,config}=repairFixture(),events=[];
+    const operations=runtime(previous,events,{recordedInventory:[{apiVersion:'v1',kind:'ConfigMap',namespace:'opensphere-console',name:'retained'}]});
+    operations.readInstallationRecord=()=>structuredClone(record);
+    operations.readInstallationConfig=()=>config;
+    operations.currentKubeContext=()=> 'docker-desktop';
+    if(failure==='target') operations.verifyReleaseLock=async()=>{throw Error('Target signature invalid');};
+    else {const prepare=operations.prepareComponentRelease;operations.prepareComponentRelease=async(...args)=>{
+      const result=await prepare(...args);record.metadata.resourceVersion='changed';return result;};}
+    await assert.rejects(upgrade(previous,target,{runtime:operations,forwardRepairRecordDigest:installationRecordDigest(record)}),failure==='target'?/signature/:/fresh repair plan/);
+    assert.ok(!events.some(e=>e.startsWith('install')||e.startsWith('record:')||e.startsWith('prune:')));
+  }
+});
 
 test('Knowledge-only upgrade and failure recovery retain all images and persist the exact data pointer', async()=>{
  const {base:previous,target}=JSON.parse(readFileSync(new URL('./fixtures/knowledge-release-v1.json',import.meta.url)));

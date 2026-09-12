@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { decodeKnowledgeImage, extractKnowledgeLayer as sharedExtract } from './knowledge-oci.mjs';
 import tar from 'tar-stream';
 import { registryToken } from './release.mjs';
@@ -75,4 +77,22 @@ export async function renderKnowledgeManifest(sourceYaml, { readLock, admittedLo
   const projected = await materialize(lock, { registryCredentials });
   return projected.configMaps.map(cm => JSON.stringify(cm)).join('\n---\n') + '\n---\n'
     + sourceYaml.replace(KNOWLEDGE_SLOT, JSON.stringify(projected.sources));
+}
+
+// Materialize only fixed filenames produced by the validated data-only contract.
+// The native installer uses this same projection; no embedded stale bundle.
+export async function materializeKnowledgeDirectory(lock, directory, options = {}) {
+  const projection = await materializeKnowledge(lock, options);
+  await mkdir(directory, { recursive: true });
+  for (const map of projection.configMaps) {
+    for (const [name, value] of Object.entries(map.data ?? {})) {
+      if (!['lock.json', 'bundle.parts.json'].includes(name)) throw Error('Unexpected Knowledge metadata filename');
+      await writeFile(join(directory, name), value, 'utf8');
+    }
+    for (const [name, value] of Object.entries(map.binaryData ?? {})) {
+      if (!/^part-[0-9]{4}$/.test(name)) throw Error('Unexpected Knowledge part filename');
+      await writeFile(join(directory, name), Buffer.from(value, 'base64'));
+    }
+  }
+  return projection;
 }

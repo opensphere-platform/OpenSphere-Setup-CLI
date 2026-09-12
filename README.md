@@ -346,3 +346,16 @@ deploy/opensphere-console.yaml
 **Console 설치와 운영 인계는 별도 호환 조건이다.** OAuth credential을 `bootstrap`에 넘기려면 대상 Console이 `registry-auth/v1`을 활성화해야 한다. 기존 Console 릴리스가 이를 지원하지 않으면 namespace/credential 쓰기 전에 중단한다. 이 Setup 릴리스만으로 기존 Console에 refresh worker를 설치하거나 활성화하지 않는다. 기존 설치의 `upgrade --registry-auth oauth`는 임시 인증을 공급망 검증에만 사용하며 기존 운영 Secret을 보존한다. 운영 credential 교체·갱신은 Console 재인증 또는 별도 복구 절차를 따른다.
 
 [인증·저장·재인증 계약과 현재 검증 범위](docs/REGISTRY-AUTH-LIFECYCLE.md)를 참고한다.
+
+## 불완전한 localhost edge 설치의 복구
+
+설치 기록이 불일치하거나 이전 설치가 실패해 검증된 롤백 기준선이 없으면, 정상 대상에 대한 명시적 전진 복구를 사용할 수 있다. 일반 `upgrade`는 계속 이전 버전과 새 버전을 모두 검증한다. 이 기능은 `docker-desktop`, `https://localhost:1114`, local edge의 같은 구성요소 집합에 한정한다.
+
+```powershell
+.\opensphere-setup.exe upgrade --release edge --context docker-desktop --lock .\reviewed-target.json --repair-plan
+.\opensphere-setup.exe upgrade --release edge --context docker-desktop --lock .\reviewed-target.json --forward-repair sha256:REVIEWED_INSTALLATION_RECORD_DIGEST
+```
+
+첫 명령은 새 대상의 이미지·출처·계약을 정상 검증하고 설치 기록의 검토 digest만 출력한다. 두 번째 명령의 digest에는 실제 첫 출력값을 넣는다. 검토 후 설치 기록이 바뀌면 실행을 거부한다. 실행은 새 대상과 `Installing`을 먼저 원자적으로 기록하며, 검증 성공 후에만 `Ready`를 기록한다. 실패하면 `Failed`를 유지하고 같은 대상으로 다시 검토·재실행할 수 있다. 이전 기록을 정상이라고 재작성하거나 검증되지 않은 구버전으로 자동 롤백하지 않으며, 이 경로에서는 자원을 삭제하지 않는다. 정상 서비스 복원을 보장하는 백업 기능은 아니므로 실제 대상과 서비스 영향을 검토한 뒤 실행한다.
+
+OS Shell 제어기·실행 이미지·OS CLI는 함께 고정한 native artifact로 갱신한다. Ready 여부뿐 아니라 제어기의 실제 runtime 이미지 참조와 CLI digest도 검증한다. 신규 설치는 같은 릴리스의 검증된 Knowledge 묶음을 Native Runtime 설치기에 전달한다.

@@ -1102,8 +1102,12 @@ export function validateLock(lock, {
     if (!Array.isArray(changedAuxiliary)
         || changedAuxiliary.length !== canonicalChangedAuxiliary.length
         || changedAuxiliary.some((name, index) => name !== canonicalChangedAuxiliary[index])
-        || changedAuxiliary.some((name) => name !== 'consoleIndexContent')) {
-      throw new Error('Component release lock changedAuxiliaryArtifacts must contain only the canonical Console index artifact');
+        || changedAuxiliary.some((name) => !Object.hasOwn(AUXILIARY_ARTIFACTS, name))) {
+      throw new Error('Component release lock changedAuxiliaryArtifacts must contain only canonical Console artifacts');
+    }
+    if (changedAuxiliary.some(name => name === 'osShellControl' || name === 'osShellRuntime')
+        && !['cliArtifacts', 'osShellControl', 'osShellRuntime'].every(name => changedAuxiliary.includes(name))) {
+      throw new Error('OS Shell updates require matching cliArtifacts, osShellControl and osShellRuntime together');
     }
     if (changed.length === 0 && changedAuxiliary.length === 0 && lock.changedKnowledge !== true) {
       throw new Error('Component release lock must change at least one component or auxiliary artifact');

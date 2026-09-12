@@ -380,6 +380,18 @@ export function workloadReady(resource) {
     && Number(resource.status?.unavailableReplicas ?? 0) === 0;
 }
 
+export function verifyShellRuntimeReferences(lock, container) {
+  const expected = lock.auxiliaryArtifacts?.osShellRuntime?.image;
+  const expectedCli = lock.auxiliaryArtifacts?.cliArtifacts?.image?.split('@')[1];
+  const runtime = (container.env ?? []).filter(entry => entry.name === 'OS_SHELL_RUNTIME_IMAGE');
+  const cli = (container.env ?? []).filter(entry => entry.name === 'OS_SHELL_OS_ARTIFACT_DIGEST');
+  if (!expected || runtime.length !== 1 || runtime[0].value !== expected
+    || !expectedCli || cli.length !== 1 || cli[0].value !== expectedCli) {
+    throw new Error('OS Shell control, admitted runtime and CLI artifact references differ from the release');
+  }
+  return true;
+}
+
 function verifyWorkloads(lock, {
   requireZeroRestarts,
   componentSelection = null,
@@ -416,13 +428,14 @@ function verifyWorkloads(lock, {
     if (!expectedImage || container.image !== expectedImage) {
       throw new Error(`Runtime image differs from release lock: ${spec.namespace}/${spec.name} (${container.image} != ${expectedImage})`);
     }
+    if (spec.artifact === 'osShellControl') verifyShellRuntimeReferences(lock, container);
     const pullSecrets = (podSpec?.imagePullSecrets ?? []).map(({ name }) => name);
     if (!pullSecrets.includes(REGISTRY_PULL_SECRET)) {
       throw new Error(`Workload does not reference the governed registry pull Secret: ${spec.namespace}/${spec.name}`);
     }
     expected.add(expectedImage);
     resources.push(`${spec.namespace}/${spec.kind}/${spec.name}`);
-    if (!selectedComponents || selectedComponents.has(spec.component ?? spec.ownerComponent)) {
+    if (!selectedComponents || selectedComponents.has(spec.component ?? spec.artifact ?? spec.ownerComponent)) {
       if (spec.kind !== 'cronjob' && !workloadReady(resource)) {
         throw new Error(`Changed workload is not Ready: ${spec.namespace}/${spec.kind}/${spec.name}`);
       }

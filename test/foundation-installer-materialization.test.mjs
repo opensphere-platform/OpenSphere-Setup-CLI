@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
+import { join } from 'node:path';
 import { renderRegistryKubernetesEgress, KUBERNETES_EGRESS_SLOT } from '../src/registry-runtime-access.mjs';
 
 // Execute the actual materialization function with only external I/O isolated.
@@ -13,14 +14,17 @@ assert.ok(begin >= 0 && end > begin);
 const body = source.slice(begin, end);
 const raw = 'image: __OPENSPHERE_CONSOLE_API_IMAGE__\norigin: __OPENSPHERE_CONSOLE_URL__\negress:\n  - ' + KUBERNETES_EGRESS_SLOT + '\n';
 const rules = [{to:[{ipBlock:{cidr:'10.96.0.1/32'}}],ports:[{protocol:'TCP',port:443}]}];
+const KNOWLEDGE_LOCK_PATH='apps/osaa-gateway/knowledge-bundle/lock.json';
+const knowledge={schema:'synthetic-source-package',sha256:'a'.repeat(64),knowledgeImage:'synthetic-verified-image'};
 function harness(discovered = rules) {
-  const writes = []; let discoveries = 0;
+  const writes = []; const knowledgeCalls=[]; let discoveries = 0;
   const context = {
-    Set, Promise, KUBERNETES_EGRESS_SLOT,
+    Set, Promise, KUBERNETES_EGRESS_SLOT, KNOWLEDGE_LOCK_PATH, join,
     isTargetConsoleRelease: () => true,
     foundationManifestSpecs: () => [{path:'apps/console-api/deploy.yaml'}],
-    foundationArtifactPaths: () => [],
-    fetchReleaseArtifact: async () => raw,
+    foundationArtifactPaths: () => [KNOWLEDGE_LOCK_PATH],
+    fetchReleaseArtifact: async (_lock,path) => path===KNOWLEDGE_LOCK_PATH ? JSON.stringify(knowledge) : raw,
+    materializeKnowledgeDirectory: async (lock,directory,options) => {knowledgeCalls.push({lock,directory,options});},
     kubectl: () => { throw Error('No real kubectl in materialization test'); },
     discoverRegistryKubernetesEgress: () => { discoveries++; return discovered; },
     renderRegistryKubernetesEgress,
@@ -31,18 +35,21 @@ function harness(discovered = rules) {
     materializeSupabaseMigrationSet: async () => ({evidence:{}}),
     writeReleaseArtifact: async (_root,path,contents) => { writes.push({path,contents}); },
   };
-  return { run:vm.runInNewContext('(' + body + ')',context), writes, discoveries:()=>discoveries };
+  return { run:vm.runInNewContext('(' + body + ')',context), writes, knowledgeCalls, discoveries:()=>discoveries };
 }
 test('materialized target installer receives discovered egress and retains only PowerShell-owned placeholders', async () => {
   const h = harness();
-  const result = await h.run({sourceRevision:'a'.repeat(40)},'/unused','standard','https://localhost:1114','development');
+  const result = await h.run({sourceRevision:'a'.repeat(40),knowledge},'/unused','standard','https://localhost:1114','development');
   assert.equal(h.discoveries(),1);
-  assert.equal(h.writes.length,1);
-  assert.equal(h.writes[0].path,'apps/console-api/deploy.yaml');
-  assert.match(h.writes[0].contents,/10.96.0.1\/32/);
-  assert.doesNotMatch(h.writes[0].contents,/__OPENSPHERE_REGISTRY_KUBERNETES_EGRESS__/);
-  assert.match(h.writes[0].contents,/__OPENSPHERE_CONSOLE_API_IMAGE__/);
-  assert.match(h.writes[0].contents,/__OPENSPHERE_CONSOLE_URL__/);
+  assert.equal(h.writes.length,2);
+  const installer=h.writes.find(w=>w.path==='apps/console-api/deploy.yaml');
+  assert.ok(installer);
+  assert.match(installer.contents,/10.96.0.1\/32/);
+  assert.doesNotMatch(installer.contents,/__OPENSPHERE_REGISTRY_KUBERNETES_EGRESS__/);
+  assert.match(installer.contents,/__OPENSPHERE_CONSOLE_API_IMAGE__/);
+  assert.match(installer.contents,/__OPENSPHERE_CONSOLE_URL__/);
+  assert.equal(h.knowledgeCalls.length,1);
+  assert.equal(result.knowledgeDirectory,join('/unused','verified-knowledge'));
   assert.doesNotMatch(result.release[0].yaml,/__OPENSPHERE_/);
 });
 test('failed API discovery cannot write an unresolved installer template', async () => {

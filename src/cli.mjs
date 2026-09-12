@@ -12,11 +12,13 @@ import {
   migrateLegacyInstallationLock,
   preflightReleaseArtifacts,
   readInstallationLock,
+  readInstallationRecord,
   uninstallManagedInstallation,
   upgrade
 } from './bootstrap.mjs';
 import { installConsoleCli } from './install-cli.mjs';
-import { normalizeRegistryCredentials, hostRegistryCredentials, validateChannel, validateLock } from './release.mjs';
+import { normalizeRegistryCredentials, hostRegistryCredentials, validateChannel, validateLock, verifyReleaseLock, validateReleaseTransition } from './release.mjs';
+import { assertForwardRepair, installationRecordDigest } from './forward-repair.mjs';
 import {resolveInstallationRelease} from './installation-release.mjs';
 import { takeSourceArtifactCredential } from './source-artifact-credential.mjs';
 import { assertKubectl, kubectl } from './process.mjs';
@@ -146,6 +148,7 @@ Usage:
   opensphere-setup upgrade --release <edge|candidate|stable> [--lock <verified-lock-file>]
       [--context <kube-context>] [--storage-class <name>] [--console <https-origin>]
       [--registry-username <github-login> --registry-token-stdin]
+      [--repair-plan | --forward-repair <reviewed-installation-record-sha256>]
   opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
   opensphere-setup recovery-drill --component <supabase|gitea> --manifest-key <s3-object-key>
       --confirm ISOLATED-RECOVERY-DRILL [--context <kube-context>]
@@ -168,6 +171,9 @@ Usage:
 Fresh bootstrap resolves the selected channel at install time. Resume always uses the
 cluster installation lock. --lock is an explicit immutable input; it is never a cache hint.
 Kubernetes receives digest-pinned images only.
+Forward repair requires --lock, docker-desktop and an incomplete localhost edge
+installation. --repair-plan verifies the target without changing Kubernetes.
+Repair never automatically restores an unverified old release or deletes resources.
 Registry authentication: --registry-auth auto|oauth|pat|anonymous; OAuth uses the bundled OpenSphere App; --github-client-id overrides its public Client ID. OAuth credentials stay in memory until bootstrap handoff. PAT tokens require read:packages only; broad gh login tokens are rejected.
 Canonical Console source artifacts are public; OPENSPHERE_CONSOLE_SOURCE_TOKEN is optional authenticated Contents API access and remains separate from GHCR credentials.`);
 }
@@ -196,6 +202,12 @@ async function main() {
   const channel = option(['--release', '-r'], 'stable');
   const lockPath = resolve(option('--lock', `.opensphere-setup/${channel}-release-lock.json`));
   const explicitLock = hasOption('--lock');
+  const repairPlan = hasOption('--repair-plan');
+  const forwardRepairRecordDigest = option('--forward-repair', undefined);
+  if ((repairPlan || forwardRepairRecordDigest !== undefined)
+    && (command !== 'upgrade' || !explicitLock || (repairPlan && forwardRepairRecordDigest !== undefined))) {
+    throw Error('Use upgrade --lock with either --repair-plan or --forward-repair <reviewed-record-sha256>');
+  }
   const context = option('--context', '');
   const suppliedConsoleUrl = hasOption('--console') ? normalizeConsoleUrl(option('--console', '')) : undefined;
   const authEnvironment = hasOption('--auth-environment') ? option('--auth-environment', '') : undefined;
@@ -479,7 +491,7 @@ async function main() {
     const registryCredentials = await registryCredentialsOption();
     assertKubectl();
     const targetPlatforms = readNodePlatforms();
-    const migrated = await migrateLegacyInstallationLock();
+    const migrated = (repairPlan || forwardRepairRecordDigest !== undefined) ? false : await migrateLegacyInstallationLock();
     if (migrated) console.log(`[마이그레이션] 기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
     const installed = readInstallationLock();
     if (!installed) throw new Error('No managed OpenSphere installation lock was found');
@@ -493,12 +505,24 @@ async function main() {
       await writeLock(lockPath, target);
       console.log(`[완료] ${channel} target을 ${target.releaseDigest}로 잠금`);
     }
+    if (repairPlan) {
+      validateReleaseTransition(installed,target);
+      const record = readInstallationRecord();
+      const plan = assertForwardRepair({previous:installed,target,record,
+        expectedRecordDigest:installationRecordDigest(record),
+        context:process.env.OPENSPHERE_KUBE_CONTEXT || kubectl(['config','current-context'],{capture:true})});
+      await verifyReleaseLock(target,{registryCredentials,requiredPlatforms:targetPlatforms});
+      console.log(JSON.stringify({mode:'forward-repair',targetVerified:true,...plan},null,2));
+      console.log('[검토] 조회만 완료. 이전 버전 자동 롤백·자원 삭제 없음. 실행하려면 이 설치 기록 digest로 --forward-repair를 명시하세요.');
+      return;
+    }
     const result = await upgrade(installed, target, {
       storageClass: option('--storage-class', undefined),
       consoleUrl: suppliedConsoleUrl,
       registryCredentials,
       sourceArtifactCredential,
-      requiredPlatforms: targetPlatforms
+      requiredPlatforms: targetPlatforms,
+      forwardRepairRecordDigest
     });
     console.log(result.changed ? '[완료] release upgrade 트랜잭션 검증' : '[재사용] 이미 요청 release가 설치됨');
     console.log('[안내] 호스트 os CLI는 변경하지 않았습니다. 필요하면 install-cli를 별도로 실행하세요.');

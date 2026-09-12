@@ -12,7 +12,7 @@ import { kubectl, run } from './process.mjs';
 import { preflight } from './preflight.mjs';
 import { fetchWithRetry } from './http.mjs';
 import { sourceArtifactRequest } from './source-artifact-credential.mjs';
-import { renderKnowledgeManifest } from './knowledge-artifact.mjs';
+import { renderKnowledgeManifest, materializeKnowledgeDirectory, KNOWLEDGE_LOCK_PATH } from './knowledge-artifact.mjs';
 import {
   hostRegistryCredentials,
   isLocalEdgeLock,
@@ -51,6 +51,7 @@ import {
 import { reportReleaseProgress } from './progress.mjs';
 import { publishSetupJournal } from './setup-journal.mjs';
 import { materializeRuntimeAsset } from './runtime-assets.mjs';
+import { assertForwardRepair } from './forward-repair.mjs';
 import {HISS_EXECUTION_PROFILE,HISS_VALIDATION_ARTIFACT,verifyHissExecutionProfile,verifyHissValidationArtifact,prepareHissPrerequisites,prepareHissValidation,createHissPrerequisiteClient} from './hiss-prerequisites.mjs';
 import {prepareCephExecutionProfile} from './ceph-prerequisites.mjs';
 import {PLATFORM_CORE_ARTIFACT,verifyPlatformCoreProfile,preparePlatformCorePrerequisites} from './platform-core-prerequisites.mjs';
@@ -181,6 +182,7 @@ export const BASE_MANIFESTS = Object.freeze([
   {
     path: 'cmd/os-cli/deploy.yaml',
     requiresAuxiliaryArtifact: 'cliArtifacts',
+    componentOwners: ['cliArtifacts'],
     auxiliaryReplacements: [[
       '__OPENSPHERE_OS_CLI_IMAGE__',
       'cliArtifacts'
@@ -455,8 +457,19 @@ export const OSAA_GATEWAY_MANIFEST = Object.freeze({
   replacements: [['__OPENSPHERE_OSAA_GATEWAY_IMAGE__', 'osaaGateway']]
 });
 
+export const OS_SHELL_MANIFEST = Object.freeze({
+  path: 'apps/os-shell-control/deploy.yaml',
+  componentOwners: ['osShellControl'],
+  auxiliaryReplacements: [
+    ['__OPENSPHERE_OS_SHELL_CONTROL_IMAGE__', 'osShellControl'],
+    ['__OPENSPHERE_OS_SHELL_RUNTIME_IMAGE__', 'osShellRuntime']
+  ]
+});
+
 const ACTIVATED_MODULE_MANIFESTS = Object.freeze([
-  OSAA_GATEWAY_MANIFEST
+  OSAA_GATEWAY_MANIFEST,
+  { path: 'apps/osdst/deploy.yaml', replacements: [['__OPENSPHERE_OSDST_IMAGE__', 'osdst']] },
+  OS_SHELL_MANIFEST
 ]);
 
 const TARGET_FOUNDATION_MANIFESTS = Object.freeze([
@@ -483,6 +496,9 @@ export const FOUNDATION_ARTIFACT_PATHS = Object.freeze([
   HISS_VALIDATION_ARTIFACT,
   'scripts/Install-ConsoleApiRuntime.ps1',
   'scripts/Install-ConsoleNativeRuntime.ps1',
+  'scripts/render-knowledge-package.mjs',
+  'packages/contracts/runtime/knowledge-package.cjs',
+  KNOWLEDGE_LOCK_PATH,
   'scripts/console-migrations.mjs',
   'scripts/os-shell-tls-contract.ps1',
   'apps/osaa-gateway/deploy.yaml',
@@ -571,6 +587,10 @@ export function componentReleaseWorkloadComponents(lock) {
   if ((lock?.changedAuxiliaryArtifacts ?? []).includes('consoleIndexContent')) {
     selected.add('console');
   }
+  for (const name of lock?.changedAuxiliaryArtifacts ?? []) {
+    if (name === 'cliArtifacts') selected.add('cliArtifacts');
+    if (name === 'osShellControl' || name === 'osShellRuntime') selected.add('osShellControl');
+  }
   return [...selected].sort();
 }
 
@@ -586,7 +606,7 @@ export function componentReleaseManifestSpecs(
     const owners = [...manifestSpecComponents(spec)].filter((component) => requested.has(component));
     if (owners.length === 0) return [];
     const sourceRevisions = new Set(owners.map((component) => {
-      const sourceRevision = lock.components?.[component]?.sourceRevision;
+      const sourceRevision = (lock.components?.[component] ?? lock.auxiliaryArtifacts?.[component])?.sourceRevision;
       if (!/^[a-f0-9]{40}$/u.test(sourceRevision ?? '')) {
         throw new Error(`Component release lacks a governed source revision for ${component}`);
       }
@@ -665,6 +685,12 @@ const LEGACY_CORE_ROLLOUTS = Object.freeze([
 ]);
 
 export const COMPONENT_ROLLOUTS = Object.freeze({
+  cliArtifacts: [['opensphere-console', 'deployment/os-cli', '600s']],
+  osShellControl: [
+    ['opensphere-console', 'deployment/opensphere-shell-api', '600s'],
+    ['opensphere-console', 'deployment/opensphere-shell-gateway', '600s'],
+    ['opensphere-console', 'deployment/opensphere-shell-reconciler', '600s']
+  ],
   console: [['opensphere-console', 'deployment/opensphere-console', '600s']],
   consoleApi: [['opensphere-console', 'deployment/opensphere-console-api', '600s']],
   extensionController: [['opensphere-console', 'deployment/opensphere-extension-controller', '600s']],
@@ -931,7 +957,7 @@ export function renderManifest(
   storageClass,
   consoleUrl = defaultConsoleUrl('edge', 'development'),
   authEnvironment = 'development',
-  { sourceRevision = lock.sourceRevision, kubernetesApiEgress } = {}
+  { sourceRevision = lock.sourceRevision, kubernetesApiEgress, runtimeTemplateSource } = {}
 ) {
   let yaml = renderRegistryKubernetesEgress(sourceYaml, kubernetesApiEgress);
   for (const [pattern, component] of spec.replacements ?? []) {
@@ -963,6 +989,17 @@ export function renderManifest(
   yaml = yaml.replaceAll('__OPENSPHERE_CONSOLE_URL__', normalizedConsoleUrl);
   yaml = yaml.replaceAll('__OPENSPHERE_RELEASE_CHANNEL__', String(lock.channel));
   yaml = yaml.replaceAll('__OPENSPHERE_AUTH_ENVIRONMENT__', normalizedAuthEnvironment);
+  if (spec.path === OS_SHELL_MANIFEST.path) {
+    if (typeof runtimeTemplateSource !== 'string' || !runtimeTemplateSource.trim()) {
+      throw new Error('OS Shell render requires its exact source runtime template');
+    }
+    const artifactDigest = lock.auxiliaryArtifacts?.cliArtifacts?.image?.split('@')[1];
+    if (!/^sha256:[a-f0-9]{64}$/.test(artifactDigest ?? '')) throw new Error('OS Shell requires the governed CLI digest');
+    yaml = yaml.replaceAll('__OPENSPHERE_OS_SHELL_OS_ARTIFACT_DIGEST__', artifactDigest)
+      .replaceAll('__OPENSPHERE_OS_SHELL_MANIFEST_SHA256__', `sha256:${sha256Text(sourceYaml)}`)
+      .replaceAll('__OPENSPHERE_OS_SHELL_RUNTIME_TEMPLATE_SHA256__', `sha256:${sha256Text(runtimeTemplateSource)}`)
+      .replaceAll('__OPENSPHERE_OS_SHELL_RELEASE_EVIDENCE_REF__', `release://${lock.channel}/${lock.releaseDigest.slice(7)}/native-console-runtime`);
+  }
   if (yaml.includes('__OPENSPHERE_CONSOLE_INDEX_CONTENT_IMAGE__')) {
     const image = lock.auxiliaryArtifacts?.consoleIndexContent?.image;
     if (!/^ghcr\.io\/opensphere-platform\/opensphere-console-index-content@sha256:[a-f0-9]{64}$/.test(image ?? '')) {
@@ -1017,6 +1054,9 @@ export async function fetchManifest(
       registryCredentials
     });
   }
+  const runtimeTemplateSource = spec.path === OS_SHELL_MANIFEST.path
+    ? await fetchReleaseArtifact(lock, 'apps/os-shell-control/runtime-template.js', { sourceRevision, sourceArtifactCredential })
+    : undefined;
   return renderManifest(
     lock,
     spec,
@@ -1024,7 +1064,7 @@ export async function fetchManifest(
     storageClass,
     consoleUrl,
     authEnvironment,
-    { sourceRevision, kubernetesApiEgress: sourceYaml.includes(KUBERNETES_EGRESS_SLOT)
+    { sourceRevision, runtimeTemplateSource, kubernetesApiEgress: sourceYaml.includes(KUBERNETES_EGRESS_SLOT)
       ? discoverRegistryKubernetesEgress(kubectl) : undefined }
   );
 }
@@ -1100,7 +1140,8 @@ async function materializeFoundationInstallers(
     optionalArtifacts = new Set(),
     migrationSourceRevision = lock.sourceRevision,
     migrationEvidence = lock.releaseBom?.migrationManifest,
-    sourceArtifactCredential = null
+    sourceArtifactCredential = null,
+    registryCredentials
   } = {}
 ) {
   const target = isTargetConsoleRelease(lock);
@@ -1130,6 +1171,16 @@ async function materializeFoundationInstallers(
     return contents === null ? null : { path, contents };
   }))).filter(Boolean);
   for (const artifact of artifacts) await writeReleaseArtifact(root, artifact.path, artifact.contents);
+  let knowledgeDirectory;
+  if (target) {
+    const sourceKnowledge = JSON.parse(artifacts.find(item => item.path === KNOWLEDGE_LOCK_PATH)?.contents ?? 'null');
+    if (!sourceKnowledge || !lock.knowledge
+      || JSON.stringify(Object.entries(sourceKnowledge).sort()) !== JSON.stringify(Object.entries(lock.knowledge).sort())) {
+      throw new Error('Native installation requires the exact source-admitted Knowledge package');
+    }
+    knowledgeDirectory = join(root, 'verified-knowledge');
+    await materializeKnowledgeDirectory(lock.knowledge, knowledgeDirectory, { registryCredentials });
+  }
   const prepareHiss = target && lock.channel === 'edge' && consoleUrl === 'https://localhost:1114';
   const hissScope = prepareHiss ? {context:currentKubeContext(),channel:lock.channel,consoleUrl} : null;
   if (prepareHiss) {
@@ -1155,6 +1206,7 @@ async function materializeFoundationInstallers(
   return {
     root,
     target,
+    knowledgeDirectory,
     hissScope: prepareHiss ? hissScope : null,
     migration,
     release: manifestArtifacts.map(({ spec, rendered }) => ({
@@ -1254,6 +1306,7 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
   run('pwsh', [
     '-NoProfile', '-NonInteractive', '-File',
     join(foundation.root, 'scripts', 'Install-ConsoleNativeRuntime.ps1'),
+    '-KnowledgePackageDirectory', foundation.knowledgeDirectory,
     '-OsaaGatewayImage', lock.components.osaaGateway.image,
     '-OsdstImage', lock.components.osdst.image,
     '-OsShellControlImage', lock.auxiliaryArtifacts.osShellControl.image,
@@ -1420,7 +1473,7 @@ function preserveHostLocalTrustedKeys(existing) {
 
 function applyRelease(release, label, progress, { preserveHostLocalEdgeTrust = false } = {}) {
   for (const manifest of release) {
-    const hostLocalTrustedKeys = preserveHostLocalEdgeTrust && manifest.path === TRUST_CONFIGMAP_PATH
+    const hostLocalTrustedKeys = preserveHostLocalEdgeTrust && manifest.path.split('#')[0] === TRUST_CONFIGMAP_PATH
       ? readTrustedKeySet()
       : null;
     applyYaml(manifest.yaml);
@@ -1450,10 +1503,10 @@ export function componentReleaseWorkloadManifests(
     throw new Error('Component release requires a non-empty changed component set');
   }
   const sources = [...prepared.foundation.release, ...prepared.base];
-  const releaseSpecs = [...foundationManifestSpecs(lock), ...baseManifestSpecs(lock)];
+  const releaseSpecs = [...foundationManifestSpecs(lock), ...baseManifestSpecs(lock), ...ACTIVATED_MODULE_MANIFESTS];
   const selected = new Map();
   for (const component of changedComponents) {
-    const image = lock.components?.[component]?.image;
+    const image = (lock.components?.[component] ?? lock.auxiliaryArtifacts?.[component])?.image;
     if (!image) throw new Error(`Component release lock lacks ${component}`);
     const imageLine = new RegExp(
       `^[ \\t]*(?:-[ \\t]*)?image:[ \\t]+["']?${escapeExpression(image)}["']?[ \\t]*(?:#.*)?$`,
@@ -1511,7 +1564,7 @@ function installPreparedComponentRelease(
 ) {
   if (applyMigrations) runComponentMigrations(prepared.foundation, progress);
   const release = componentReleaseWorkloadManifests(lock, prepared, changedComponents);
-  applyRelease(release, label, progress);
+  applyRelease(release, label, progress, { preserveHostLocalEdgeTrust: isLocalEdgeLock(lock) });
 }
 
 function inventoryKey(resource) {
@@ -1870,16 +1923,28 @@ export function recordInstallationState(
     initialAdmin
   };
   const state = installationStateDocument(phase, lock, stateOptions);
-  applyYaml(`${JSON.stringify({
+  const record = {
     apiVersion: 'v1',
     kind: 'ConfigMap',
     metadata: { name: 'opensphere-installation-lock', namespace: 'opensphere-console' },
     data: {
       'release.json': JSON.stringify(lock),
       'config.json': JSON.stringify(config),
-      'state.json': JSON.stringify(state)
+      'state.json': JSON.stringify(state),
+      ...(stateOptions.forwardRepair ? {'repair.json': JSON.stringify(stateOptions.forwardRepair)} : {})
     }
-  })}\n`);
+  };
+  if (stateOptions.recordPrecondition) {
+    // Atomic tests prevent stale plans, replacement objects or another writer
+    // from being overwritten. Keep unrelated object metadata unchanged.
+    const {uid, resourceVersion} = stateOptions.recordPrecondition;
+    if (!uid || !resourceVersion) throw Error('Installation record precondition is incomplete');
+    kubectl(['-n','opensphere-console','patch','configmap','opensphere-installation-lock','--type=json','-p',JSON.stringify([
+      {op:'test',path:'/metadata/uid',value:uid},
+      {op:'test',path:'/metadata/resourceVersion',value:resourceVersion},
+      {op:'replace',path:'/data',value:record.data},
+    ])],{capture:true});
+  } else applyYaml(`${JSON.stringify(record)}\n`);
   return { config, state };
 }
 
@@ -1895,6 +1960,10 @@ function recordInitialAdmin(initialAdmin, state = 'required') {
       state
     }
   })}\n`);
+}
+
+export function readInstallationRecord() {
+  return JSON.parse(kubectl(['-n','opensphere-console','get','configmap','opensphere-installation-lock','-o','json'],{capture:true}));
 }
 
 function readInstallationConfig() {
@@ -2590,6 +2659,7 @@ export async function upgrade(
     registryCredentials,
     sourceArtifactCredential = null,
     requiredPlatforms,
+    forwardRepairRecordDigest,
     runtime = {}
   } = {}
 ) {
@@ -2601,6 +2671,8 @@ export async function upgrade(
   validateReleaseTransition(previousLock, targetLock);
   promotionBlocked(targetLock.channel);
   const operations = {
+    readInstallationRecord,
+    currentKubeContext,
     readInstallationLock,
     readInstallationConfig,
     verifyReleaseLock,
@@ -2626,8 +2698,12 @@ export async function upgrade(
     },
     ...runtime
   };
+  const repair = forwardRepairRecordDigest === undefined ? null : assertForwardRepair({
+    previous: previousLock, target: targetLock, record: operations.readInstallationRecord(),
+    expectedRecordDigest: forwardRepairRecordDigest, context: operations.currentKubeContext()
+  });
   await Promise.all([
-    operations.verifyReleaseLock(previousLock, {
+    repair ? Promise.resolve() : operations.verifyReleaseLock(previousLock, {
       registryCredentials,
       requiredPlatforms,
       allowLegacyComponentSet: true,
@@ -2651,7 +2727,7 @@ export async function upgrade(
   if (consoleUrl && normalizeConsoleUrl(consoleUrl) !== effectiveConsoleUrl) {
     throw new Error(`Installation uses Console URL ${effectiveConsoleUrl}; changing it requires endpoint migration`);
   }
-  if (previousLock.releaseDigest === targetLock.releaseDigest) {
+  if (previousLock.releaseDigest === targetLock.releaseDigest && !repair) {
     return {
       changed: false,
       lock: previousLock,
@@ -2678,13 +2754,13 @@ export async function upgrade(
   const introducedComponents = componentTransition
     ? changedComponents.filter((component) => !previousLock.components?.[component])
     : [];
-  const rollbackChangedComponents = agentIdentityCutover
+  const rollbackChangedComponents = repair ? [] : agentIdentityCutover
     ? changedWorkloadComponents.map(installedNameForCanonicalComponent)
     : changedWorkloadComponents.filter((component) => !introducedComponents.includes(component));
   const targetWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-target-'));
   const rollbackWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-rollback-'));
   try {
-    console.log('[준비] 대상 release와 이전 release rollback artifact 검증');
+    console.log(repair ? '[복구] 새 대상은 정상 검증; 불완전한 이전 기록으로 자동 롤백하지 않음' : '[준비] 대상 release와 이전 release rollback artifact 검증');
     const [target, rollback] = componentTransition
       ? await Promise.all([
         operations.prepareComponentRelease(
@@ -2755,7 +2831,25 @@ export async function upgrade(
       ? replaceComponentInventory(previousInventory, previousComponentInventory, targetComponentInventory)
       : operations.releaseResourceInventory(target.all);
     let agentIdentityMigrationCommitted = false;
+    let forwardRepairStarted = false;
+    const repairStateOptions = (extra = {}) => {
+      if (!repair) return extra;
+      const record = operations.readInstallationRecord();
+      if (record.metadata.uid !== repair.uid
+        || JSON.parse(record.data['release.json']).releaseDigest !== targetLock.releaseDigest) {
+        throw Error('Forward repair record ownership changed; refusing to overwrite another installation');
+      }
+      return {...extra, forwardRepair:repair,
+        recordPrecondition:{uid:record.metadata.uid,resourceVersion:record.metadata.resourceVersion}};
+    };
     try {
+      if (repair) {
+        assertForwardRepair({previous:previousLock,target:targetLock,record:operations.readInstallationRecord(),
+          expectedRecordDigest:forwardRepairRecordDigest,context:operations.currentKubeContext()});
+        operations.recordInstallationState(targetLock,config.storageClass,initialAdmin,effectiveConsoleUrl,
+          config.authEnvironment,config.shellTlsSecret,'Installing',{recordPrecondition:repair,forwardRepair:repair});
+        forwardRepairStarted = true;
+      }
       if (componentTransition) {
         operations.installPreparedComponentRelease(
           targetLock,
@@ -2786,7 +2880,7 @@ export async function upgrade(
         effectiveConsoleUrl,
         config.authEnvironment,
         config.shellTlsSecret,
-        'Installing'
+        'Installing', repairStateOptions()
       );
       if (componentTransition) operations.waitForComponentRollouts(changedWorkloadComponents);
       else operations.waitForCoreRollouts(targetLock);
@@ -2799,9 +2893,9 @@ export async function upgrade(
       if (agentIdentityCutover) {
         retainedKnowledge = operations.pruneReleaseResources(previousComponentInventory, targetComponentInventory) || [];
         operations.deleteAgentIdentityNamespace(LEGACY_INSTALLED_AGENT_NAMESPACE);
-      } else if (componentTransition) {
+      } else if (componentTransition && !repair) {
         retainedKnowledge = operations.pruneReleaseResources(previousComponentInventory, targetComponentInventory) || [];
-      } else {
+      } else if (!repair) {
         retainedKnowledge = operations.pruneReleaseResources(previousInventory, targetInventory) || [];
       }
       // Keep deferred objects in the persisted inventory so a later ordinary
@@ -2811,7 +2905,7 @@ export async function upgrade(
       operations.recordInstallationState(
         targetLock, config.storageClass, initialAdmin, effectiveConsoleUrl,
         config.authEnvironment, config.shellTlsSecret, 'Ready',
-        { verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: evidence.verifiedAt } }
+        repairStateOptions({ verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: evidence.verifiedAt } })
       );
       return {
         changed: true,
@@ -2820,6 +2914,19 @@ export async function upgrade(
         evidence
       };
     } catch (upgradeError) {
+      if (repair) {
+        if (forwardRepairStarted) {
+          try {
+            const options = repairStateOptions({failureCode:'forward-repair-required'});
+            operations.recordInstallationState(targetLock,config.storageClass,initialAdmin,effectiveConsoleUrl,
+              config.authEnvironment,config.shellTlsSecret,'Failed',options);
+            operations.recordReleaseInventory(targetLock,targetInventory);
+          } catch (recordError) {
+            throw new Error(`Forward repair incomplete; record could not be safely updated: ${recordError.message}; original failure: ${upgradeError.message}`);
+          }
+        }
+        throw new Error(`Forward repair incomplete; no automatic rollback or resource deletion: ${upgradeError.message}`);
+      }
       console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
       if (agentIdentityCutover) {
         if (agentIdentityMigrationCommitted) {
