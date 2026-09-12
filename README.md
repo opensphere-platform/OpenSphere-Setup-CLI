@@ -356,6 +356,8 @@ deploy/opensphere-console.yaml
 .\opensphere-setup.exe upgrade --release edge --context docker-desktop --lock .\reviewed-target.json --forward-repair sha256:REVIEWED_INSTALLATION_RECORD_DIGEST
 ```
 
+이미지 적용은 끝났지만 마지막 검증 실패로 설치 상태가 `Failed`/`Installing`에 남았다면 원인을 수정한 후 `verify --complete-installation --context docker-desktop`으로 동일 설치의 전체 검증을 재개할 수 있습니다. 현재의 정규 릴리스 기록과 관리 목록이 있어야 하며 이미지·SQL·Secret은 재적용하지 않습니다. 실제 전체 검증이 통과한 경우에만 UID/resourceVersion 조건으로 `Ready`를 기록합니다. 검증 실패 시 실패 상태를 유지하며, 지식 벡터화나 22의 업무 실행 완료를 대신 주장하지 않습니다.
+
 첫 명령은 새 대상의 이미지·출처·계약을 정상 검증하고 설치 기록의 검토 digest만 출력한다. 두 번째 명령의 digest에는 실제 첫 출력값을 넣는다. 검토 후 설치 기록이 바뀌면 실행을 거부한다. 실행은 새 대상과 `Installing`을 먼저 원자적으로 기록하며, 검증 성공 후에만 `Ready`를 기록한다. 실패하면 `Failed`를 유지하고 같은 대상으로 다시 검토·재실행할 수 있다. 이전 기록을 정상이라고 재작성하거나 검증되지 않은 구버전으로 자동 롤백하지 않으며, 이 경로에서는 자원을 삭제하지 않는다. 정상 서비스 복원을 보장하는 백업 기능은 아니므로 실제 대상과 서비스 영향을 검토한 뒤 실행한다.
 
 OS Shell 제어기·실행 이미지·OS CLI는 함께 고정한 native artifact로 갱신한다. Ready 여부뿐 아니라 제어기의 실제 runtime 이미지 참조와 CLI digest도 검증한다. 신규 설치는 같은 릴리스의 검증된 Knowledge 묶음을 Native Runtime 설치기에 전달한다.

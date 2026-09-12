@@ -428,7 +428,12 @@ function verifyWorkloads(lock, {
     if (!expectedImage || container.image !== expectedImage) {
       throw new Error(`Runtime image differs from release lock: ${spec.namespace}/${spec.name} (${container.image} != ${expectedImage})`);
     }
-    if (spec.artifact === 'osShellControl') verifyShellRuntimeReferences(lock, container);
+    if (spec.artifact === 'osShellControl') {
+      verifyShellRuntimeReferences(lock, container);
+      // The session runtime is launched on demand by these controllers. Its
+      // verified reference represents this artifact; there is no base Deployment.
+      expected.add(lock.auxiliaryArtifacts.osShellRuntime.image);
+    }
     const pullSecrets = (podSpec?.imagePullSecrets ?? []).map(({ name }) => name);
     if (!pullSecrets.includes(REGISTRY_PULL_SECRET)) {
       throw new Error(`Workload does not reference the governed registry pull Secret: ${spec.namespace}/${spec.name}`);

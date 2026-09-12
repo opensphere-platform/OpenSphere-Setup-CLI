@@ -2008,6 +2008,39 @@ export function readInstallationRecord() {
   return JSON.parse(kubectl(['-n','opensphere-console','get','configmap','opensphere-installation-lock','-o','json'],{capture:true}));
 }
 
+// Resume only verification of the already installed canonical target. This
+// neither selects/applies images nor repeats registry authentication or migrations.
+export async function completeInstallationVerification(lock, {consoleUrl, requireZeroRestarts=false, runtime={}}={}) {
+  validateLock(lock);
+  const ops={readInstallationRecord,readReleaseInventory,recordInstallationState,verifyInstallation,...runtime};
+  const original=ops.readInstallationRecord();
+  const config=JSON.parse(original.data['config.json']),state=JSON.parse(original.data['state.json']);
+  if (JSON.parse(original.data['release.json']).releaseDigest!==lock.releaseDigest
+    ||config.releaseDigest!==lock.releaseDigest||state.releaseDigest!==lock.releaseDigest
+    ||!['Failed','Installing'].includes(state.phase)) throw Error('Verification completion requires the same incomplete installed release');
+  if (!ops.readReleaseInventory()?.length) throw Error('Verification completion requires the recorded release inventory');
+  if (consoleUrl && normalizeConsoleUrl(consoleUrl)!==normalizeConsoleUrl(config.consoleUrl)) throw Error('Verification completion cannot change the Console URL');
+  const repair=original.data['repair.json']?JSON.parse(original.data['repair.json']):undefined;
+  const write=(phase,extra={})=>{
+    const current=ops.readInstallationRecord();
+    if(current.metadata.uid!==original.metadata.uid||JSON.parse(current.data['release.json']).releaseDigest!==lock.releaseDigest) throw Error('Installation ownership changed during verification completion');
+    if(phase==='Installing'&&current.metadata.resourceVersion!==original.metadata.resourceVersion) throw Error('Installation changed before verification completion');
+    return ops.recordInstallationState(lock,config.storageClass,config.initialAdmin,config.consoleUrl,
+      config.authEnvironment,config.shellTlsSecret,phase,{...extra,...(repair?{forwardRepair:repair}:{}),
+        recordPrecondition:{uid:current.metadata.uid,resourceVersion:current.metadata.resourceVersion}});
+  };
+  write('Installing');
+  try {
+    const evidence=await ops.verifyInstallation(lock,{consoleUrl:config.consoleUrl,requireZeroRestarts});
+    if(evidence.releaseDigest!==lock.releaseDigest||!evidence.verifiedAt) throw Error('Verification returned a different release');
+    write('Ready',{verification:{evidenceConfigMap:'opensphere-installation-evidence',verifiedAt:evidence.verifiedAt}});
+    return evidence;
+  } catch(error) {
+    write('Failed',{failureCode:'installation-verification-incomplete'});
+    throw error;
+  }
+}
+
 function readInstallationConfig() {
   try {
     const object = JSON.parse(kubectl([

@@ -8,6 +8,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import {
   bootstrap,
+  completeInstallationVerification,
   existingManagedNamespaces,
   migrateLegacyInstallationLock,
   preflightReleaseArtifacts,
@@ -151,6 +152,7 @@ Usage:
       [--registry-username <github-login> --registry-token-stdin]
       [--repair-plan | --forward-repair <reviewed-installation-record-sha256>]
   opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
+      [--complete-installation]
   opensphere-setup recovery-drill --component <supabase|gitea> --manifest-key <s3-object-key>
       --confirm ISOLATED-RECOVERY-DRILL [--context <kube-context>]
   opensphere-setup recover-installation-lock --plan <immutable-signed-plan.json>
@@ -544,11 +546,12 @@ async function main() {
 
   if (command === 'verify') {
     assertKubectl();
-    const migrated = await migrateLegacyInstallationLock();
+    const complete=hasOption('--complete-installation');
+    const migrated = complete ? false : await migrateLegacyInstallationLock();
     if (migrated) console.log(`[마이그레이션] 기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
     const lock = readInstallationLock();
     if (!lock) throw new Error('No managed OpenSphere installation lock was found');
-    const evidence = await verifyInstallation(lock, {
+    const evidence = await (complete ? completeInstallationVerification : verifyInstallation)(lock, {
       requireZeroRestarts: hasOption('--require-zero-restarts'),
       consoleUrl: suppliedConsoleUrl
     });
