@@ -1,0 +1,241 @@
+{
+  "schema": "opensphere.knowledge-installation-fixture/v1",
+  "synthetic": true,
+  "lock": {
+    "digestFormat": "canonical-json-v1",
+    "apiVersion": "release.opensphere.io/v1alpha1",
+    "kind": "OpenSphereReleaseLock",
+    "channel": "edge",
+    "releaseDigest": "sha256:93ee509f5f981b2f9bcc60cfd1d3192179f4b35251be5f37d72d1a329bda2093",
+    "resolvedAt": "2026-09-10T00:00:00.000Z",
+    "source": "https://github.com/opensphere-platform/OpenSphere-console",
+    "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "trust": {
+      "type": "localhost-edge/v1",
+      "repository": "opensphere-platform/OpenSphere-console",
+      "publisher": "scripts/Publish-LocalEdge.ps1",
+      "buildAuthority": "localhost",
+      "releaseClass": "pre-ga",
+      "gaEligible": false
+    },
+    "releaseScope": "component",
+    "baseReleaseDigest": "sha256:1d1adb7d9371c625a3719e77d42b2a250d74b97cc91bf97a26d947212070fb2d",
+    "changedComponents": [],
+    "knowledge": {
+      "schema": "opensphere.knowledge-lock/v1",
+      "source": "https://github.com/opensphere-platform/OpenSphere-Knowledge",
+      "sourceRevision": "7777777777777777777777777777777777777777",
+      "knowledgeImage": "ghcr.io/opensphere-platform/opensphere-knowledge@sha256:7777777777777777777777777777777777777777777777777777777777777777",
+      "version": "knowledge-v0.1.0-edge.7",
+      "sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+    },
+    "changedKnowledge": true,
+    "auxiliaryArtifacts": {
+      "cliArtifacts": {
+        "repository": "opensphere-os-cli",
+        "image": "ghcr.io/opensphere-platform/opensphere-os-cli@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "osShellControl": {
+        "repository": "opensphere-console-os-shell-control",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-os-shell-control@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "osShellRuntime": {
+        "repository": "opensphere-os-shell-runtime",
+        "image": "ghcr.io/opensphere-platform/opensphere-os-shell-runtime@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "consoleIndexContent": {
+        "repository": "opensphere-console-index-content",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-index-content@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      }
+    },
+    "components": {
+      "console": {
+        "repository": "opensphere-console",
+        "image": "ghcr.io/opensphere-platform/opensphere-console@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "consoleApi": {
+        "repository": "opensphere-console-api",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "extensionController": {
+        "repository": "opensphere-extension-controller",
+        "image": "ghcr.io/opensphere-platform/opensphere-extension-controller@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "registry": {
+        "repository": "opensphere-registry",
+        "image": "ghcr.io/opensphere-platform/opensphere-registry@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "osaaGateway": {
+        "repository": "opensphere-console-osaa-gateway",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-osaa-gateway@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "osdst": {
+        "repository": "opensphere-osdst",
+        "image": "ghcr.io/opensphere-platform/opensphere-osdst@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "osaaGovernedAdapter": {
+        "repository": "opensphere-osaa-governed-adapter",
+        "image": "ghcr.io/opensphere-platform/opensphere-osaa-governed-adapter@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "notificationDispatcher": {
+        "repository": "opensphere-console-notification-dispatcher",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-notification-dispatcher@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "gitea": {
+        "repository": "opensphere-console-gitea",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-gitea@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "supabasePostgres": {
+        "repository": "opensphere-console-supabase-postgres",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-supabase-postgres@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "supabaseAuth": {
+        "repository": "opensphere-console-supabase-auth",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-supabase-auth@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "supabaseRest": {
+        "repository": "opensphere-console-supabase-rest",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-supabase-rest@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "supabaseStorage": {
+        "repository": "opensphere-console-supabase-storage",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-supabase-storage@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "giteaPostgres": {
+        "repository": "opensphere-console-gitea-postgres",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-gitea-postgres@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "recovery": {
+        "repository": "opensphere-console-recovery",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-recovery@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "beszelHub": {
+        "repository": "opensphere-console-beszel-hub",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-beszel-hub@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "beszelAgent": {
+        "repository": "opensphere-console-beszel-agent",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-beszel-agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "beszelBootstrap": {
+        "repository": "opensphere-console-beszel-bootstrap",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-beszel-bootstrap@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      }
+    }
+  },
+  "state": {
+    "apiVersion": "bootstrap.opensphere.io/v1alpha1",
+    "kind": "OpenSphereInstallationState",
+    "phase": "Ready",
+    "releaseDigest": "sha256:93ee509f5f981b2f9bcc60cfd1d3192179f4b35251be5f37d72d1a329bda2093",
+    "verification": {
+      "evidenceConfigMap": "opensphere-installation-evidence",
+      "verifiedAt": "2026-09-10T00:10:00.000Z",
+      "scope": "knowledge-component",
+      "operationId": "11111111-1111-4111-8111-111111111111"
+    }
+  },
+  "evidence": {
+    "schema": "opensphere.knowledge-installation/v1",
+    "scope": "knowledge-component",
+    "runtimeState": "NotObserved",
+    "operationId": "11111111-1111-4111-8111-111111111111",
+    "releaseDigest": "sha256:93ee509f5f981b2f9bcc60cfd1d3192179f4b35251be5f37d72d1a329bda2093",
+    "baseReleaseDigest": "sha256:1d1adb7d9371c625a3719e77d42b2a250d74b97cc91bf97a26d947212070fb2d",
+    "verifiedAt": "2026-09-10T00:10:00.000Z",
+    "knowledge": {
+      "schema": "opensphere.knowledge-lock/v1",
+      "source": "https://github.com/opensphere-platform/OpenSphere-Knowledge",
+      "sourceRevision": "7777777777777777777777777777777777777777",
+      "knowledgeImage": "ghcr.io/opensphere-platform/opensphere-knowledge@sha256:7777777777777777777777777777777777777777777777777777777777777777",
+      "version": "knowledge-v0.1.0-edge.7",
+      "sha256": "7777777777777777777777777777777777777777777777777777777777777777"
+    },
+    "delivery": {
+      "schema": "opensphere.knowledge-delivery/v1",
+      "operationId": "11111111-1111-4111-8111-111111111111",
+      "version": "knowledge-v0.1.0-edge.7",
+      "state": "Delivered",
+      "readyPods": 2,
+      "desiredPods": 2,
+      "activation": "NotObserved",
+      "semanticSearch": "NotObserved",
+      "installationLock": "NotPromoted",
+      "observedAt": "2026-09-10T00:10:00.000Z",
+      "immutable": true,
+      "readOnly": true
+    },
+    "activation": {
+      "owner": "C_AI",
+      "operationId": "11111111-1111-4111-8111-111111111111",
+      "version": "knowledge-v0.1.0-edge.7",
+      "sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+      "state": "Active",
+      "observedAt": "2026-09-10T00:10:00.000Z"
+    },
+    "semanticSearch": {
+      "owner": "C_AI",
+      "operationId": "11111111-1111-4111-8111-111111111111",
+      "version": "knowledge-v0.1.0-edge.7",
+      "sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+      "state": "Verified",
+      "observedAt": "2026-09-10T00:10:00.000Z"
+    },
+    "historicalBootstrap": {
+      "scope": "historical-beszel-bootstrap",
+      "releaseDigest": "sha256:1d1adb7d9371c625a3719e77d42b2a250d74b97cc91bf97a26d947212070fb2d",
+      "verifiedAt": "2026-09-10T00:00:00.000Z",
+      "images": {
+        "beszelHub": "ghcr.io/opensphere-platform/opensphere-console-beszel-hub@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "beszelAgent": "ghcr.io/opensphere-platform/opensphere-console-beszel-agent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "beszelBootstrap": "ghcr.io/opensphere-platform/opensphere-console-beszel-bootstrap@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      },
+      "bootstrapJobComplete": true,
+      "agentPublicKeyPublished": true
+    }
+  }
+}

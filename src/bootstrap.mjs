@@ -12,6 +12,7 @@ import { kubectl, run } from './process.mjs';
 import { preflight } from './preflight.mjs';
 import { fetchWithRetry } from './http.mjs';
 import { sourceArtifactRequest } from './source-artifact-credential.mjs';
+import { renderKnowledgeManifest } from './knowledge-artifact.mjs';
 import {
   hostRegistryCredentials,
   isLocalEdgeLock,
@@ -48,6 +49,7 @@ import {
   secretHasGhcrCredential
 } from './registry-pull-secret.mjs';
 import { reportReleaseProgress } from './progress.mjs';
+import { publishSetupJournal } from './setup-journal.mjs';
 import { materializeRuntimeAsset } from './runtime-assets.mjs';
 import {HISS_EXECUTION_PROFILE,HISS_VALIDATION_ARTIFACT,verifyHissExecutionProfile,verifyHissValidationArtifact,prepareHissPrerequisites,prepareHissValidation,createHissPrerequisiteClient} from './hiss-prerequisites.mjs';
 import {prepareCephExecutionProfile} from './ceph-prerequisites.mjs';
@@ -565,6 +567,7 @@ function manifestSpecComponents(spec) {
 
 export function componentReleaseWorkloadComponents(lock) {
   const selected = new Set(lock?.changedComponents ?? []);
+  if (lock?.changedKnowledge === true) selected.add('osaaGateway');
   if ((lock?.changedAuxiliaryArtifacts ?? []).includes('consoleIndexContent')) {
     selected.add('console');
   }
@@ -1001,12 +1004,19 @@ export async function fetchManifest(
   storageClass,
   consoleUrl = defaultConsoleUrl('edge', 'development'),
   authEnvironment = 'development',
-  { sourceRevision = lock.sourceRevision, sourceArtifactCredential = null } = {}
+  { sourceRevision = lock.sourceRevision, sourceArtifactCredential = null, registryCredentials } = {}
 ) {
-  const sourceYaml = await fetchReleaseArtifact(lock, spec.path, {
+  let sourceYaml = await fetchReleaseArtifact(lock, spec.path, {
     sourceRevision,
     sourceArtifactCredential
   });
+  if (spec.path === 'apps/osaa-gateway/deploy.yaml') {
+    sourceYaml = await renderKnowledgeManifest(sourceYaml, {
+      admittedLock: lock.knowledge,
+      readLock: path => fetchReleaseArtifact(lock, path, { sourceRevision, sourceArtifactCredential }),
+      registryCredentials
+    });
+  }
   return renderManifest(
     lock,
     spec,
@@ -1350,7 +1360,8 @@ async function materializeBaseRelease(
   storageClass,
   consoleUrl,
   authEnvironment,
-  sourceArtifactCredential = null
+  sourceArtifactCredential = null,
+  registryCredentials
 ) {
   return Promise.all(baseManifestSpecs(lock).map(async (spec) => ({
     path: spec.path,
@@ -1360,7 +1371,7 @@ async function materializeBaseRelease(
       storageClass,
       consoleUrl,
       authEnvironment,
-      { sourceArtifactCredential }
+      { sourceArtifactCredential, registryCredentials }
     )
   })));
 }
@@ -1572,14 +1583,45 @@ function recordReleaseInventory(lock, inventory) {
   })}\n`);
 }
 
-function pruneReleaseResources(fromInventory, targetInventory) {
+export function pruneReleaseResources(fromInventory, targetInventory, kubectlFn = kubectl) {
   const target = new Set(targetInventory.map(inventoryKey));
+  const retained = []; let knowledgeReferences;
   for (const resource of fromInventory ?? []) {
     if (target.has(inventoryKey(resource))) continue;
-    kubectl([
+    if (resource.kind === 'ConfigMap' && resource.namespace === 'opensphere-console'
+      && /^os-knowledge-[a-f0-9]{32}(?:-(?:[0-9]|[12][0-9]|3[01]))?$/.test(resource.name)) {
+      if (!knowledgeReferences) {
+        knowledgeReferences = new Set();
+        for (const kind of ['pods', 'replicasets']) {
+          const list = JSON.parse(kubectlFn(['-n', 'opensphere-console', 'get', kind, '-o', 'json'], { capture: true }));
+          if (!Array.isArray(list?.items)) throw Error('Cannot verify current Knowledge volume references');
+          for (const item of list.items) {
+            const active = kind === 'pods' ? !['Succeeded', 'Failed'].includes(item.status?.phase)
+              : Number(item.spec?.replicas || 0) > 0 || Number(item.status?.replicas || 0) > 0;
+            if (!active) continue;
+            const spec = kind === 'pods' ? item.spec : item.spec?.template?.spec;
+            for (const volume of spec?.volumes || []) {
+              if (volume.configMap?.name) knowledgeReferences.add(volume.configMap.name);
+              for (const source of volume.projected?.sources || []) if (source.configMap?.name) knowledgeReferences.add(source.configMap.name);
+            }
+          }
+        }
+      }
+      if (knowledgeReferences.has(resource.name)) { retained.push(resource); continue; }
+    }
+    kubectlFn([
       ...(resource.namespace ? ['-n', resource.namespace] : []),
       'delete', `${resource.kind}/${resource.name}`, '--ignore-not-found', '--wait=true'
     ]);
+  }
+  return retained;
+}
+
+function appendRetainedResources(inventory, retained = []) {
+  const keys = new Set(inventory.map(inventoryKey));
+  for (const resource of retained) {
+    const key = inventoryKey(resource);
+    if (!keys.has(key)) { inventory.push(resource); keys.add(key); }
   }
 }
 
@@ -2095,7 +2137,8 @@ async function prepareRelease(
       storageClass,
       consoleUrl,
       authEnvironment,
-      options.sourceArtifactCredential
+      options.sourceArtifactCredential,
+      options.registryCredentials
     )
   ]);
   return { foundation, base, all: [...foundation.release, ...base] };
@@ -2110,7 +2153,8 @@ export async function prepareComponentRelease(
   {
     changedComponents = componentReleaseWorkloadComponents(lock),
     includeMigrations = true,
-    sourceArtifactCredential = null
+    sourceArtifactCredential = null,
+    registryCredentials
   } = {}
 ) {
   const specs = componentReleaseManifestSpecs(lock, changedComponents);
@@ -2134,7 +2178,7 @@ export async function prepareComponentRelease(
         storageClass,
         consoleUrl,
         authEnvironment,
-        { sourceRevision: spec.artifactSourceRevision, sourceArtifactCredential }
+        { sourceRevision: spec.artifactSourceRevision, sourceArtifactCredential, registryCredentials }
       )
     }))),
     Promise.all(specs.base.map(async (spec) => ({
@@ -2145,7 +2189,7 @@ export async function prepareComponentRelease(
         storageClass,
         consoleUrl,
         authEnvironment,
-        { sourceRevision: spec.artifactSourceRevision, sourceArtifactCredential }
+        { sourceRevision: spec.artifactSourceRevision, sourceArtifactCredential, registryCredentials }
       )
     })))
   ]);
@@ -2173,7 +2217,8 @@ export async function preflightReleaseArtifacts(lock, {
   storageClass,
   consoleUrl,
   authEnvironment,
-  sourceArtifactCredential = null
+  sourceArtifactCredential = null,
+  registryCredentials
 }, {
   createTemporaryDirectory = () => mkdtemp(join(tmpdir(), 'opensphere-artifact-preflight-')),
   prepare = prepareRelease,
@@ -2187,7 +2232,7 @@ export async function preflightReleaseArtifacts(lock, {
       storageClass,
       consoleUrl,
       authEnvironment,
-      { sourceArtifactCredential }
+      { sourceArtifactCredential, registryCredentials }
     );
     return {
       artifactCount: installArtifactCount(lock) + Number(prepared.foundation?.migration?.manifest?.migrationCount || 0),
@@ -2348,7 +2393,7 @@ export async function bootstrap(lock, {
       cluster.storageClass,
       effectiveConsoleUrl,
       effectiveAuthEnvironment,
-      { sourceArtifactCredential }
+      { sourceArtifactCredential, registryCredentials }
     );
     progress?.done(`${installArtifactCount(lock) + Number(prepared.foundation?.migration?.manifest?.migrationCount || 0)} artifacts, ${prepared.all.length} manifest groups`);
 
@@ -2371,6 +2416,7 @@ export async function bootstrap(lock, {
       { baselineObservabilitySecurity: cluster.baselineObservabilitySecurity }
     );
     installationStateRecorded = true;
+    progress?.deliverJournal?.((document)=>publishSetupJournal(document,{apply:kubectl}));
     progress?.item('namespace', 'opensphere-console');
     for (const namespace of MANAGED_NAMESPACES.filter((name) => name !== 'opensphere-console')) {
       ensureNamespace(namespace);
@@ -2647,7 +2693,7 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           config.authEnvironment,
-          { changedComponents: changedWorkloadComponents, includeMigrations: true, sourceArtifactCredential }
+          { changedComponents: changedWorkloadComponents, includeMigrations: true, sourceArtifactCredential, registryCredentials }
         ),
         rollbackChangedComponents.length > 0
           ? operations.prepareComponentRelease(
@@ -2659,7 +2705,8 @@ export async function upgrade(
             {
               changedComponents: rollbackChangedComponents,
               includeMigrations: false,
-              sourceArtifactCredential
+              sourceArtifactCredential,
+              registryCredentials
             }
           )
           : Promise.resolve({
@@ -2675,7 +2722,7 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           config.authEnvironment,
-          { sourceArtifactCredential }
+          { sourceArtifactCredential, registryCredentials }
         ),
         operations.prepareRelease(
           previousLock,
@@ -2687,7 +2734,8 @@ export async function upgrade(
             optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS,
             migrationSourceRevision: targetLock.sourceRevision,
             migrationEvidence: targetLock.releaseBom?.migrationManifest,
-            sourceArtifactCredential
+            sourceArtifactCredential,
+            registryCredentials
           }
         )
       ]);
@@ -2747,14 +2795,18 @@ export async function upgrade(
         requireZeroRestarts: false,
         componentSelection: componentTransition ? changedWorkloadComponents : null
       });
+      let retainedKnowledge = [];
       if (agentIdentityCutover) {
-        operations.pruneReleaseResources(previousComponentInventory, targetComponentInventory);
+        retainedKnowledge = operations.pruneReleaseResources(previousComponentInventory, targetComponentInventory) || [];
         operations.deleteAgentIdentityNamespace(LEGACY_INSTALLED_AGENT_NAMESPACE);
       } else if (componentTransition) {
-        operations.pruneReleaseResources(previousComponentInventory, targetComponentInventory);
+        retainedKnowledge = operations.pruneReleaseResources(previousComponentInventory, targetComponentInventory) || [];
       } else {
-        operations.pruneReleaseResources(previousInventory, targetInventory);
+        retainedKnowledge = operations.pruneReleaseResources(previousInventory, targetInventory) || [];
       }
+      // Keep deferred objects in the persisted inventory so a later ordinary
+      // upgrade retries safe retirement after the last old reader disappears.
+      appendRetainedResources(targetInventory, retainedKnowledge);
       operations.recordReleaseInventory(targetLock, targetInventory);
       operations.recordInstallationState(
         targetLock, config.storageClass, initialAdmin, effectiveConsoleUrl,
@@ -2791,7 +2843,7 @@ export async function upgrade(
         // Before migration commit, the installed identity remains untouched.
         // Remove only newly staged OSAA resources and leave the old installation
         // lock/inventory as the exact recovery point.
-        operations.pruneReleaseResources(targetComponentInventory, previousComponentInventory);
+        appendRetainedResources(previousInventory, operations.pruneReleaseResources(targetComponentInventory, previousComponentInventory));
         operations.deleteAgentIdentityNamespace(CANONICAL_AGENT_NAMESPACE);
         operations.recordReleaseInventory(previousLock, previousInventory);
         throw new Error(`OSAA identity cutover failed before migration; previous installation retained: ${upgradeError.message}`);
@@ -2814,7 +2866,7 @@ export async function upgrade(
           );
         }
         if (componentTransition) {
-          operations.pruneReleaseResources(targetComponentInventory, previousComponentInventory);
+          appendRetainedResources(previousInventory, operations.pruneReleaseResources(targetComponentInventory, previousComponentInventory));
         }
         operations.recordInstallationState(
           previousLock,
@@ -2838,7 +2890,7 @@ export async function upgrade(
             : null
         });
         if (!componentTransition) {
-          operations.pruneReleaseResources(targetInventory, previousInventory);
+          appendRetainedResources(previousInventory, operations.pruneReleaseResources(targetInventory, previousInventory));
         }
         operations.recordReleaseInventory(previousLock, previousInventory);
         operations.recordInstallationState(

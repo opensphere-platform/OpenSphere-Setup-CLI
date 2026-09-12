@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {PLATFORM_CORE_ARTIFACT,preparePlatformCorePrerequisites} from '../src/platform-core-prerequisites.mjs';
-const consoleRoot=process.env.OPENSPHERE_CONSOLE_SOURCE||resolve(import.meta.dirname,'../../OpenSphere-Console');
+const consoleRoot=process.env.OPENSPHERE_CONSOLE_SOURCE||resolve(import.meta.dirname,'fixtures/console-contract-v66');
 const raw=readFileSync(resolve(consoleRoot,PLATFORM_CORE_ARTIFACT),'utf8'),profile=JSON.parse(raw),scope={context:'docker-desktop',channel:'edge',consoleUrl:'https://localhost:1114'};
 const id=r=>`${r.apiVersion}/${r.kind}/${r.metadata.namespace||''}/${r.metadata.name}`;
 function client(present=[]){let serial=0;const state=new Map(),creates=[];const put=r=>{r=structuredClone(r);r.metadata.uid||='uid-'+(++serial);if(r.kind==='CustomResourceDefinition')r.spec={conversion:{strategy:'None'},...r.spec};state.set(id(r),r);return structuredClone(r);};

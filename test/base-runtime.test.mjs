@@ -33,10 +33,11 @@ import {
   releaseResponsibilityProfile
 } from '../src/release.mjs';
 import { DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB } from '../src/doctor.mjs';
+import { renderKnowledgeManifest } from '../src/knowledge-artifact.mjs';
 
 const CONSOLE_SOURCE = process.env.OPENSPHERE_CONSOLE_SOURCE
   ? pathToFileURL(`${resolve(process.env.OPENSPHERE_CONSOLE_SOURCE)}${sep}`)
-  : new URL('../../OpenSphere-console/', import.meta.url);
+  : new URL('./fixtures/console-contract-v66/', import.meta.url);
 
 function localReleaseLock() {
   const components = Object.fromEntries(Object.entries(COMPONENTS).map(
@@ -303,10 +304,15 @@ test('custom Console endpoint renders into C_API and Main Shell authorities', ()
   }
 });
 
-test('OSAA runtime profile is rendered from the verified release and install inputs', () => {
+test('OSAA runtime profile is rendered from the verified release and install inputs', async () => {
   const lock = localReleaseLock();
   const spec = OSAA_GATEWAY_MANIFEST;
-  const source = readFileSync(new URL(spec.path, CONSOLE_SOURCE), 'utf8');
+  const source = await renderKnowledgeManifest(readFileSync(new URL(spec.path, CONSOLE_SOURCE), 'utf8'), {
+    readLock: p => readFileSync(new URL(p, CONSOLE_SOURCE), 'utf8'),
+    // Transport/integrity is covered by knowledge-artifact.test.mjs; this case
+    // isolates the final runtime-profile rendering after artifact preparation.
+    materialize: async () => ({ configMaps: [], sources: [{ configMap: { name: 'knowledge-fixture' } }] })
+  });
   const rendered = renderManifest(
     lock, spec, source, 'hostpath', 'https://localhost:1114', 'development'
   );

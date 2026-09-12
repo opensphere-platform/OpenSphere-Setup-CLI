@@ -25,19 +25,19 @@ test('progress reporter emits ordered steps, completion timing, items and total 
     '[검증] console provenance',
     '[완료 01] 릴리스 검증 — BOM verified (1.3s)',
     '[단계 02] 클러스터 준비',
-    '[완료 02] 클러스터 준비 (250ms)',
+    '[이동 02] 클러스터 준비 — 명시적 단계 반환 기록 없음 (250ms)',
     '[성공] 설치 완료 — https://localhost:8090 (총 1.5s)'
   ]);
 });
 
-test('starting the next step closes the preceding step', () => {
+test('starting the next step does not invent an explicit return for the preceding step', () => {
   const lines = [];
   const progress = createProgressReporter({ write: (line) => lines.push(line), now: () => 0 });
   progress.step('첫 단계');
   progress.step('둘째 단계');
   assert.deepEqual(lines, [
     '[단계 01] 첫 단계',
-    '[완료 01] 첫 단계 (0ms)',
+    '[이동 01] 첫 단계 — 명시적 단계 반환 기록 없음 (0ms)',
     '[단계 02] 둘째 단계'
   ]);
 });

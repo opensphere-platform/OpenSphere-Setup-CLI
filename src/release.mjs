@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fetchWithRetry } from './http.mjs';
+import knowledgeRelease from './knowledge-release.cjs';
+const { knowledgeReleaseFields, validateKnowledgeRelease, validateKnowledgeTransition } = knowledgeRelease;
 import {
   CANONICAL_AGENT_COMPONENTS,
   canonicalNameForInstalledComponent,
@@ -303,7 +305,7 @@ async function requestRegistryToken(endpoint, fetchImpl, credentials) {
   return fetchWithRetry(endpoint, { headers }, { fetchImpl });
 }
 
-async function registryToken(repository, fetchImpl, suppliedCredentials) {
+export async function registryToken(repository, fetchImpl, suppliedCredentials) {
   const endpoint = new URL(`https://${REGISTRY}/token`);
   endpoint.searchParams.set('service', REGISTRY);
   endpoint.searchParams.set('scope', `repository:${OWNER}/${repository}:pull`);
@@ -462,7 +464,8 @@ export function calculateReleaseDigest(
   releaseBom,
   contract
 ) {
-  const payload = JSON.stringify({
+  const value = {
+    ...(contract?.digestFormat ? { digestFormat: contract.digestFormat } : {}),
     channel,
     components,
     trust,
@@ -473,8 +476,10 @@ export function calculateReleaseDigest(
     ...(contract?.changedAuxiliaryArtifacts
       ? { changedAuxiliaryArtifacts: contract.changedAuxiliaryArtifacts }
       : {}),
-    ...(contract?.auxiliaryArtifacts ? { auxiliaryArtifacts: contract.auxiliaryArtifacts } : {})
-  });
+    ...(contract?.auxiliaryArtifacts ? { auxiliaryArtifacts: contract.auxiliaryArtifacts } : {}),
+    ...knowledgeReleaseFields(contract || {})
+  };
+  const payload = JSON.stringify(contract?.digestFormat === 'canonical-json-v1' ? stableValue(value) : value);
   return `sha256:${createHash('sha256').update(payload).digest('hex')}`;
 }
 
@@ -1043,6 +1048,7 @@ export function validateLock(lock, {
   if (lock?.apiVersion !== RELEASE_API_VERSION || lock?.kind !== 'OpenSphereReleaseLock') {
     throw new Error('Invalid OpenSphere release lock');
   }
+  if (lock.digestFormat !== undefined && lock.digestFormat !== 'canonical-json-v1') throw new Error('Release lock digest format is unsupported');
   validateChannel(lock.channel);
   if (lock.source !== SOURCE) throw new Error('Release lock source is not canonical');
   if (!/^[a-f0-9]{40}$/.test(lock.sourceRevision ?? '')) {
@@ -1062,6 +1068,7 @@ export function validateLock(lock, {
     throw new Error('candidate and stable release locks require signed SBOM trust v2');
   }
   const releaseScope = lock.releaseScope ?? RELEASE_SCOPE_INTEGRATED;
+  validateKnowledgeRelease(lock);
   if (![RELEASE_SCOPE_INTEGRATED, RELEASE_SCOPE_COMPONENT].includes(releaseScope)) {
     throw new Error(`Release lock scope is invalid: ${releaseScope}`);
   }
@@ -1098,7 +1105,7 @@ export function validateLock(lock, {
         || changedAuxiliary.some((name) => name !== 'consoleIndexContent')) {
       throw new Error('Component release lock changedAuxiliaryArtifacts must contain only the canonical Console index artifact');
     }
-    if (changed.length === 0 && changedAuxiliary.length === 0) {
+    if (changed.length === 0 && changedAuxiliary.length === 0 && lock.changedKnowledge !== true) {
       throw new Error('Component release lock must change at least one component or auxiliary artifact');
     }
     if (lock.releaseBom !== undefined) {
@@ -1151,7 +1158,7 @@ export function validateLock(lock, {
     const expectedAuxiliaryNames = Object.keys(
       names.includes('consoleIndexContent') ? AUXILIARY_ARTIFACTS : LEGACY_AUXILIARY_ARTIFACTS
     );
-    if (JSON.stringify(names) !== JSON.stringify(expectedAuxiliaryNames)) {
+    if (JSON.stringify([...names].sort()) !== JSON.stringify([...expectedAuxiliaryNames].sort())) {
       throw new Error('Release lock auxiliary artifact set is not canonical');
     }
     for (const name of expectedAuxiliaryNames) {
@@ -1197,15 +1204,16 @@ export function validateLock(lock, {
                 : {})
             }
           : {}),
-        ...(lock.auxiliaryArtifacts ? { auxiliaryArtifacts: lock.auxiliaryArtifacts } : {})
+        ...(lock.auxiliaryArtifacts ? { auxiliaryArtifacts: lock.auxiliaryArtifacts } : {}),
+        ...knowledgeReleaseFields(lock)
       }
-    : (lock.auxiliaryArtifacts ? { auxiliaryArtifacts: lock.auxiliaryArtifacts } : undefined);
+    : { ...(lock.auxiliaryArtifacts ? { auxiliaryArtifacts: lock.auxiliaryArtifacts } : {}), ...knowledgeReleaseFields(lock) };
   const expectedDigest = calculateReleaseDigest(
     lock.channel,
     lock.components,
     trust,
     lock.releaseBom,
-    digestContract
+    { ...digestContract, ...(lock.digestFormat ? { digestFormat: lock.digestFormat } : {}) }
   );
   if (lock.releaseDigest !== expectedDigest) {
     throw new Error('Release lock digest does not match its component set');
@@ -1227,6 +1235,10 @@ export function validateReleaseTransition(baseLock, targetLock) {
     allowInstalledAgentIdentityCutover: true
   });
   const target = validateLock(targetLock);
+  if (target.releaseDigest === base.releaseDigest) {
+    if (!sameComponent(target, base)) throw new Error('Same-digest release differs from the installed record');
+    return target;
+  }
   if ((target.releaseScope ?? RELEASE_SCOPE_INTEGRATED) !== RELEASE_SCOPE_COMPONENT) {
     return target;
   }
@@ -1239,6 +1251,7 @@ export function validateReleaseTransition(baseLock, targetLock) {
   if (canonicalTrust(target.trust) !== canonicalTrust(base.trust)) {
     throw new Error('Component release lock trust root differs from its base release');
   }
+  validateKnowledgeTransition(base, target);
   const changedAuxiliary = new Set(target.changedAuxiliaryArtifacts ?? []);
   const baseAuxiliaryNames = Object.keys(base.auxiliaryArtifacts ?? {}).sort();
   const targetAuxiliaryNames = Object.keys(target.auxiliaryArtifacts ?? {}).sort();
@@ -1362,11 +1375,12 @@ async function resolveLocalEdgeRelease(reference, anchor, {
   }));
   const auxiliaryArtifacts = Object.fromEntries(auxiliaryResolved);
   const releaseDigest = calculateReleaseDigest('edge', components, LOCAL_EDGE_TRUST, undefined, {
-    auxiliaryArtifacts
+    digestFormat: 'canonical-json-v1', auxiliaryArtifacts
   });
   return validateLock({
     apiVersion: RELEASE_API_VERSION,
     kind: 'OpenSphereReleaseLock',
+    digestFormat: 'canonical-json-v1',
     channel: 'edge',
     releaseDigest,
     resolvedAt: new Date().toISOString(),
@@ -1477,11 +1491,12 @@ async function resolveSignedRelease(reference, channel, {
     throw new Error('Registry component source revisions differ from the signed Release BOM');
   }
   const releaseDigest = calculateReleaseDigest(channel, components, RELEASE_TRUST, releaseBom, {
-    auxiliaryArtifacts
+    digestFormat: 'canonical-json-v1', auxiliaryArtifacts
   });
   const lock = {
     apiVersion: RELEASE_API_VERSION,
     kind: 'OpenSphereReleaseLock',
+    digestFormat: 'canonical-json-v1',
     channel,
     releaseDigest,
     resolvedAt: new Date().toISOString(),

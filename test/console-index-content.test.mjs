@@ -15,7 +15,7 @@ test('legacy anchor keeps three artifacts; v1 renderer requires independent cont
 test('new Console manifest cannot render without its exact content image; legacy source needs no new artifact',()=>{
   const spec=BASE_MANIFESTS.find(s=>s.path==='deploy/opensphere-console.yaml');
   const consoleSource=process.env.OPENSPHERE_CONSOLE_SOURCE
-    ?? fileURLToPath(new URL('../../OpenSphere-console/',import.meta.url));
+    ?? fileURLToPath(new URL('./fixtures/console-contract-v66/',import.meta.url));
   const source=fs.readFileSync(path.join(consoleSource,spec.path),'utf8');
   const lock={sourceRevision:'a'.repeat(40),components:{console:{image:'ghcr.io/opensphere-platform/opensphere-console@sha256:'+'b'.repeat(64)}}};
   assert.throws(()=>renderManifest(lock,spec,source,'standard'),/consoleIndexContent/);

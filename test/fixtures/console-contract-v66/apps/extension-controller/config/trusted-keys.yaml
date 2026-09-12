@@ -1,0 +1,26 @@
+# OpenSphere Extension Controller signature trust projection.
+# Preserve the historical SPKI bytes; new dedicated keys require exact approval.
+# L4 key below: user-approved SPKI SHA-256 d7816601d12962cfc4ba32017a2e26fbadfda236e633c4c67977aea9b3851525 (2026-09-07).
+# Rotate by adding a new keyId; never replace bytes under an existing keyId.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opensphere-extension-trusted-keys
+  namespace: opensphere-console
+  labels:
+    app.kubernetes.io/name: opensphere-extension-controller
+    app.kubernetes.io/part-of: opensphere-console
+    opensphere.io/component: C_EXT
+data:
+  trusted-keys.json: |
+    {
+      "trustedKeys": {
+        "opensphere-plugins-v1": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEez09mUpKxAetbTqqktGZJ9MObsK2jFXM+Q8xM1invyK7oMlB2gwHZUtKBFcrev6AK4bWHRHhhoAJz7ukuH/6cA==",
+        "opensphere-plugins-v2": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEh/5jxLrOgGfrKoL5LTzwsjLgwtzebC5w8OCablgADf4GkfwfvOcQpOXIW4nmrSQOlcnszDREj0z15XF69ILX1g==",
+        "opensphere-plugins-v3": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEaKnt+IQsm9iknQtVYvN1RW4PIimBmTiOE5lH7EuyonfqK7zyT8bE+NI3mwYNc8/m4hTltVAowXFXIYW9adoU7g==",
+        "opensphere-plugins-v4": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEwiCXIFQxnjEHqDqnRJiYl2rImF+eKrRyBK0T2gg9ltFFxipacco66h8TIOZgVq6XtmsRPdBr0NuODIrsG5YiwA==",
+        "opensphere-plugins-v5": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE3/nGajqxx8aNsEgBq7qY3EgwLFWWp65/DafkdQTffrjFy6rJGQEKiRl4kwT05Qnn4ZzlHIdOhmmg0PkNXG7vxA==",
+        "opensphere-module-local-v1": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEB+clzLd45jBkWXgn96KgMLuDzMc1t83JWdkKU4bA57T+4R4OdwbYiRyHn6McN1Xv3StATdIVfV91YVZ1ezZg2Q==",
+        "opensphere-platform-support-local-v1": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE48JJjJWgt9CjecUkzXqeUaayfhpplPe3ZWiQ/q/tclvGexbJcFvvbVUAHwqPWYw18Z3EPQtr2WmyMyxa0cmM/g=="
+      }
+    }

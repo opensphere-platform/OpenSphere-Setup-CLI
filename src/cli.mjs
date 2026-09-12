@@ -16,7 +16,8 @@ import {
   upgrade
 } from './bootstrap.mjs';
 import { installConsoleCli } from './install-cli.mjs';
-import { normalizeRegistryCredentials, hostRegistryCredentials, resolveChannel, validateChannel, validateLock } from './release.mjs';
+import { normalizeRegistryCredentials, hostRegistryCredentials, validateChannel, validateLock } from './release.mjs';
+import {resolveInstallationRelease} from './installation-release.mjs';
 import { takeSourceArtifactCredential } from './source-artifact-credential.mjs';
 import { assertKubectl, kubectl } from './process.mjs';
 import { verifyInstallation } from './verify.mjs';
@@ -26,6 +27,7 @@ import { assertReleaseShellTlsReference, parseShellTlsSecretRef } from './shell-
 import { preflightPromotion } from './promotion-preflight.mjs';
 import { resetInitialAdministrator } from './reset-initial-admin.mjs';
 import { createProgressReporter, reportReleaseProgress } from './progress.mjs';
+import { createSetupJournal } from './setup-journal.mjs';
 import {
   DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB,
   assertFreshConsolePortAvailable,
@@ -182,6 +184,13 @@ function printPromotionPreflight(evidence) {
   console.log(`Authentication policy: ${evidence.authEnvironment} (TOTP enforced)`);
 }
 
+let activeProgress;
+function installationProgress(command,channel) {
+  const journal=createSetupJournal({command,channel});
+  console.log(`[설치 기록] ${journal.path} (단계 기록; 원시 출력·자격증명 제외)`);
+  return activeProgress=createProgressReporter({journal});
+}
+
 async function main() {
   const command = process.argv[2] ?? 'help';
   const channel = option(['--release', '-r'], 'stable');
@@ -279,9 +288,10 @@ async function main() {
   }
 
   if (command === 'resolve') {
+    const sourceArtifactCredential = takeSourceArtifactCredential();
     validateChannel(channel);
     const registryCredentials = await registryCredentialsOption();
-    const lock = await resolveChannel(channel, { registryCredentials });
+    const lock = await resolveInstallationRelease(channel, { sourceArtifactCredential, registryCredentials });
     await writeLock(lockPath, lock);
     console.log(`[완료] ${channel} 채널을 ${lock.releaseDigest}로 잠금`);
     console.log(`Lock: ${lockPath}`);
@@ -304,7 +314,7 @@ async function main() {
   }
 
   if (command === 'doctor') {
-    const progress = createProgressReporter();
+    const progress = installationProgress('doctor',channel);
     progress.begin(
       'OpenSphere 읽기 전용 설치 진단',
       `release=${channel}, context=${context || 'current'}`
@@ -338,7 +348,7 @@ async function main() {
     }
 
     progress.step('릴리스 정책·이미지 공급망 네트워크 검증', `channel=${channel}`);
-    const lock = await resolveChannel(channel, {
+    const lock = await resolveInstallationRelease(channel, { sourceArtifactCredential,
       registryCredentials,
       requiredPlatforms: cluster.nodePlatforms,
       onProgress: (event) => reportReleaseProgress(progress, event)
@@ -349,7 +359,8 @@ async function main() {
       storageClass: cluster.storageClass,
       consoleUrl: doctorConsoleUrl,
       authEnvironment: selectAuthEnvironment(channel, authEnvironment),
-      sourceArtifactCredential
+      sourceArtifactCredential,
+      registryCredentials
     });
     progress.done(`${artifacts.artifactCount} artifacts, ${artifacts.manifestGroupCount} manifest groups`);
     progress.item(
@@ -365,7 +376,7 @@ async function main() {
   }
 
   if (command === 'bootstrap') {
-    const progress = createProgressReporter();
+    const progress = installationProgress('bootstrap',channel);
     progress.begin(
       'OpenSphere bootstrap',
       `release=${channel}, context=${context || 'current'}, console=${suppliedConsoleUrl ?? 'default'}`
@@ -433,7 +444,7 @@ async function main() {
           '릴리스 anchor·bootstrap core·available module·독립 CLI artifact 공급망 검증',
           `channel=${channel}`
         );
-        lock = await resolveChannel(channel, {
+        lock = await resolveInstallationRelease(channel, { sourceArtifactCredential,
           registryCredentials,
           requiredPlatforms: targetPlatforms,
           onProgress: (event) => reportReleaseProgress(progress, event)
@@ -478,7 +489,7 @@ async function main() {
       if (target.channel !== channel) throw new Error(`Supplied lock channel ${target.channel} differs from requested channel ${channel}`);
       console.log(`[사용] 명시적 target release lock ${target.releaseDigest}`);
     } else {
-      target = await resolveChannel(channel, { registryCredentials, requiredPlatforms: targetPlatforms });
+      target = await resolveInstallationRelease(channel, { sourceArtifactCredential, registryCredentials, requiredPlatforms: targetPlatforms });
       await writeLock(lockPath, target);
       console.log(`[완료] ${channel} target을 ${target.releaseDigest}로 잠금`);
     }
@@ -561,6 +572,7 @@ async function main() {
 }
 
 main().catch((error) => {
+  try { activeProgress?.fail(); } catch { console.error('[설치 기록] 최종 실패 상태의 로컬 기록에 실패했습니다.'); }
   console.error(`[실패] ${error.message}`);
   process.exitCode = 1;
 });

@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
 import { kubectl } from './process.mjs';
+import { verifyKnowledgeDelivery } from './knowledge-delivery.mjs';
+import knowledgeInstallation from './knowledge-installation.cjs';
 import {
   BOOTSTRAP_AUXILIARY_ARTIFACTS,
   BOOTSTRAP_CORE_COMPONENTS,
@@ -147,6 +149,15 @@ function getJsonOrNull(args) {
 }
 
 export function hasDurableBeszelBootstrapEvidence(evidence, lock, installationState) {
+  if (evidence?.schema === knowledgeInstallation.SCHEMA) {
+    // A Knowledge receipt carries only historical bootstrap proof for unchanged
+    // Beszel images. All current runtime checks in verifyInstallation still run.
+    try {
+      knowledgeInstallation.validateComponentEvidence(evidence, lock, installationState);
+      return true;
+    } catch { return false; }
+  }
+  if (evidence?.schema !== undefined) return false;
   return Boolean(
     evidence
     && evidence.releaseDigest === lock.releaseDigest
@@ -833,6 +844,7 @@ export async function verifyInstallation(lock, {
   const gitea = await verifyGitea();
   const beszel = await verifyBeszel(lock, config.installationState, recordedEvidence);
   const consoleApi = await verifyConsoleApi();
+  const knowledgeDelivery = verifyKnowledgeDelivery(lock);
   if (consoleUrl && config.consoleUrl !== consoleUrl) {
     throw new Error(`Verified Console URL differs from installation config (${consoleUrl} != ${config.consoleUrl})`);
   }
@@ -851,7 +863,8 @@ export async function verifyInstallation(lock, {
     supabase,
     gitea,
     beszel,
-    consoleApi
+    consoleApi,
+    knowledgeDelivery
   };
   recordInstallationEvidence(evidence);
   return evidence;

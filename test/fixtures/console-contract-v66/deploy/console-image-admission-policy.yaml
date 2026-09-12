@@ -1,0 +1,87 @@
+# Setup verifies the signed BOM, image provenance/SBOM and source revision
+# before rendering a release. These native Kubernetes admission policies are
+# the complementary cluster boundary: direct applies cannot schedule images
+# outside the official registry or use mutable tags. They do not pretend to
+# verify a remote Sigstore attestation; that remains a separate release gate
+# until a dedicated in-cluster attestation verifier is introduced.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: opensphere-console-image-integrity-workload
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments", "statefulsets", "daemonsets"]
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["jobs"]
+  matchConditions:
+    - name: opensphere-managed-namespaces-only
+      expression: >-
+        object.metadata.namespace in [
+          'opensphere-console', 'opensphere-console-data',
+          'opensphere-console-change', 'opensphere-console-recovery',
+          'opensphere-osaa-credentials', 'opensphere-foundation',
+          'opensphere-system'
+        ]
+  validations:
+    - expression: >-
+        object.spec.template.spec.containers.all(c,
+          c.image.matches('^ghcr\\.io/opensphere-platform/[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?@sha256:[a-f0-9]{64}$')) &&
+        (!has(object.spec.template.spec.initContainers) ||
+          object.spec.template.spec.initContainers.all(c,
+            c.image.matches('^ghcr\\.io/opensphere-platform/[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?@sha256:[a-f0-9]{64}$')))
+      message: OpenSphere managed workloads require a release-pinned ghcr.io/opensphere-platform image digest
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: opensphere-console-image-integrity-workload
+spec:
+  policyName: opensphere-console-image-integrity-workload
+  validationActions: [Deny]
+---
+# CronJob has a nested Job template, so it uses a separate type-stable CEL
+# expression instead of a broad dynamic-object policy.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: opensphere-console-image-integrity-cronjob
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["batch"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["cronjobs"]
+  matchConditions:
+    - name: opensphere-managed-namespaces-only
+      expression: >-
+        object.metadata.namespace in [
+          'opensphere-console', 'opensphere-console-data',
+          'opensphere-console-change', 'opensphere-console-recovery',
+          'opensphere-osaa-credentials', 'opensphere-foundation',
+          'opensphere-system'
+        ]
+  validations:
+    - expression: >-
+        object.spec.jobTemplate.spec.template.spec.containers.all(c,
+          c.image.matches('^ghcr\\.io/opensphere-platform/[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?@sha256:[a-f0-9]{64}$')) &&
+        (!has(object.spec.jobTemplate.spec.template.spec.initContainers) ||
+          object.spec.jobTemplate.spec.template.spec.initContainers.all(c,
+            c.image.matches('^ghcr\\.io/opensphere-platform/[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?@sha256:[a-f0-9]{64}$')))
+      message: OpenSphere managed CronJobs require a release-pinned ghcr.io/opensphere-platform image digest
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: opensphere-console-image-integrity-cronjob
+spec:
+  policyName: opensphere-console-image-integrity-cronjob
+  validationActions: [Deny]

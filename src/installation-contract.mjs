@@ -9,6 +9,7 @@ export const MANAGED_NAMESPACES = Object.freeze([
   'opensphere-console',
   'opensphere-osaa-credentials',
   'opensphere-shell-sessions',
+  'opensphere-hiss-validation',
   'opensphere-system'
 ]);
 
@@ -24,12 +25,14 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
     'clusterrolebinding/opensphere-shell-runtime-token-reviewer',
     'clusterrolebinding/opensphere-cluster-manager-runtime',
+    'clusterrolebinding/opensphere-hiss-diagnostics',
     'clusterrolebinding/opensphere-extension-installation-profile-reader',
     'clusterrole/opensphere-extension-controller-cli-downloads',
     'clusterrole/opensphere-registry',
     'clusterrole/opensphere-console-osaa-gateway-environment-reader',
     'clusterrole/opensphere-shell-runtime-token-reviewer',
     'clusterrole/opensphere-cluster-manager-runtime',
+    'clusterrole/opensphere-hiss-diagnostics',
     'clusterrole/opensphere-extension-installation-profile-reader'
   ]),
   admissionPolicies: Object.freeze([

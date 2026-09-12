@@ -1,0 +1,38 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: opensphere-console-manual-ui-contract
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments"]
+  matchConditions:
+    - name: canonical-console-only
+      expression: >-
+        object.metadata.namespace == 'opensphere-console' &&
+        object.metadata.name == 'opensphere-console'
+  validations:
+    - expression: >-
+        has(object.spec.template.metadata.annotations) &&
+        'opensphere.io/manual-ui-contract' in object.spec.template.metadata.annotations &&
+        object.spec.template.metadata.annotations['opensphere.io/manual-ui-contract'] == 'console-help-center-v2'
+      message: opensphere-console must declare Manual UI contract console-help-center-v2
+    - expression: >-
+        object.spec.template.spec.containers.exists(c,
+          c.name == 'shell' &&
+          has(c.readinessProbe) &&
+          has(c.readinessProbe.exec) &&
+          c.readinessProbe.exec.command.exists(x, x.contains('console-help-center-v2')))
+      message: opensphere-console readiness must verify the Console Help Center v2 artifact
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: opensphere-console-manual-ui-contract
+spec:
+  policyName: opensphere-console-manual-ui-contract
+  validationActions: [Deny]

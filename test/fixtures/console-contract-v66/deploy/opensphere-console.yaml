@@ -1,0 +1,123 @@
+# C_WEB: web renderer and read-only content init container.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opensphere-console
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensphere-console
+  namespace: opensphere-console
+  labels:
+    app: opensphere-console
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: opensphere-console
+  template:
+    metadata:
+      annotations:
+        opensphere.io/manual-ui-contract: console-help-center-v2
+      labels:
+        app: opensphere-console
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: opensphere-console
+      imagePullSecrets:
+        - name: opensphere-ghcr-pull
+      containers:
+        - name: shell
+          image: ghcr.io/opensphere-platform/opensphere-console@sha256:bf285e5bd487b732a07f2bf1ba66475522103a69299b3be7d342414dace03133
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: OS_AUTH_ORIGIN
+              value: __OPENSPHERE_CONSOLE_URL__
+          volumeMounts:
+            - name: nginx-certs
+              mountPath: /etc/nginx/certs
+              readOnly: true
+            - name: console-index-content
+              mountPath: /usr/share/nginx/html/console-index
+              readOnly: true
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - '-ec'
+                - 'test "$(cat /usr/share/nginx/html/console-index/renderer-contract.txt)" = "console-index-renderer/v1" && cmp /usr/share/nginx/html/console-index-renderer-signature.txt /usr/share/nginx/html/console-index/renderer-signature.txt && (cd /usr/share/nginx/html/console-index && sha256sum -c SHA256SUMS >/dev/null) && grep -q ''"contract": "console-help-center-v2"'' /usr/share/nginx/html/manual-contract.json && grep -Rqs ''console-help-center-v2'' /usr/share/nginx/html/main-*.js && ! grep -Rqs ''os-source-chips'' /usr/share/nginx/html/main-*.js'
+            initialDelaySeconds: 2
+            timeoutSeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /index.html
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: nginx-certs
+          secret:
+            secretName: shell-tls
+        - name: console-index-content
+          emptyDir:
+            sizeLimit: 4Mi
+      securityContext:
+        fsGroup: 101
+      initContainers:
+        - name: console-index-content
+          image: __OPENSPHERE_CONSOLE_INDEX_CONTENT_IMAGE__
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: 10m
+              memory: 8Mi
+            limits:
+              cpu: 100m
+              memory: 32Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 101
+            runAsGroup: 101
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: console-index-content
+              mountPath: /output
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensphere-console-ext
+  namespace: opensphere-console
+spec:
+  type: LoadBalancer
+  selector:
+    app: opensphere-console
+  ports:
+    - name: https
+      port: 1114
+      targetPort: 8443

@@ -1,0 +1,644 @@
+# CBSS OS Shell control plane. Setup renders this manifest only after exact-
+# digest control/runtime images, database identities, release evidence and the
+# four separated TLS leaves have been verified.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opensphere-shell-sessions
+  labels:
+    opensphere.io/scope: ephemeral-shell-runtime
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata: { name: opensphere-shell-runtime-budget, namespace: opensphere-shell-sessions }
+spec:
+  hard:
+    pods: "8"
+    requests.cpu: 400m
+    requests.memory: 512Mi
+    requests.ephemeral-storage: 256Mi
+    limits.cpu: "8"
+    limits.memory: 3Gi
+    limits.ephemeral-storage: 1536Mi
+---
+apiVersion: v1
+kind: LimitRange
+metadata: { name: opensphere-shell-runtime-container-limits, namespace: opensphere-shell-sessions }
+spec:
+  limits:
+    - type: Container
+      min: { cpu: 25m, memory: 32Mi, ephemeral-storage: 16Mi }
+      max: { cpu: 500m, memory: 256Mi, ephemeral-storage: 128Mi }
+      defaultRequest: { cpu: 25m, memory: 32Mi, ephemeral-storage: 16Mi }
+      default: { cpu: 500m, memory: 128Mi, ephemeral-storage: 64Mi }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: opensphere-shell-api, namespace: opensphere-console }
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: opensphere-shell-gateway, namespace: opensphere-console }
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: opensphere-shell-reconciler, namespace: opensphere-console }
+automountServiceAccountToken: true
+---
+# Runtime has no RBAC binding. Its default token mount is disabled; the Pod
+# template projects one agent-only, audience-bound, ten-minute bootstrap token.
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: opensphere-shell-runtime, namespace: opensphere-shell-sessions }
+automountServiceAccountToken: false
+imagePullSecrets: [{ name: opensphere-ghcr-pull }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: opensphere-shell-reconciler, namespace: opensphere-shell-sessions }
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: opensphere-shell-reconciler, namespace: opensphere-shell-sessions }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: opensphere-shell-reconciler }
+subjects: [{ kind: ServiceAccount, name: opensphere-shell-reconciler, namespace: opensphere-console }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: opensphere-shell-runtime-token-reviewer }
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: opensphere-shell-runtime-token-reviewer }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: opensphere-shell-runtime-token-reviewer }
+subjects: [{ kind: ServiceAccount, name: opensphere-shell-reconciler, namespace: opensphere-console }]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: opensphere-shell-api, namespace: opensphere-console, labels: { app: opensphere-shell-api } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: opensphere-shell-api } }
+  template:
+    metadata: { labels: { app: opensphere-shell-api, opensphere.io/authority: cbss-api } }
+    spec:
+      serviceAccountName: opensphere-shell-api
+      automountServiceAccountToken: false
+      imagePullSecrets: [{ name: opensphere-ghcr-pull }]
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: api
+          image: __OPENSPHERE_OS_SHELL_CONTROL_IMAGE__
+          args: ["node", "server.js"]
+          env:
+            - { name: OS_SHELL_MODE, value: api }
+            - { name: OS_SHELL_TARGET_OWNER_ADMISSION, value: "true" }
+            - { name: OS_SHELL_OWNER_AUTHORITY_URL, value: "http://opensphere-console-api.opensphere-console.svc.cluster.local:8080" }
+            - { name: OS_SHELL_MANUAL_OWNER_URL, value: "http://opensphere-console-osaa-gateway.opensphere-console.svc.cluster.local:8080" }
+            - { name: OS_SHELL_PUBLIC_ORIGIN, value: "__OPENSPHERE_CONSOLE_URL__" }
+            - { name: OS_SHELL_CONTROL_ENABLED, value: "true" }
+            - { name: OS_SHELL_RUNTIME_CONTROL_ENABLED, value: "true" }
+            - { name: OS_SHELL_ATTACH_ENABLED, value: "false" }
+            - { name: OS_SHELL_RECONCILER_ENABLED, value: "false" }
+            - { name: OS_SHELL_RUNTIME_REGISTRATION_ENABLED, value: "false" }
+            - { name: OS_SHELL_RUNTIME_IMAGE, value: "__OPENSPHERE_OS_SHELL_RUNTIME_IMAGE__" }
+            - { name: OS_SHELL_RUNTIME_MAX_PROCESSES, value: "256" }
+            - { name: OS_SHELL_RUNTIME_GLOBAL_POD_LIMIT, value: "8" }
+            - { name: OS_SHELL_OS_ARTIFACT_DIGEST, value: "__OPENSPHERE_OS_SHELL_OS_ARTIFACT_DIGEST__" }
+            - { name: OS_SHELL_MANIFEST_SHA256, value: "__OPENSPHERE_OS_SHELL_MANIFEST_SHA256__" }
+            - { name: OS_SHELL_RELEASE_EVIDENCE_REF, value: "__OPENSPHERE_OS_SHELL_RELEASE_EVIDENCE_REF__" }
+            - { name: OS_SHELL_RELEASE_KEY_ID, value: opensphere-setup-release-v1 }
+            - { name: OS_SHELL_SESSION_POLICY_REVISION, value: native-shell-v1 }
+            - { name: OS_SHELL_RUNTIME_TEMPLATE_REVISION, value: "__OPENSPHERE_OS_SHELL_RUNTIME_TEMPLATE_SHA256__" }
+            - { name: OS_SHELL_INTERNAL_TLS_CERT_FILE, value: /var/run/opensphere-shell-api-tls/tls.crt }
+            - { name: OS_SHELL_INTERNAL_TLS_KEY_FILE, value: /var/run/opensphere-shell-api-tls/tls.key }
+            - { name: OS_SHELL_INTERNAL_CA_FILE, value: /var/run/opensphere-shell-control-ca/ca.crt }
+            - { name: NODE_EXTRA_CA_CERTS, value: /var/run/opensphere-shell-control-ca/ca.crt }
+            - { name: OS_SHELL_CONSOLE_BACKEND_URL, value: "https://opensphere-shell-credential-authority.opensphere-console.svc.cluster.local:8444" }
+            - { name: PGHOST, valueFrom: { secretKeyRef: { name: opensphere-shell-api-db, key: host } } }
+            - { name: PGPORT, valueFrom: { secretKeyRef: { name: opensphere-shell-api-db, key: port } } }
+            - { name: PGDATABASE, valueFrom: { secretKeyRef: { name: opensphere-shell-api-db, key: database } } }
+            - { name: PGUSER, valueFrom: { secretKeyRef: { name: opensphere-shell-api-db, key: username } } }
+            - { name: PGPASSWORD, valueFrom: { secretKeyRef: { name: opensphere-shell-api-db, key: password } } }
+            - { name: PGSSLMODE, valueFrom: { secretKeyRef: { name: opensphere-shell-api-db, key: sslmode } } }
+            - { name: OS_SHELL_ADMISSION_SECRET, valueFrom: { secretKeyRef: { name: opensphere-shell-control-runtime, key: admission-secret } } }
+            - { name: OS_SHELL_DELEGATION_SECRET, valueFrom: { secretKeyRef: { name: opensphere-shell-control-runtime, key: delegation-secret } } }
+          ports: [{ name: browser-http, containerPort: 8080 }, { name: runtime-tls, containerPort: 8443 }]
+          volumeMounts:
+            - { name: installation-profile, mountPath: /var/run/opensphere/installation, readOnly: true }
+            - { name: api-tls, mountPath: /var/run/opensphere-shell-api-tls, readOnly: true }
+            - { name: control-ca, mountPath: /var/run/opensphere-shell-control-ca, readOnly: true }
+          readinessProbe: { httpGet: { path: /readyz, port: 8080 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 10 }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
+      volumes:
+        - { name: installation-profile, configMap: { name: opensphere-installation-lock, items: [{ key: config.json, path: config.json }] } }
+        - { name: api-tls, secret: { secretName: opensphere-shell-api-tls } }
+        - { name: control-ca, configMap: { name: opensphere-shell-control-ca } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: opensphere-shell-gateway, namespace: opensphere-console, labels: { app: opensphere-shell-gateway } }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: opensphere-shell-gateway } }
+  template:
+    metadata: { labels: { app: opensphere-shell-gateway, opensphere.io/authority: cbss-gateway } }
+    spec:
+      serviceAccountName: opensphere-shell-gateway
+      automountServiceAccountToken: false
+      imagePullSecrets: [{ name: opensphere-ghcr-pull }]
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: gateway
+          image: __OPENSPHERE_OS_SHELL_CONTROL_IMAGE__
+          env:
+            - { name: OS_SHELL_MODE, value: gateway }
+            - { name: OS_SHELL_TARGET_OWNER_ADMISSION, value: "true" }
+            - { name: OS_SHELL_OWNER_AUTHORITY_URL, value: "http://opensphere-console-api.opensphere-console.svc.cluster.local:8080" }
+            - { name: OS_SHELL_PUBLIC_ORIGIN, value: "__OPENSPHERE_CONSOLE_URL__" }
+            - { name: OS_SHELL_CONTROL_ENABLED, value: "true" }
+            - { name: OS_SHELL_ATTACH_ENABLED, value: "true" }
+            - { name: OS_SHELL_RECONCILER_ENABLED, value: "false" }
+            - { name: OS_SHELL_RUNTIME_REGISTRATION_ENABLED, value: "false" }
+            - { name: OS_SHELL_RUNTIME_CONTROL_ENABLED, value: "false" }
+            - { name: OS_SHELL_RUNTIME_IMAGE, value: "__OPENSPHERE_OS_SHELL_RUNTIME_IMAGE__" }
+            - { name: OS_SHELL_RUNTIME_MAX_PROCESSES, value: "256" }
+            - { name: OS_SHELL_RUNTIME_GLOBAL_POD_LIMIT, value: "8" }
+            - { name: OS_SHELL_OS_ARTIFACT_DIGEST, value: "__OPENSPHERE_OS_SHELL_OS_ARTIFACT_DIGEST__" }
+            - { name: OS_SHELL_MANIFEST_SHA256, value: "__OPENSPHERE_OS_SHELL_MANIFEST_SHA256__" }
+            - { name: OS_SHELL_RELEASE_EVIDENCE_REF, value: "__OPENSPHERE_OS_SHELL_RELEASE_EVIDENCE_REF__" }
+            - { name: OS_SHELL_RELEASE_KEY_ID, value: opensphere-setup-release-v1 }
+            - { name: OS_SHELL_SESSION_POLICY_REVISION, value: native-shell-v1 }
+            - { name: OS_SHELL_RUNTIME_TEMPLATE_REVISION, value: "__OPENSPHERE_OS_SHELL_RUNTIME_TEMPLATE_SHA256__" }
+            - { name: PGHOST, valueFrom: { secretKeyRef: { name: opensphere-shell-gateway-db, key: host } } }
+            - { name: PGPORT, valueFrom: { secretKeyRef: { name: opensphere-shell-gateway-db, key: port } } }
+            - { name: PGDATABASE, valueFrom: { secretKeyRef: { name: opensphere-shell-gateway-db, key: database } } }
+            - { name: PGUSER, valueFrom: { secretKeyRef: { name: opensphere-shell-gateway-db, key: username } } }
+            - { name: PGPASSWORD, valueFrom: { secretKeyRef: { name: opensphere-shell-gateway-db, key: password } } }
+            - { name: PGSSLMODE, valueFrom: { secretKeyRef: { name: opensphere-shell-gateway-db, key: sslmode } } }
+            - { name: OS_SHELL_ADMISSION_SECRET, valueFrom: { secretKeyRef: { name: opensphere-shell-control-runtime, key: admission-secret } } }
+          ports: [{ name: gateway-http, containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /readyz, port: 8080 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 10 }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: opensphere-shell-reconciler, namespace: opensphere-console, labels: { app: opensphere-shell-reconciler } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: opensphere-shell-reconciler } }
+  template:
+    metadata: { labels: { app: opensphere-shell-reconciler, opensphere.io/authority: cbss-reconciler } }
+    spec:
+      serviceAccountName: opensphere-shell-reconciler
+      automountServiceAccountToken: true
+      imagePullSecrets: [{ name: opensphere-ghcr-pull }]
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: reconciler
+          image: __OPENSPHERE_OS_SHELL_CONTROL_IMAGE__
+          env:
+            - { name: OS_SHELL_MODE, value: reconciler }
+            - { name: OS_SHELL_CONTROL_ENABLED, value: "true" }
+            - { name: OS_SHELL_RECONCILER_ENABLED, value: "true" }
+            - { name: OS_SHELL_RUNTIME_REGISTRATION_ENABLED, value: "true" }
+            - { name: OS_SHELL_ATTACH_ENABLED, value: "false" }
+            - { name: OS_SHELL_RUNTIME_CONTROL_ENABLED, value: "false" }
+            - { name: OS_SHELL_RUNTIME_IMAGE, value: "__OPENSPHERE_OS_SHELL_RUNTIME_IMAGE__" }
+            - { name: OS_SHELL_RUNTIME_MAX_PROCESSES, value: "256" }
+            - { name: OS_SHELL_RUNTIME_GLOBAL_POD_LIMIT, value: "8" }
+            - { name: OS_SHELL_OS_ARTIFACT_DIGEST, value: "__OPENSPHERE_OS_SHELL_OS_ARTIFACT_DIGEST__" }
+            - { name: OS_SHELL_MANIFEST_SHA256, value: "__OPENSPHERE_OS_SHELL_MANIFEST_SHA256__" }
+            - { name: OS_SHELL_RELEASE_EVIDENCE_REF, value: "__OPENSPHERE_OS_SHELL_RELEASE_EVIDENCE_REF__" }
+            - { name: OS_SHELL_RELEASE_KEY_ID, value: opensphere-setup-release-v1 }
+            - { name: OS_SHELL_SESSION_POLICY_REVISION, value: native-shell-v1 }
+            - { name: OS_SHELL_RUNTIME_TEMPLATE_REVISION, value: "__OPENSPHERE_OS_SHELL_RUNTIME_TEMPLATE_SHA256__" }
+            - { name: OS_SHELL_INTERNAL_TLS_CERT_FILE, value: /var/run/opensphere-shell-reconciler-tls/tls.crt }
+            - { name: OS_SHELL_INTERNAL_TLS_KEY_FILE, value: /var/run/opensphere-shell-reconciler-tls/tls.key }
+            - { name: PGHOST, valueFrom: { secretKeyRef: { name: opensphere-shell-reconciler-db, key: host } } }
+            - { name: PGPORT, valueFrom: { secretKeyRef: { name: opensphere-shell-reconciler-db, key: port } } }
+            - { name: PGDATABASE, valueFrom: { secretKeyRef: { name: opensphere-shell-reconciler-db, key: database } } }
+            - { name: PGUSER, valueFrom: { secretKeyRef: { name: opensphere-shell-reconciler-db, key: username } } }
+            - { name: PGPASSWORD, valueFrom: { secretKeyRef: { name: opensphere-shell-reconciler-db, key: password } } }
+            - { name: PGSSLMODE, valueFrom: { secretKeyRef: { name: opensphere-shell-reconciler-db, key: sslmode } } }
+          ports: [{ name: health-http, containerPort: 8080 }, { name: register-tls, containerPort: 8443 }]
+          volumeMounts: [{ name: reconciler-tls, mountPath: /var/run/opensphere-shell-reconciler-tls, readOnly: true }]
+          readinessProbe: { httpGet: { path: /readyz, port: 8080 }, periodSeconds: 5 }
+          livenessProbe: { httpGet: { path: /healthz, port: 8080 }, periodSeconds: 10 }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: ["ALL"] } }
+      volumes: [{ name: reconciler-tls, secret: { secretName: opensphere-shell-reconciler-tls } }]
+---
+# OS Shell is the sole owner of its Backend feature gates. Console Backend
+# deployments consume this object but never create, reset or delete it.
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: opensphere-shell-control-gates, namespace: opensphere-console }
+data:
+  admission-enabled: "true"
+  credential-authority-enabled: "true"
+---
+apiVersion: v1
+kind: Service
+metadata: { name: opensphere-shell-api, namespace: opensphere-console }
+spec:
+  selector: { app: opensphere-shell-api }
+  ports: [{ name: browser-http, port: 8080, targetPort: browser-http }, { name: runtime-tls, port: 8443, targetPort: runtime-tls }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: opensphere-shell-gateway, namespace: opensphere-console }
+spec:
+  selector: { app: opensphere-shell-gateway }
+  ports: [{ name: gateway-http, port: 8080, targetPort: gateway-http }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: opensphere-shell-reconciler, namespace: opensphere-console }
+spec:
+  selector: { app: opensphere-shell-reconciler }
+  ports: [{ name: health-http, port: 8080, targetPort: health-http }, { name: register-tls, port: 8443, targetPort: register-tls }]
+---
+# Selects the Setup-owned C_API Pods and exposes only their dedicated TLS 1.3
+# credential listener. The normal C_API Service does not expose 8444.
+apiVersion: v1
+kind: Service
+metadata: { name: opensphere-shell-credential-authority, namespace: opensphere-console }
+spec:
+  selector: { app.kubernetes.io/name: opensphere-console-api }
+  ports: [{ name: credential-tls, port: 8444, targetPort: shell-cred-tls }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: opensphere-shell-console-api, namespace: opensphere-console }
+spec:
+  type: ClusterIP
+  selector: { app.kubernetes.io/name: opensphere-console-api }
+  ports: [{ name: console-api-tls, port: 8445, targetPort: console-api-tls }]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: opensphere-shell-runtime-template-v1
+  annotations:
+    opensphere.io/admission-contract: opensphere-shell-runtime-template-v1
+    opensphere.io/expression-set-sha256: sha256:8b0d9dfb2945abea469b754c9f6bc45748e4c387b4c98c2e69ed85e557eb9b0b
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["pods"]
+        scope: Namespaced
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["UPDATE"]
+        resources: ["pods/ephemeralcontainers", "pods/resize"]
+        scope: Namespaced
+  validations:
+    - expression: >-
+        request.userInfo.username == 'system:serviceaccount:opensphere-console:opensphere-shell-reconciler'
+      message: only the fenced OS Shell reconciler may project runtime Pods
+      reason: Forbidden
+    - expression: >-
+        object.metadata.namespace == 'opensphere-shell-sessions' &&
+        object.metadata.name == 'os-shell-' + object.metadata.labels['opensphere.io/session-id'].replace('-', '').substring(0, 20) &&
+        (!has(object.metadata.generateName) || object.metadata.generateName == '') &&
+        object.metadata.labels.size() == 4 &&
+        object.metadata.labels['app'] == 'opensphere-os-shell-runtime' &&
+        object.metadata.labels['opensphere.io/session-id'].matches('^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') &&
+        object.metadata.labels['opensphere.io/generation'].matches('^[1-9][0-9]*$') &&
+        object.metadata.labels['opensphere.io/fencing-epoch'].matches('^[1-9][0-9]*$') &&
+        (!has(object.metadata.annotations) || object.metadata.annotations.size() == 0) &&
+        (!has(object.metadata.ownerReferences) || object.metadata.ownerReferences.size() == 0) &&
+        (!has(object.metadata.finalizers) || object.metadata.finalizers.size() == 0)
+      message: runtime Pod identity labels must match the closed CBSS projection
+      reason: Invalid
+    - expression: >-
+        object.spec.serviceAccountName == 'opensphere-shell-runtime' &&
+        object.spec.automountServiceAccountToken == false &&
+        has(object.spec.hostUsers) && object.spec.hostUsers == false &&
+        object.spec.restartPolicy == 'Never' && object.spec.enableServiceLinks == false &&
+        object.spec.terminationGracePeriodSeconds == 5 && object.spec.dnsPolicy == 'ClusterFirst' &&
+        object.spec.schedulerName == 'default-scheduler' && object.spec.imagePullSecrets.size() == 1 &&
+        object.spec.imagePullSecrets[0].name == 'opensphere-ghcr-pull' &&
+        (!has(object.spec.initContainers) || object.spec.initContainers.size() == 0) &&
+        (!has(object.spec.ephemeralContainers) || object.spec.ephemeralContainers.size() == 0) &&
+        (!has(object.spec.runtimeClassName) || object.spec.runtimeClassName == '') &&
+        (!has(object.spec.nodeName) || object.spec.nodeName == '') &&
+        (!has(object.spec.nodeSelector) || object.spec.nodeSelector.size() == 0) &&
+        (!has(object.spec.affinity)) &&
+        object.spec.tolerations.size() == 2 &&
+        object.spec.tolerations.all(t,
+          (t.key == 'node.kubernetes.io/not-ready' || t.key == 'node.kubernetes.io/unreachable') &&
+          t.operator == 'Exists' && t.effect == 'NoExecute' && t.tolerationSeconds == 300 &&
+          (!has(t.value) || t.value == '')
+        ) &&
+        object.spec.tolerations.exists(t, t.key == 'node.kubernetes.io/not-ready') &&
+        object.spec.tolerations.exists(t, t.key == 'node.kubernetes.io/unreachable') &&
+        (!has(object.spec.shareProcessNamespace) || object.spec.shareProcessNamespace == false) &&
+        (!has(object.spec.dnsConfig)) && (!has(object.spec.hostAliases) || object.spec.hostAliases.size() == 0) &&
+        (!has(object.spec.activeDeadlineSeconds)) && (!has(object.spec.priorityClassName) || object.spec.priorityClassName == '') &&
+        (!has(object.spec.priority) || object.spec.priority == 0) &&
+        (!has(object.spec.topologySpreadConstraints) || object.spec.topologySpreadConstraints.size() == 0) &&
+        (!has(object.spec.hostNetwork) || object.spec.hostNetwork == false) &&
+        (!has(object.spec.hostPID) || object.spec.hostPID == false) &&
+        (!has(object.spec.hostIPC) || object.spec.hostIPC == false) &&
+        object.spec.securityContext.runAsNonRoot == true && object.spec.securityContext.fsGroup == 65532 &&
+        object.spec.securityContext.fsGroupChangePolicy == 'OnRootMismatch' &&
+        object.spec.securityContext.seccompProfile.type == 'RuntimeDefault' &&
+        (!has(object.spec.securityContext.sysctls) || object.spec.securityContext.sysctls.size() == 0) &&
+        (!has(object.spec.securityContext.supplementalGroups) || object.spec.securityContext.supplementalGroups.size() == 0) &&
+        (!has(object.spec.securityContext.windowsOptions)) && (!has(object.spec.securityContext.seLinuxOptions))
+      message: runtime Pod scheduling, service account, and host boundary are immutable
+      reason: Forbidden
+    - expression: >-
+        object.spec.containers.size() == 2 &&
+        object.spec.containers.exists(c, c.name == 'pty') && object.spec.containers.exists(c, c.name == 'agent') &&
+        object.spec.containers.all(c,
+          c.image == '__OPENSPHERE_OS_SHELL_RUNTIME_IMAGE__' &&
+          c.imagePullPolicy == 'IfNotPresent' && !has(c.command) && c.args.size() == 1 &&
+          ((c.name == 'pty' && c.args[0] == 'pty') || (c.name == 'agent' && c.args[0] == 'agent')) &&
+          (!has(c.envFrom) || c.envFrom.size() == 0) &&
+          c.securityContext.allowPrivilegeEscalation == false && c.securityContext.readOnlyRootFilesystem == true &&
+          c.securityContext.runAsNonRoot == true && c.securityContext.runAsUser == 65532 && c.securityContext.runAsGroup == 65532 &&
+          c.securityContext.seccompProfile.type == 'RuntimeDefault' &&
+          (!has(c.securityContext.privileged) || c.securityContext.privileged == false) &&
+          c.securityContext.capabilities.drop.size() == 1 && c.securityContext.capabilities.drop[0] == 'ALL' &&
+          (!has(c.securityContext.capabilities.add) || c.securityContext.capabilities.add.size() == 0) &&
+          (!has(c.securityContext.procMount) || c.securityContext.procMount == 'Default') &&
+          (!has(c.securityContext.seLinuxOptions)) && (!has(c.securityContext.windowsOptions)) &&
+          (!has(c.workingDir) || c.workingDir == '') &&
+          (!has(c.stdin) || c.stdin == false) && (!has(c.tty) || c.tty == false) &&
+          (!has(c.lifecycle)) && (!has(c.livenessProbe)) && (!has(c.startupProbe)) &&
+          (!has(c.volumeDevices) || c.volumeDevices.size() == 0) &&
+          ((c.name == 'pty' && (!has(c.ports) || c.ports.size() == 0) && !has(c.readinessProbe)) ||
+           (c.name == 'agent' && c.ports.size() == 1 && c.ports[0].name == 'runtime-wss' &&
+            c.ports[0].containerPort == 8443 && c.readinessProbe.tcpSocket.port == 'runtime-wss' &&
+            c.readinessProbe.periodSeconds == 2 && c.readinessProbe.failureThreshold == 10)))
+      message: runtime containers require the exact digest, command, count, and restricted security context
+      reason: Forbidden
+    - expression: >-
+        object.spec.containers.all(c,
+          c.env.exists(e, e.name == 'OPENSPHERE_SHELL_SESSION_ID' && e.value == object.metadata.labels['opensphere.io/session-id']) &&
+          c.env.exists(e, e.name == 'OPENSPHERE_SHELL_GENERATION' && e.value == object.metadata.labels['opensphere.io/generation']) &&
+          c.env.exists(e, e.name == 'OPENSPHERE_SHELL_FENCING_EPOCH' && e.value == object.metadata.labels['opensphere.io/fencing-epoch']) &&
+          c.env.exists(e, e.name == 'OPENSPHERE_SHELL_SESSION_CLASS' && e.value == 'operator-interactive') &&
+          c.env.exists(e, e.name == 'OPENSPHERE_SHELL_RUNTIME_ADAPTER_ID' && e.value == 'cbss.kubernetes-pod') &&
+          c.env.exists(e, e.name == 'OPENSPHERE_SHELL_NETWORK_PROFILE' && e.value == 'console-only') &&
+          c.env.exists(e, e.name == 'OPENSPHERE_SHELL_MAX_PROCESSES' && e.value == '256') &&
+          c.env.exists(e, e.name == 'OPENSPHERE_SHELL_ACTOR_ID' && e.value.matches('^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$')) &&
+          c.env.exists(e, e.name == 'OPENSPHERE_SHELL_ORIGIN' && e.value.matches('^https://[^/?#]+$')) &&
+          c.env.exists(e, e.name == 'OPENSPHERE_SHELL_PERMISSION_REVISION' && e.value.matches('^sha256:[a-f0-9]{64}$')) &&
+          c.env.exists(e, e.name == 'OPENSPHERE_SHELL_AAL' && e.value in ['aal1','aal2']) &&
+          c.env.exists(e, e.name == 'OPENSPHERE_SHELL_RELEASE_EVIDENCE_REF' && e.value.size() > 0 && e.value.size() <= 512) &&
+          c.env.exists(e, e.name == 'OPENSPHERE_SHELL_RUNTIME_UID' && has(e.valueFrom) &&
+            e.valueFrom.fieldRef.fieldPath == 'metadata.uid') &&
+          c.env.exists(e, e.name == 'OPENSPHERE_SHELL_CONSOLE_API_URL' &&
+            e.value == 'https://opensphere-shell-console-api.opensphere-console.svc.cluster.local:8445') &&
+          c.env.exists(e, e.name == 'SSL_CERT_FILE' && e.value == '/var/run/opensphere-shell-control-ca/ca.crt') &&
+          (c.name != 'agent' || (c.env.exists(e, e.name == 'OPENSPHERE_SHELL_REGISTRATION_URL' &&
+            e.value == 'https://opensphere-shell-reconciler.opensphere-console.svc.cluster.local:8443/internal/runtime/register') &&
+            c.env.exists(e, e.name == 'OPENSPHERE_SHELL_CONTROL_URL' &&
+            e.value == 'https://opensphere-shell-api.opensphere-console.svc.cluster.local:8443/api/os-shell/runtime'))) &&
+          ((c.name == 'pty' && c.env.size() == 15) || (c.name == 'agent' && c.env.size() == 17)) &&
+          c.env.all(e, c.env.filter(x, x.name == e.name).size() == 1) &&
+          c.env.all(e, e.name == 'OPENSPHERE_SHELL_RUNTIME_UID' ?
+            (has(e.valueFrom) && !has(e.value)) : (has(e.value) && !has(e.valueFrom))) &&
+          c.env.all(e, ['OPENSPHERE_SHELL_SESSION_ID','OPENSPHERE_SHELL_ACTOR_ID','OPENSPHERE_SHELL_ORIGIN',
+            'OPENSPHERE_SHELL_SESSION_CLASS','OPENSPHERE_SHELL_RUNTIME_ADAPTER_ID','OPENSPHERE_SHELL_NETWORK_PROFILE',
+            'OPENSPHERE_SHELL_RUNTIME_UID','OPENSPHERE_SHELL_PERMISSION_REVISION','OPENSPHERE_SHELL_AAL',
+            'OPENSPHERE_SHELL_RELEASE_EVIDENCE_REF','OPENSPHERE_SHELL_GENERATION','OPENSPHERE_SHELL_FENCING_EPOCH',
+            'OPENSPHERE_SHELL_MAX_PROCESSES','OPENSPHERE_SHELL_CONSOLE_API_URL','SSL_CERT_FILE',
+            'OPENSPHERE_SHELL_REGISTRATION_URL','OPENSPHERE_SHELL_CONTROL_URL'].exists(n, n == e.name)))
+      message: runtime environment is a closed binding with no injected variables
+      reason: Forbidden
+    - expression: >-
+        object.spec.containers.all(c,
+          c.resources.requests.size() == 3 && c.resources.limits.size() == 3 &&
+          c.resources.requests.cpu == '25m' && c.resources.requests.memory == '32Mi' &&
+          c.resources.requests['ephemeral-storage'] == '16Mi' &&
+          c.resources.limits.cpu == '500m' &&
+          ((c.name == 'pty' && c.resources.limits.memory == '256Mi' && c.resources.limits['ephemeral-storage'] == '128Mi') ||
+           (c.name == 'agent' && c.resources.limits.memory == '128Mi' && c.resources.limits['ephemeral-storage'] == '64Mi')) &&
+          ((c.name == 'pty' && c.volumeMounts.size() == 4 &&
+            c.volumeMounts.exists(m, m.name == 'internal' && m.mountPath == '/run/opensphere-shell-internal' && (!has(m.readOnly) || m.readOnly == false)) &&
+            c.volumeMounts.exists(m, m.name == 'agent-channel' && m.mountPath == '/run/opensphere-shell' && m.readOnly == true) &&
+            c.volumeMounts.exists(m, m.name == 'workspace' && m.mountPath == '/home/opensphere' && (!has(m.readOnly) || m.readOnly == false)) &&
+            c.volumeMounts.exists(m, m.name == 'control-ca' && m.mountPath == '/var/run/opensphere-shell-control-ca' && m.readOnly == true)) ||
+           (c.name == 'agent' && c.volumeMounts.size() == 4 &&
+            c.volumeMounts.exists(m, m.name == 'internal' && m.mountPath == '/run/opensphere-shell-internal' && (!has(m.readOnly) || m.readOnly == false)) &&
+            c.volumeMounts.exists(m, m.name == 'agent-channel' && m.mountPath == '/run/opensphere-shell' && (!has(m.readOnly) || m.readOnly == false)) &&
+            c.volumeMounts.exists(m, m.name == 'bootstrap' && m.mountPath == '/var/run/secrets/tokens' && m.readOnly == true) &&
+            c.volumeMounts.exists(m, m.name == 'control-ca' && m.mountPath == '/var/run/opensphere-shell-control-ca' && m.readOnly == true))))
+      message: runtime resources and mount graph must exactly match the bounded template
+      reason: Forbidden
+    - expression: >-
+        object.spec.volumes.size() == 5 &&
+        object.spec.volumes.exists(v, v.name == 'internal' && has(v.emptyDir) && v.emptyDir.medium == 'Memory' && v.emptyDir.sizeLimit == '1Mi') &&
+        object.spec.volumes.exists(v, v.name == 'agent-channel' && has(v.emptyDir) && v.emptyDir.medium == 'Memory' && v.emptyDir.sizeLimit == '1Mi') &&
+        object.spec.volumes.exists(v, v.name == 'workspace' && has(v.emptyDir) && v.emptyDir.medium == 'Memory' && v.emptyDir.sizeLimit == '64Mi') &&
+        object.spec.volumes.exists(v, v.name == 'bootstrap' && has(v.projected) && v.projected.defaultMode == 288 &&
+          v.projected.sources.size() == 1 && has(v.projected.sources[0].serviceAccountToken) &&
+          v.projected.sources[0].serviceAccountToken.audience == 'opensphere-shell-runtime-bootstrap' &&
+          v.projected.sources[0].serviceAccountToken.expirationSeconds == 600) &&
+        object.spec.volumes.exists(v, v.name == 'control-ca' && has(v.configMap) && v.configMap.name == 'opensphere-shell-control-ca')
+      message: runtime volumes must exactly match bounded tmpfs, projected bootstrap, and public CA inputs
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata: { name: opensphere-shell-runtime-template-v1 }
+spec:
+  policyName: opensphere-shell-runtime-template-v1
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels: { opensphere.io/scope: ephemeral-shell-runtime }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: opensphere-shell-api-ingress, namespace: opensphere-console }
+spec:
+  podSelector: { matchLabels: { app: opensphere-shell-api } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: opensphere-console-osaa-gateway } }
+        - podSelector: { matchLabels: { app: opensphere-console } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: opensphere-console-api } }
+      ports: [{ protocol: TCP, port: 8080 }]
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: opensphere-shell-sessions } }
+          podSelector: { matchLabels: { app: opensphere-os-shell-runtime } }
+      ports: [{ protocol: TCP, port: 8443 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: opensphere-shell-gateway-ingress, namespace: opensphere-console }
+spec:
+  podSelector: { matchLabels: { app: opensphere-shell-gateway } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: opensphere-console } }
+        - podSelector: { matchLabels: { app.kubernetes.io/name: opensphere-console-api } }
+      ports: [{ protocol: TCP, port: 8080 }]
+    - from:
+        - podSelector: { matchLabels: { app: opensphere-shell-api } }
+      ports: [{ protocol: TCP, port: 8080 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: opensphere-shell-reconciler-ingress, namespace: opensphere-console }
+spec:
+  podSelector: { matchLabels: { app: opensphere-shell-reconciler } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: opensphere-shell-sessions } }
+          podSelector: { matchLabels: { app: opensphere-os-shell-runtime } }
+      ports: [{ protocol: TCP, port: 8443 }]
+    - from:
+        - podSelector: { matchLabels: { app: opensphere-shell-api } }
+      ports: [{ protocol: TCP, port: 8080 }]
+---
+# These additive rules extend the C_API ingress boundary for its two dedicated
+# TLS listeners. Normal port 8080 remains governed by the C_API manifest.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: opensphere-shell-credential-authority-ingress, namespace: opensphere-console }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: opensphere-console-api } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: opensphere-shell-api } }
+      ports: [{ protocol: TCP, port: 8444 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: opensphere-shell-console-api-ingress, namespace: opensphere-console }
+spec:
+  podSelector: { matchLabels: { app.kubernetes.io/name: opensphere-console-api } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: opensphere-shell-sessions } }
+          podSelector: { matchLabels: { app: opensphere-os-shell-runtime } }
+      ports: [{ protocol: TCP, port: 8445 }]
+    - from:
+        - podSelector: { matchLabels: { app: opensphere-shell-api } }
+      ports: [{ protocol: TCP, port: 8445 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: opensphere-shell-api-egress, namespace: opensphere-console }
+spec:
+  podSelector: { matchLabels: { app: opensphere-shell-api } }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: opensphere-registry } }
+      ports: [{ protocol: TCP, port: 8080 }]
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/managed-by: opensphere-extension-controller, opensphere.io/command-provider: 'true' } }
+      ports: [{ protocol: TCP, port: 8080 }]
+    - to:
+        - podSelector: { matchLabels: { opensphere.io/extension-id: cluster-manager } }
+      ports: [{ protocol: TCP, port: 8080 }]
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: opensphere-console-api } }
+      ports: [{ protocol: TCP, port: 8080 }]
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: opensphere-console-api } }
+      ports: [{ protocol: TCP, port: 8444 }]
+    - to:
+        - podSelector:
+            matchExpressions:
+              - { key: app, operator: In, values: [opensphere-shell-gateway, opensphere-shell-reconciler] }
+      ports: [{ protocol: TCP, port: 8080 }]
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: opensphere-console-api } }
+      ports: [{ protocol: TCP, port: 8445 }]
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: opensphere-console-data } }
+          podSelector: { matchLabels: { app: opensphere-supabase-postgres } }
+      ports: [{ protocol: TCP, port: 5432 }]
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: opensphere-console-osaa-gateway } }
+      ports: [{ protocol: TCP, port: 8080 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: opensphere-shell-gateway-egress, namespace: opensphere-console }
+spec:
+  podSelector: { matchLabels: { app: opensphere-shell-gateway } }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector: { matchLabels: { app.kubernetes.io/name: opensphere-console-api } }
+      ports: [{ protocol: TCP, port: 8080 }]
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: opensphere-shell-sessions } }
+          podSelector: { matchLabels: { app: opensphere-os-shell-runtime } }
+      ports: [{ protocol: TCP, port: 8443 }]
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: opensphere-console-data } }
+          podSelector: { matchLabels: { app: opensphere-supabase-postgres } }
+      ports: [{ protocol: TCP, port: 5432 }]
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: opensphere-shell-runtime-default-deny, namespace: opensphere-shell-sessions }
+spec: { podSelector: {}, policyTypes: [Ingress, Egress] }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: opensphere-shell-runtime-closed-network, namespace: opensphere-shell-sessions }
+spec:
+  podSelector: { matchLabels: { app: opensphere-os-shell-runtime } }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: opensphere-console } }
+          podSelector: { matchLabels: { app: opensphere-shell-gateway } }
+      ports: [{ protocol: TCP, port: 8443 }]
+  egress:
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: opensphere-console } }
+          podSelector:
+            matchExpressions:
+              - { key: app, operator: In, values: [opensphere-shell-api, opensphere-shell-reconciler] }
+      ports: [{ protocol: TCP, port: 8443 }]
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: opensphere-console } }
+          podSelector: { matchLabels: { app.kubernetes.io/name: opensphere-console-api } }
+      # Kubernetes NetworkPolicy is evaluated after Service DNAT by the
+      # supported CNI, so authorize the target container port, not Service 8445.
+      ports: [{ protocol: TCP, port: 8445 }]
+    - to:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: kube-system } }
+      ports: [{ protocol: UDP, port: 53 }, { protocol: TCP, port: 53 }]

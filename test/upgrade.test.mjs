@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import {
   bootstrap,
   COMPONENT_ROLLOUTS,
@@ -267,9 +268,10 @@ function runtime(previous, events, {
     }],
     readReleaseInventory: () => recordedInventory,
     recordReleaseInventory: (release) => events.push(`inventory:${release.sourceRevision}`),
-    pruneReleaseResources: (from, to) => events.push(
-      `prune:${from[0]?.name ?? 'none'}->${to[0]?.name ?? 'none'}`
-    ),
+    pruneReleaseResources: (from, to) => {
+      events.push(`prune:${from[0]?.name ?? 'none'}->${to[0]?.name ?? 'none'}`);
+      return [];
+    },
     deleteAgentIdentityNamespace: (namespace) => events.push(`delete-namespace:${namespace}`),
     recordInstallationState: (release) => events.push(`record:${release.sourceRevision}`),
     waitForCoreRollouts: () => events.push('wait'),
@@ -283,6 +285,48 @@ function runtime(previous, events, {
     }
   };
 }
+
+test('Knowledge-only upgrade and failure recovery retain all images and persist the exact data pointer', async()=>{
+ const {base:previous,target}=JSON.parse(readFileSync(new URL('./fixtures/knowledge-release-v1.json',import.meta.url)));
+ for(const fail of [false,true]){
+  const events=[],records=[],prepared=[],installed=[];
+  const operations=runtime(previous,events,{recordedInventory:[{apiVersion:'v1',kind:'ConfigMap',namespace:'opensphere-console',name:'complete-release'}]});
+  const prepare=operations.prepareComponentRelease;
+  operations.prepareComponentRelease=async(release,...args)=>{prepared.push(structuredClone(release));return prepare(release,...args);};
+  const install=operations.installPreparedComponentRelease;
+  operations.installPreparedComponentRelease=(release,...args)=>{installed.push(structuredClone(release));return install(release,...args);};
+  operations.recordInstallationState=(release,_sc,_admin,_url,_env,_tls,phase)=>records.push({release:structuredClone(release),phase});
+  operations.verifyInstallation=async release=>{if(fail&&release.releaseDigest===target.releaseDigest)throw Error('data delivery unhealthy');return {verifiedAt:'2026-09-10T00:00:00Z'};};
+  if(fail)await assert.rejects(upgrade(previous,target,{runtime:operations}),/previous release was restored/);
+  else assert.equal((await upgrade(previous,target,{runtime:operations})).changed,true);
+  assert.deepEqual(prepared.map(r=>r.knowledge.version),[target.knowledge.version,previous.knowledge.version]);
+  for(const release of [...prepared,...installed]){assert.deepEqual(release.components,previous.components);assert.deepEqual(release.auxiliaryArtifacts,previous.auxiliaryArtifacts);}
+  assert.equal(records.at(-1).phase,'Ready');assert.deepEqual(records.at(-1).release,fail?previous:target);
+  assert(events.includes('wait-component:osaaGateway'));assert(!events.some(e=>e.startsWith('install:')));
+ }
+});
+
+test('identical installed component target is observed again without duplicate apply after a lost response',async()=>{
+ const {target}=JSON.parse(readFileSync(new URL('./fixtures/knowledge-release-v1.json',import.meta.url)));
+ const events=[],result=await upgrade(target,structuredClone(target),{runtime:runtime(target,events)});
+ assert.equal(result.changed,false);assert(!events.some(e=>/^(prepare|install|record|inventory|prune)/.test(e)));
+ assert(events.some(e=>e.startsWith('verify:')));
+});
+
+test('deferred Knowledge retirement remains inventoried through successful upgrade and rollback', async () => {
+  const previous = lock('1'.repeat(40), 'a'), target = lock('2'.repeat(40), 'b');
+  const retained = { apiVersion: 'v1', kind: 'ConfigMap', namespace: 'opensphere-console', name: 'os-knowledge-' + 'a'.repeat(32) };
+  for (const failTarget of [false, true]) {
+    const events = [], operations = runtime(previous, events, { failTarget }), recorded = [];
+    operations.pruneReleaseResources = () => [retained];
+    operations.recordReleaseInventory = (release, inventory) => recorded.push({ revision: release.sourceRevision, inventory });
+    if (failTarget) await assert.rejects(upgrade(previous, target, { runtime: operations }), /previous release was restored/);
+    else await upgrade(previous, target, { runtime: operations });
+    const last = recorded.at(-1);
+    assert.equal(last.revision, failTarget ? previous.sourceRevision : target.sourceRevision);
+    assert(last.inventory.some(item => item.name === retained.name));
+  }
+});
 
 test('upgrade prefetches target and rollback artifacts before target install', async () => {
   const previous = lock('1'.repeat(40), 'a');

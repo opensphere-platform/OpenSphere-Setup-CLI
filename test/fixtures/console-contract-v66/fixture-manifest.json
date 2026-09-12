@@ -1,0 +1,84 @@
+{
+  "schema": "opensphere.setup-test-fixtures/v1",
+  "source": "https://github.com/opensphere-platform/OpenSphere-console",
+  "migrationSetDigest": "sha256:ab239cb2711f344e9e294d840df867ce2c1305173409f6e73f03a8d3bc3a1610",
+  "files": [
+    {
+      "path": "backend/supabase/target/deploy.yaml",
+      "sha256": "e8aba7b3a8cb7a3b205b61487c35d3b56f14b21892600822dc7159cc779bee1d"
+    },
+    {
+      "path": "backend/gitea/bootstrap/gitea.yaml",
+      "sha256": "f99d3e6eb5e097a15399dd046e910fea407999807503abf5ce3dbdf1eb97e954"
+    },
+    {
+      "path": "apps/console-api/deploy.yaml",
+      "sha256": "5361da2aa4794847248b2292389cf5488539c02bc477930e43bf5719fb7f4802"
+    },
+    {
+      "path": "apps/extension-controller/deploy.yaml",
+      "sha256": "042e013873d1748fb1463aac45a16edd3c43a62298f9fb9f8a60803e2a92d1e4"
+    },
+    {
+      "path": "deploy/baseline-monitoring/beszel-release.yaml",
+      "sha256": "e49548de43c54b99fb01a6be25b7473c800515efbcef9e60ca2a7f09290d495d"
+    },
+    {
+      "path": "apps/extension-controller/crds/ui-plugin-crds.yaml",
+      "sha256": "bc477e68a7290fc9fc97f79d7c900bf1dd5593823eced49c33a972d49d6a6b51"
+    },
+    {
+      "path": "apps/extension-controller/config/trusted-keys.yaml",
+      "sha256": "d2e1c417ea5713cc4611a03466a37ca62970710c8fb91ec515c662ea21a8e9e1"
+    },
+    {
+      "path": "cmd/os-cli/deploy.yaml",
+      "sha256": "933f9c733bd8fa9e913eec1d7e0340e9f241d6ad4ed3c92a10c804ee4aad16c9"
+    },
+    {
+      "path": "backend/registry/deploy/registry.yaml",
+      "sha256": "4209dc964b11a1ba51699786229ccc1c3eb0c0773c19fd93eb9f204257c0417c"
+    },
+    {
+      "path": "deploy/manual-ui-admission-policy.yaml",
+      "sha256": "702559210c14cae286713bca2547f80ceb9a2bedcb4b43caac19d15417626932"
+    },
+    {
+      "path": "deploy/console-image-admission-policy.yaml",
+      "sha256": "7dbdf1512fe95fb02bc56bbf558fb4bc3d0e3103a251134a3db095d4958534f0"
+    },
+    {
+      "path": "deploy/opensphere-console.yaml",
+      "sha256": "d3d2f57f3d164d639b953da8db6098b23fc038104d578cae7e375ccf0b22ea46"
+    },
+    {
+      "path": "apps/osaa-gateway/deploy.yaml",
+      "sha256": "3f952e7a7403d64f38181c7a6a75a32928451a0ee85d641ab45a4f064435b7aa"
+    },
+    {
+      "path": "apps/osdst/deploy.yaml",
+      "sha256": "9003bbd04e7b855d137c9e533c6b19bc3d9ac6a1e84fd78a867cded7f5ccffd4"
+    },
+    {
+      "path": "apps/os-shell-control/deploy.yaml",
+      "sha256": "c5aec9bfd7bda675666f8edc89e18daf572e36d64bfaf882ab00c14eec2b9e3e"
+    },
+    {
+      "path": "migrations/manifest.json",
+      "sha256": "63638c0319001e35c955172fdcf63260cad02d48322b62e6779e333643b9dd3a"
+    },
+    {
+      "path": "migrations/baseline/0001_console_authority.sql",
+      "sha256": "ad9cc5bd66b35e8d9591b5894a24f16a59e4aaf658b711070684132330c1de68"
+    },
+    {
+      "path": "apps/osaa-gateway/knowledge-bundle/lock.json",
+      "sha256": "7da9d540442634293648ef2e4441571fd4db5a7f7f7b72197b463f1e9f3ab81e"
+    },
+    {
+      "path": "deploy/installation-profiles/platform-core.json",
+      "sha256": "91f1797854df91116ea8f9f77f8c406d741291f1472ea8e8a0d65087554ce099"
+    }
+  ],
+  "sourceRevision": "b6400fdc1b9c39ea4e4af6896c9c655e2efbaab2"
+}

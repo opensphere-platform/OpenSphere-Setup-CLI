@@ -1,0 +1,740 @@
+# User-approved 2026-09-06: reproduce the existing original inventory profile in Setup.
+# No Secret access or HISS/Ceph mutation grant; C_EXT gets only the two named RBAC objects.
+# Source: Cluster Manager 630914882196a1de7818fd23cc4f7cd84a00c700/deploy/console-runtime-profile.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: opensphere-cluster-manager-runtime, namespace: opensphere-console}
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: opensphere-cluster-manager-runtime
+  labels: { opensphere.io/managed-by: opensphere-platform }
+rules:
+  # Console-side storage integration only. HISS lifecycle is never delegated
+  # through a Console module permission profile.
+  - { apiGroups: [""], resources: [namespaces, nodes, pods, pods/log, services, endpoints, persistentvolumeclaims, persistentvolumes, events, configmaps, limitranges, resourcequotas, serviceaccounts, replicationcontrollers], verbs: [get, list, watch] }
+  - { apiGroups: [apps], resources: [deployments, daemonsets, statefulsets, replicasets, controllerrevisions], verbs: [get, list, watch] }
+  - { apiGroups: [batch], resources: [jobs, cronjobs], verbs: [get, list, watch] }
+  - { apiGroups: [storage.k8s.io], resources: [storageclasses, csidrivers, csinodes, volumeattachments], verbs: [get, list, watch] }
+  - { apiGroups: [networking.k8s.io], resources: [ingresses, networkpolicies, ingressclasses], verbs: [get, list, watch] }
+  - { apiGroups: [discovery.k8s.io], resources: [endpointslices], verbs: [get, list, watch] }
+  - { apiGroups: [autoscaling], resources: [horizontalpodautoscalers], verbs: [get, list, watch] }
+  - { apiGroups: [autoscaling.k8s.io], resources: [verticalpodautoscalers], verbs: [get, list, watch] }
+  - { apiGroups: [policy], resources: [poddisruptionbudgets], verbs: [get, list, watch] }
+  - { apiGroups: [scheduling.k8s.io], resources: [priorityclasses], verbs: [get, list, watch] }
+  - { apiGroups: [node.k8s.io], resources: [runtimeclasses], verbs: [get, list, watch] }
+  - { apiGroups: [coordination.k8s.io], resources: [leases], verbs: [get, list, watch] }
+  - { apiGroups: [rbac.authorization.k8s.io], resources: [roles, rolebindings, clusterroles, clusterrolebindings], verbs: [get, list, watch] }
+  - { apiGroups: [apiextensions.k8s.io], resources: [customresourcedefinitions], verbs: [get, list, watch] }
+  - { apiGroups: [metrics.k8s.io], resources: [nodes, pods], verbs: [get, list] }
+  - { apiGroups: [jobset.x-k8s.io], resources: [jobsets], verbs: [get, list, watch] }
+  - { apiGroups: [cert-manager.io], resources: [issuers, clusterissuers, certificates, certificaterequests], verbs: [get, list, watch] }
+  - { apiGroups: [acme.cert-manager.io], resources: [challenges, orders], verbs: [get, list, watch] }
+  - apiGroups: [kubevirt.io, subresources.kubevirt.io, cdi.kubevirt.io, instancetype.kubevirt.io, migrations.kubevirt.io, snapshot.storage.k8s.io, forklift.konveyor.io, ceph.rook.io, template.openshift.io, fleet.opensphere.io, cluster.open-cluster-management.io]
+    resources: ["*"]
+    verbs: [get, list, watch]
+  - { nonResourceURLs: [/version, /api, /apis, /apis/*], verbs: [get] }
+  - { apiGroups: [authorization.k8s.io], resources: [selfsubjectaccessreviews], verbs: [create] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: opensphere-cluster-manager-runtime}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: opensphere-cluster-manager-runtime}
+subjects: [{kind: ServiceAccount, name: opensphere-cluster-manager-runtime, namespace: opensphere-console}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: opensphere-extension-installation-profile-reader
+rules:
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [clusterroles, clusterrolebindings]
+    resourceNames: [opensphere-cluster-manager-runtime, opensphere-platform-support-runtime]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: opensphere-extension-installation-profile-reader
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: opensphere-extension-installation-profile-reader
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-extension-controller
+    namespace: opensphere-console
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opensphere-cluster-manager
+  namespace: opensphere-console
+  labels:
+    app.kubernetes.io/part-of: opensphere-console
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: opensphere-cluster-manager-read
+rules:
+  - apiGroups: ['']
+    resources: [nodes, namespaces, pods, persistentvolumes, persistentvolumeclaims]
+    verbs: [get, list]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list]
+  - apiGroups: [ceph.rook.io]
+    resources: [cephclusters]
+    verbs: [get, list]
+  - nonResourceURLs: [/version]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: opensphere-cluster-manager-read
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: opensphere-cluster-manager-read
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-cluster-manager
+    namespace: opensphere-console
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opensphere-cluster-manager-ingress
+  namespace: opensphere-console
+spec:
+  podSelector:
+    matchLabels:
+      opensphere.io/extension-id: cluster-manager
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opensphere-extension-controller
+        # 22 invokes the existing owner API with the current Console user's
+        # bearer token. Network reachability does not grant management rights;
+        # Cluster Manager revalidates identity, permission and MFA per request.
+        - podSelector:
+            matchLabels:
+              app: opensphere-console-osaa-gateway
+        - podSelector:
+            matchLabels:
+              app: opensphere-shell-api
+      ports:
+        - { protocol: TCP, port: 8080 }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opensphere-extension-controller
+  namespace: opensphere-console
+  labels:
+    app.kubernetes.io/name: opensphere-extension-controller
+    app.kubernetes.io/part-of: opensphere-console
+    opensphere.io/component: C_EXT
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensphere-extension-controller
+  namespace: opensphere-console
+rules:
+  - apiGroups: [plugins.opensphere.io]
+    resources: [uipluginpackages]
+    verbs: [get, list, create, update, patch]
+  - apiGroups: [plugins.opensphere.io]
+    resources: [uipluginregistrations]
+    verbs: [get, list, create, patch, delete]
+  - apiGroups: [plugins.opensphere.io]
+    resources: [uipluginregistrations/status]
+    verbs: [patch]
+  - apiGroups: ['']
+    resources: [configmaps]
+    resourceNames: [opensphere-extension-trusted-keys]
+    verbs: [get]
+  - apiGroups: ['']
+    resources: [serviceaccounts, services]
+    verbs: [get, list, create, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, create, patch, delete]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, create, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    resourceNames: [opensphere-console-api-kubernetes-egress]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensphere-extension-controller
+  namespace: opensphere-console
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensphere-extension-controller
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-extension-controller
+    namespace: opensphere-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensphere-extension-controller-kubernetes-egress-discovery
+  namespace: default
+rules:
+  - apiGroups: ['']
+    resources: [services]
+    resourceNames: [kubernetes]
+    verbs: [get]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensphere-extension-controller-kubernetes-egress-discovery
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensphere-extension-controller-kubernetes-egress-discovery
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-extension-controller
+    namespace: opensphere-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: opensphere-extension-controller-cli-downloads
+rules:
+  - apiGroups: [console.opensphere.io]
+    resources: [clidownloads]
+    verbs: [get, list, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: opensphere-extension-controller-cli-downloads
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: opensphere-extension-controller-cli-downloads
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-extension-controller
+    namespace: opensphere-console
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensphere-extension-controller
+  namespace: opensphere-console
+  labels:
+    app.kubernetes.io/name: opensphere-extension-controller
+    app.kubernetes.io/part-of: opensphere-console
+    opensphere.io/component: C_EXT
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opensphere-extension-controller
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opensphere-extension-controller
+        app.kubernetes.io/part-of: opensphere-console
+        opensphere.io/component: C_EXT
+    spec:
+      serviceAccountName: opensphere-extension-controller
+      automountServiceAccountToken: true
+      imagePullSecrets:
+        - name: opensphere-ghcr-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: __OPENSPHERE_EXTENSION_CONTROLLER_IMAGE__
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - { name: module-registry, mountPath: /var/run/opensphere/module-registry, readOnly: true }
+            - { name: module-trust, mountPath: /var/run/opensphere/module-trust, readOnly: true }
+          env:
+            - name: CONSOLE_EXTENSION_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: opensphere-extension-controller-runtime
+                  key: database-url
+            - name: CONSOLE_REGISTRY_URL
+              value: http://opensphere-registry.opensphere-console.svc.cluster.local:8080
+            - name: CONSOLE_EXTENSION_NAMESPACE
+              value: opensphere-console
+            - name: NODE_EXTRA_CA_CERTS
+              value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+            - name: CONSOLE_EXTENSION_LIFECYCLE_ENABLED
+              value: 'true'
+            - name: CONSOLE_OWNER_AUTHORITY_URL
+              value: http://opensphere-console-api.opensphere-console.svc.cluster.local:8080
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 2
+            timeoutSeconds: 3
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /livez, port: http }
+            initialDelaySeconds: 10
+            timeoutSeconds: 3
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 25m, memory: 48Mi }
+            limits: { cpu: 250m, memory: 192Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: module-registry
+          secret:
+            secretName: opensphere-ghcr-pull
+            defaultMode: 292
+        - name: module-trust
+          configMap:
+            name: opensphere-extension-trusted-keys
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensphere-extension-controller
+  namespace: opensphere-console
+  labels:
+    app.kubernetes.io/name: opensphere-extension-controller
+    app.kubernetes.io/part-of: opensphere-console
+    opensphere.io/component: C_EXT
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: opensphere-extension-controller
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opensphere-extension-controller-ingress
+  namespace: opensphere-console
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: opensphere-extension-controller
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opensphere-console-api
+        - podSelector:
+            matchLabels:
+              app: opensphere-console
+      ports:
+        - { protocol: TCP, port: 8080 }
+
+---
+# BEGIN PLATFORM SUPPORT OPERATIONS
+# ADR-0015: source proposal; approval required before applying this new authority.
+# Shared namespaces and controller workloads/data are never Console purge targets.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: argocd
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: crossplane-system
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opensphere-platform-support-runtime
+  namespace: opensphere-console
+  labels:
+    opensphere.io/managed-by: opensphere-platform
+    opensphere.io/installation-profile: platform-support-operations-v1
+automountServiceAccountToken: false
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: opensphere-platform-support-runtime
+  labels:
+    opensphere.io/managed-by: opensphere-platform
+    opensphere.io/installation-profile: platform-support-operations-v1
+rules:
+  - apiGroups:
+      - apiextensions.k8s.io
+    resources:
+      - customresourcedefinitions
+    verbs:
+      - get
+    resourceNames:
+      - applications.argoproj.io
+      - appprojects.argoproj.io
+      - applicationsets.argoproj.io
+      - providers.pkg.crossplane.io
+  - apiGroups:
+      - pkg.crossplane.io
+    resources:
+      - providers
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - helm.crossplane.io
+      - helm.m.crossplane.io
+    resources:
+      - providerconfigs
+      - releases
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - helm.crossplane.io
+    resources:
+      - providerconfigs
+    verbs:
+      - create
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: opensphere-platform-support-runtime
+  labels:
+    opensphere.io/managed-by: opensphere-platform
+    opensphere.io/installation-profile: platform-support-operations-v1
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: opensphere-platform-support-runtime
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-platform-support-runtime
+    namespace: opensphere-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensphere-platform-support-runtime
+  namespace: argocd
+  labels:
+    opensphere.io/managed-by: opensphere-platform
+    opensphere.io/installation-profile: platform-support-operations-v1
+rules:
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - get
+    resourceNames:
+      - argocd-repo-server
+      - argocd-server
+      - argocd-applicationset-controller
+      - argocd-redis
+      - argocd-dex-server
+      - argocd-notifications-controller
+  - apiGroups:
+      - apps
+    resources:
+      - statefulsets
+    verbs:
+      - get
+    resourceNames:
+      - argocd-application-controller
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - applications
+    verbs:
+      - get
+      - list
+      - patch
+  - apiGroups:
+      - argoproj.io
+    resources:
+      - appprojects
+    verbs:
+      - get
+      - list
+  - apiGroups:
+      - ''
+    resources:
+      - events
+    verbs:
+      - get
+      - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensphere-platform-support-runtime
+  namespace: argocd
+  labels:
+    opensphere.io/managed-by: opensphere-platform
+    opensphere.io/installation-profile: platform-support-operations-v1
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensphere-platform-support-runtime
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-platform-support-runtime
+    namespace: opensphere-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensphere-platform-support-runtime
+  namespace: crossplane-system
+  labels:
+    opensphere.io/managed-by: opensphere-platform
+    opensphere.io/installation-profile: platform-support-operations-v1
+rules:
+  - apiGroups:
+      - apps
+    resources:
+      - deployments
+    verbs:
+      - get
+    resourceNames:
+      - crossplane
+      - crossplane-rbac-manager
+  - apiGroups:
+      - ''
+    resources:
+      - events
+    verbs:
+      - get
+      - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensphere-platform-support-runtime
+  namespace: crossplane-system
+  labels:
+    opensphere.io/managed-by: opensphere-platform
+    opensphere.io/installation-profile: platform-support-operations-v1
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensphere-platform-support-runtime
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-platform-support-runtime
+    namespace: opensphere-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensphere-extension-installation-profile-reader
+  namespace: argocd
+  labels:
+    opensphere.io/managed-by: opensphere-platform
+    opensphere.io/installation-profile: platform-support-operations-v1
+rules:
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - roles
+      - rolebindings
+    verbs:
+      - get
+    resourceNames:
+      - opensphere-platform-support-runtime
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensphere-extension-installation-profile-reader
+  namespace: argocd
+  labels:
+    opensphere.io/managed-by: opensphere-platform
+    opensphere.io/installation-profile: platform-support-operations-v1
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensphere-extension-installation-profile-reader
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-extension-controller
+    namespace: opensphere-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensphere-extension-installation-profile-reader
+  namespace: crossplane-system
+  labels:
+    opensphere.io/managed-by: opensphere-platform
+    opensphere.io/installation-profile: platform-support-operations-v1
+rules:
+  - apiGroups:
+      - rbac.authorization.k8s.io
+    resources:
+      - roles
+      - rolebindings
+    verbs:
+      - get
+    resourceNames:
+      - opensphere-platform-support-runtime
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensphere-extension-installation-profile-reader
+  namespace: crossplane-system
+  labels:
+    opensphere.io/managed-by: opensphere-platform
+    opensphere.io/installation-profile: platform-support-operations-v1
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensphere-extension-installation-profile-reader
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-extension-controller
+    namespace: opensphere-console
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opensphere-platform-support-ingress
+  namespace: opensphere-console
+  labels:
+    opensphere.io/managed-by: opensphere-platform
+    opensphere.io/installation-profile: platform-support-operations-v1
+spec:
+  podSelector:
+    matchLabels:
+      opensphere.io/extension-id: platform-support
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opensphere-extension-controller
+        - podSelector:
+            matchLabels:
+              app: opensphere-shell-api
+      ports:
+        - protocol: TCP
+          port: 8080
+# END PLATFORM SUPPORT OPERATIONS
+
+---
+{
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRole",
+  "metadata": {
+    "name": "opensphere-platform-support-core-observer",
+    "labels": {
+      "opensphere.io/managed-by": "opensphere-platform",
+      "opensphere.io/installation-profile": "platform-support-operations-v1"
+    }
+  },
+  "rules": [
+    {
+      "apiGroups": [
+        "pkg.crossplane.io"
+      ],
+      "resources": [
+        "providers",
+        "functions"
+      ],
+      "verbs": [
+        "get",
+        "list"
+      ]
+    },
+    {
+      "apiGroups": [
+        "helm.crossplane.io",
+        "helm.m.crossplane.io"
+      ],
+      "resources": [
+        "providerconfigs",
+        "releases"
+      ],
+      "verbs": [
+        "get",
+        "list"
+      ]
+    },
+    {
+      "apiGroups": [
+        "apiextensions.crossplane.io"
+      ],
+      "resources": [
+        "compositions",
+        "compositeresourcedefinitions"
+      ],
+      "verbs": [
+        "get",
+        "list"
+      ]
+    }
+  ]
+}
+---
+{
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "ClusterRoleBinding",
+  "metadata": {
+    "name": "opensphere-platform-support-core-observer",
+    "labels": {
+      "opensphere.io/managed-by": "opensphere-platform",
+      "opensphere.io/installation-profile": "platform-support-operations-v1"
+    }
+  },
+  "roleRef": {
+    "apiGroup": "rbac.authorization.k8s.io",
+    "kind": "ClusterRole",
+    "name": "opensphere-platform-support-core-observer"
+  },
+  "subjects": [
+    {
+      "kind": "ServiceAccount",
+      "name": "opensphere-cluster-manager-runtime",
+      "namespace": "opensphere-console"
+    }
+  ]
+}

@@ -9,17 +9,19 @@ function suffix(detail) {
 
 export function createProgressReporter({
   write = (line) => console.log(line),
-  now = () => Date.now()
+  now = () => Date.now(),
+  journal = null
 } = {}) {
   const startedAt = now();
   let sequence = 0;
   let current;
 
-  function completeCurrent(detail) {
+  function completeCurrent(detail, explicit = true) {
     if (!current) return;
     write(
-      `[완료 ${String(current.number).padStart(2, '0')}] ${current.message}`
+      `[${explicit ? '완료' : '이동'} ${String(current.number).padStart(2, '0')}] ${current.message}`
       + suffix(detail)
+      + (explicit ? '' : ' — 명시적 단계 반환 기록 없음')
       + ` (${duration(Math.max(0, now() - current.startedAt))})`
     );
     current = undefined;
@@ -30,24 +32,30 @@ export function createProgressReporter({
       write(`[시작] ${message}${suffix(detail)}`);
     },
     step(message, detail) {
-      completeCurrent();
+      journal?.step(message);
+      completeCurrent(undefined, false);
       sequence += 1;
       current = { number: sequence, message, startedAt: now() };
       write(`[단계 ${String(sequence).padStart(2, '0')}] ${message}${suffix(detail)}`);
     },
     done(detail) {
+      journal?.done();
       completeCurrent(detail);
     },
     item(label, message) {
+      journal?.item(label, message);
       write(`[${label}] ${message}`);
     },
     wait(message, detail) {
       write(`[대기] ${message}${suffix(detail)}`);
     },
     finish(message, detail) {
-      completeCurrent();
+      journal?.complete();
+      completeCurrent(undefined, false);
       write(`[성공] ${message}${suffix(detail)} (총 ${duration(Math.max(0, now() - startedAt))})`);
-    }
+    },
+    fail() { journal?.fail(); },
+    deliverJournal(publish) { journal?.enableDelivery(publish); }
   });
 }
 

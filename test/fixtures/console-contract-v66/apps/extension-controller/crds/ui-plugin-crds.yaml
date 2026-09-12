@@ -1,0 +1,488 @@
+# OpenSphere Extension Controller — target-owned package and registration CRDs
+# UIPluginPackage     : 설치 가능 catalog (관리자 통제 — manifestSha256/signature/keyId가 신뢰 루트)
+# UIPluginRegistration: 설치 상태/desired state (Admin이 이걸 바꾸고 controller가 reconcile)
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: uipluginpackages.plugins.opensphere.io
+spec:
+  group: plugins.opensphere.io
+  scope: Namespaced
+  names:
+    kind: UIPluginPackage
+    plural: uipluginpackages
+    singular: uipluginpackage
+    shortNames: [uipkg]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [displayName, image, manifest, trust, kind, hostRef, hostCompat, contributions]
+              properties:
+                displayName: { type: string }
+                owner: { type: string }
+                version: { type: string }
+                description: { type: string }
+                # 공식 위계 계약 — Registry·signed manifest·runtime Host가 동일하게 보존한다.
+                kind:
+                  type: string
+                  enum: [subShell, plugin]
+                hostRef:
+                  type: string
+                  pattern: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+                hostApiVersion: { type: string }
+                hostCompat: { type: string }
+                serviceAccountName:
+                  type: string
+                  pattern: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$'
+                podLabels:
+                  type: object
+                  additionalProperties:
+                    type: string
+                env:
+                  type: array
+                  items:
+                    type: object
+                    required: [name, value]
+                    properties:
+                      name:
+                        type: string
+                        pattern: '^[A-Za-z_][A-Za-z0-9_]*$'
+                      value: { type: string }
+                image:
+                  type: object
+                  required: [repository, digest]
+                  properties:
+                    repository: { type: string }
+                    # 감사 시정 S1(2026-07-06): 불변 digest 필수 — 태그 금지(공급망 보증).
+                    # controller reconcile도 sha256: 미접두를 Failed/InvalidDigest로 거부(이중 방어).
+                    digest:
+                      type: string
+                      pattern: '^sha256:[a-f0-9]{64}$'
+                # User intent and immutable execution coordinate are stored together.
+                # The workload still consumes only image.repository@image.digest.
+                resolution:
+                  type: object
+                  required: [requestedRef, requestedChannel, resolvedDigest, resolvedAt, artifactVersion, compatibilityVersion, buildAuthority, signatureIdentity, registryCredentialsRequired, evidenceRefs]
+                  properties:
+                    requestedRef: { type: string }
+                    requestedChannel: { type: string, enum: ["", edge, candidate, stable, ga] }
+                    resolvedDigest: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+                    resolvedAt: { type: string, format: date-time }
+                    artifactVersion: { type: string, pattern: '^[0-9]{12}$' }
+                    compatibilityVersion: { type: string, pattern: '^[0-9]+\.[0-9]+\.[0-9]+$' }
+                    buildAuthority: { type: string, enum: [localhost, github-actions] }
+                    source: { type: string }
+                    revision: { type: string, pattern: '^(|[a-f0-9]{40})$' }
+                    signatureIdentity: { type: string }
+                    registryCredentialsRequired: { type: boolean }
+                    evidenceRefs:
+                      type: array
+                      items: { type: string }
+                nav:
+                  type: object
+                  properties:
+                    band: { type: string }
+                    label: { type: string }
+                    icon: { type: string }   # 1단 아이콘(Carbon 토큰명, 관리자 오버라이드)
+                    labelOverride:
+                      type: string
+                      maxLength: 80
+                    order:
+                      type: integer
+                      minimum: 0
+                      maximum: 63
+                manifest:
+                  type: object
+                  required: [path, sha256]
+                  properties:
+                    path: { type: string }     # 컨테이너 내 서빙 경로 (/plugins/...)
+                    sha256: { type: string }    # 승인된 manifest digest → registry manifestSha256
+                    signaturePath: { type: string }
+                # 신뢰 루트 — 관리자 승인값 (검토 §B.5: controller는 계산해 비교만, 이 값을 전사)
+                trust:
+                  type: object
+                  required: [keyId]
+                  properties:
+                    keyId: { type: string }
+                shellCompat: { type: string }   # semver range, 예 ">=0.2.0 <0.4.0"
+                permissionProfile:
+                  type: string
+                  enum: [none, cluster-read, cluster-observer-v1, cluster-infrastructure-manager-v1, platform-support-operations-v1, ai-domain-operator-v1]
+                runtime:
+                  type: object
+                  properties:
+                    port: { type: integer, minimum: 1024, maximum: 65535 }
+                    healthPath: { type: string, pattern: '^/' }
+                    serviceAccountName: { type: string, pattern: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$' }
+                    resources:
+                      type: object
+                      properties:
+                        cpuRequest: { type: string }
+                        memoryRequest: { type: string }
+                        cpuLimit: { type: string }
+                        memoryLimit: { type: string }
+                    security:
+                      type: object
+                      properties:
+                        automountServiceAccountToken: { type: boolean }
+                        runAsNonRoot: { type: boolean }
+                        runAsUser: { type: integer, minimum: 1 }
+                        runAsGroup: { type: integer, minimum: 1 }
+                        readOnlyRootFilesystem: { type: boolean }
+                        seccompProfile: { type: string, enum: [RuntimeDefault, Localhost] }
+                    availability:
+                      type: object
+                      properties:
+                        replicas: { type: integer, minimum: 1, maximum: 20 }
+                        minAvailable: { type: integer, minimum: 0, maximum: 20 }
+                        topologySpread: { type: boolean }
+                        autoscaling:
+                          type: object
+                          required: [enabled]
+                          properties:
+                            enabled: { type: boolean }
+                            minReplicas: { type: integer, minimum: 1, maximum: 20 }
+                            maxReplicas: { type: integer, minimum: 1, maximum: 50 }
+                            targetCPUUtilization: { type: integer, minimum: 1, maximum: 100 }
+                    networkPolicy:
+                      type: object
+                      required: [enabled]
+                      properties:
+                        enabled: { type: boolean }
+                        allowMonitoring: { type: boolean }
+                    observability:
+                      type: object
+                      properties:
+                        metricsPath: { type: string, pattern: '^/' }
+                        scrapeInterval: { type: string, pattern: '^[0-9]+(s|m|h)$' }
+                        logs:
+                          type: object
+                          required: [format, schema, stream]
+                          properties:
+                            format: { type: string, enum: [json] }
+                            schema: { type: string, enum: [opensphere.v1] }
+                            stream: { type: string, enum: [stdout, stderr] }
+                        traces:
+                          type: object
+                          required: [propagation]
+                          properties:
+                            propagation: { type: string, enum: [w3c] }
+                            responseHeaders: { type: boolean }
+                permissions:
+                  type: array
+                  items: { type: string }
+                api:
+                  type: object
+                  properties:
+                    basePath: { type: string }  # 셸 프록시가 허용할 prefix
+                # cli:contribute(2026-07-06) — headless binding: os CLI가 registry에서 이 namespace를
+                #   발견해 <apiBase><manifestPath>의 command manifest로 동적 디스패치(os <namespace> <verb>).
+                #   signed manifest가 아닌 CR 선언(CLIDownload 동류) — registry가 광고(console==cli).
+                cli:
+                  type: object
+                  properties:
+                    namespace: { type: string, pattern: '^[a-z][a-z0-9-]{0,30}$' }  # os <namespace> ...
+                    manifestPath: { type: string }  # apiBase 상대 경로(예: /cli/manifest)
+                contributions:
+                  type: object
+                  required: [page, navigation, api, cli, manual, search, notification, observability]
+                  properties:
+                    context:
+                      type: object
+                      required: [enabled, manifestPath, catalogCommand, searchCommand, readCommand, dataCommand]
+                      properties:
+                        enabled: { type: boolean, enum: [true] }
+                        manifestPath: { type: string, enum: ['/app/module-context.json'] }
+                        catalogCommand: { type: string, minLength: 1, maxLength: 128 }
+                        searchCommand: { type: string, minLength: 1, maxLength: 128 }
+                        readCommand: { type: string, minLength: 1, maxLength: 128 }
+                        dataCommand: { type: string, minLength: 1, maxLength: 128 }
+                    page:
+                      type: object
+                      required: [enabled]
+                      properties:
+                        enabled: { type: boolean }
+                        reason: { type: string }
+                    navigation:
+                      type: object
+                      required: [enabled, mode]
+                      properties:
+                        enabled: { type: boolean }
+                        mode: { type: string, enum: [runtime, install-time, none] }
+                        reason: { type: string }
+                    api:
+                      type: object
+                      required: [enabled]
+                      properties:
+                        enabled: { type: boolean }
+                        basePath: { type: string }
+                        reason: { type: string }
+                    cli:
+                      type: object
+                      required: [enabled]
+                      properties:
+                        enabled: { type: boolean }
+                        namespace: { type: string }
+                        manifestPath: { type: string }
+                        reason: { type: string }
+                    manual:
+                      type: object
+                      required: [enabled]
+                      properties:
+                        enabled: { type: boolean }
+                        sourceId: { type: string }
+                        mode: { type: string, enum: [install-time, runtime, none] }
+                        reason: { type: string }
+                    search:
+                      type: object
+                      required: [enabled, mode]
+                      properties:
+                        enabled: { type: boolean }
+                        mode: { type: string, enum: [runtime, index, none] }
+                        reason: { type: string }
+                    notification:
+                      type: object
+                      required: [enabled, frontend, backend]
+                      properties:
+                        enabled: { type: boolean }
+                        frontend: { type: boolean }
+                        backend: { type: boolean }
+                        reason: { type: string }
+                    observability:
+                      type: object
+                      required: [enabled, logs, metrics, traces]
+                      properties:
+                        enabled: { type: boolean }
+                        logs: { type: boolean }
+                        metrics: { type: boolean }
+                        traces: { type: boolean }
+                        reason: { type: string }
+      additionalPrinterColumns:
+        - { name: Display, type: string, jsonPath: .spec.displayName }
+        - { name: Version, type: string, jsonPath: .spec.version }
+        - { name: Owner, type: string, jsonPath: .spec.owner }
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: uipluginregistrations.plugins.opensphere.io
+spec:
+  group: plugins.opensphere.io
+  scope: Namespaced
+  names:
+    kind: UIPluginRegistration
+    plural: uipluginregistrations
+    singular: uipluginregistration
+    shortNames: [uireg]
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources: { status: {} }
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required: [packageRef, desiredState]
+              properties:
+                packageRef:
+                  type: object
+                  required: [name]
+                  properties:
+                    name: { type: string }
+                    version: { type: string }
+                desiredState:
+                  type: string
+                  enum: [Installed, Enabled, Disabled, Uninstalled]
+                installPolicy:
+                  type: object
+                  properties:
+                    createWorkload: { type: boolean }
+                    createProxyRoute: { type: boolean }
+                    exposeInNavigation: { type: boolean }
+                approval:
+                  type: object
+                  properties:
+                    requestedBy: { type: string }
+                    reason: { type: string }
+                # 최초 설치 요청의 불변 provenance. 이후 enable/disable/rollback 승인과 분리해
+                # Installed 화면에서 설치일·설치자·Console API 작업 상관관계를 정확히 표시한다.
+                installation:
+                  type: object
+                  properties:
+                    requestedAt: { type: string }
+                    requestedBy: { type: string }
+                    requestedById: { type: string }
+                    client: { type: string, enum: ['cli:os', 'console:web'] }
+                    operationId: { type: string }
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+              properties:
+                # 감사 시정 S5(2026-07-06): 스키마를 컨트롤러 실사용으로 축소(문서·스키마·코드 3자 일치).
+                # 구 주석의 Available/Verifying/Installed/Removed는 미사용 데드값이라 제거 —
+                # Uninstalled는 Registration CR 자체가 삭제되므로 상태로 남지 않는다.
+                phase:
+                  type: string
+                  enum: [Declared, DependencyPending, Installing, Verifying, Ready, Activated, Degraded, Disabled, Uninstalling, Removed, Failed]
+                observedGeneration: { type: integer, format: int64 }
+                retryable: { type: boolean }
+                nextRetryAt: { type: string }
+                observedVersion: { type: string }
+                # Controller가 마지막 두 개의 검증된 release 좌표를 보존한다.
+                # /rollback은 이 값으로 Package를 원자적으로 이전 digest/manifest/version에 되돌린다.
+                currentDigest: { type: string, pattern: '^(|sha256:[a-f0-9]{64})$' }
+                currentManifestSha256: { type: string, pattern: '^(|[a-f0-9]{64})$' }
+                currentVersion: { type: string }
+                currentArtifactVersion: { type: string, pattern: '^(|[0-9]{12})$' }
+                currentRepository: { type: string, pattern: '^(|ghcr[.]io/opensphere-platform/[a-z0-9][a-z0-9._-]{0,127})$' }
+                currentManifestPath: { type: string, pattern: '^(|/plugins/[A-Za-z0-9][A-Za-z0-9._-]{0,127}[.]json)$' }
+                currentSignaturePath: { type: string, pattern: '^(|/plugins/[A-Za-z0-9][A-Za-z0-9._-]{0,127}[.]sig)$' }
+                currentStaticContractSha256: { type: string, pattern: '^(|[a-f0-9]{64})$' }
+                currentCompatibilityVersion: { type: string }
+                currentBuildAuthority: { type: string, enum: ["", localhost, github-actions] }
+                currentRequestedRef: { type: string }
+                currentRequestedChannel: { type: string, enum: ["", edge, candidate, stable, ga] }
+                currentResolvedAt: { type: string }
+                currentSource: { type: string }
+                currentRevision: { type: string, pattern: '^(|[a-f0-9]{40})$' }
+                currentSignatureIdentity: { type: string }
+                currentEvidenceRefs:
+                  type: array
+                  items: { type: string }
+                currentRegistryCredentialsRequired: { type: boolean }
+                currentChannelDigest: { type: string, pattern: '^(|sha256:[a-f0-9]{64})$' }
+                channelState:
+                  type: string
+                  enum: [Current, UpdateAvailable, SecurityActionRequired, ChannelUnavailable]
+                channelCheckedAt: { type: string }
+                channelReason: { type: string }
+                previousDigest: { type: string, pattern: '^(|sha256:[a-f0-9]{64})$' }
+                previousManifestSha256: { type: string, pattern: '^(|[a-f0-9]{64})$' }
+                previousVersion: { type: string }
+                previousArtifactVersion: { type: string, pattern: '^(|[0-9]{12})$' }
+                previousRepository: { type: string, pattern: '^(|ghcr[.]io/opensphere-platform/[a-z0-9][a-z0-9._-]{0,127})$' }
+                previousManifestPath: { type: string, pattern: '^(|/plugins/[A-Za-z0-9][A-Za-z0-9._-]{0,127}[.]json)$' }
+                previousSignaturePath: { type: string, pattern: '^(|/plugins/[A-Za-z0-9][A-Za-z0-9._-]{0,127}[.]sig)$' }
+                previousStaticContractSha256: { type: string, pattern: '^(|[a-f0-9]{64})$' }
+                previousCompatibilityVersion: { type: string }
+                previousBuildAuthority: { type: string, enum: ["", localhost, github-actions] }
+                previousRequestedRef: { type: string }
+                previousRequestedChannel: { type: string, enum: ["", edge, candidate, stable, ga] }
+                previousResolvedAt: { type: string }
+                previousSource: { type: string }
+                previousRevision: { type: string, pattern: '^(|[a-f0-9]{40})$' }
+                previousSignatureIdentity: { type: string }
+                previousEvidenceRefs:
+                  type: array
+                  items: { type: string }
+                previousRegistryCredentialsRequired: { type: boolean }
+                # Controller가 install 요청 직전의 Enabled/Activated release를
+                # exact digest와 manifest로 검증했을 때만 기록하는 1회성 update 증거.
+                # PlatformSupportProfile이 닫힌 동안 새 Foundation 활성화에는 사용할 수 없다.
+                foundationUpgradeAuthorization:
+                  nullable: true
+                  type: object
+                  required:
+                    - kind
+                    - fromDigest
+                    - fromManifestSha256
+                    - toDigest
+                    - toManifestSha256
+                    - requestedBy
+                    - operationId
+                    - requestedAt
+                  properties:
+                    kind: { type: string, enum: [VerifiedActivatedFoundationUpdate/v1] }
+                    fromDigest: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+                    fromManifestSha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+                    fromVersion: { type: string }
+                    toDigest: { type: string, pattern: '^sha256:[a-f0-9]{64}$' }
+                    toManifestSha256: { type: string, pattern: '^[a-f0-9]{64}$' }
+                    requestedBy: { type: string, minLength: 1 }
+                    operationId: { type: string, pattern: '^os-[a-f0-9]+$' }
+                    requestedAt: { type: string, format: date-time }
+                host:
+                  type: object
+                  properties:
+                    ref: { type: string }
+                    observedApiVersion: { type: string }
+                    phase: { type: string, enum: [Compatible, DependencyPending, Incompatible] }
+                workload:
+                  type: object
+                  properties:
+                    phase: { type: string, enum: [Pending, NotReady, Ready, Degraded, Removed] }
+                    deployment: { type: string, pattern: '^(|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)$' }
+                # An installed consumer whose activation still waits on a platform
+                # capability reports exactly what is missing here, so the operator
+                # reads the remaining work off the resource instead of inferring it
+                # from a refusal.  CONSTITUTION-0004 §8.4 keeps status and
+                # remediation surfaces open before Established.
+                admission:
+                  type: object
+                  properties:
+                    activationAllowed: { type: boolean }
+                    reason: { type: string }
+                    pendingCapabilities:
+                      type: array
+                      items: { type: string }
+                    satisfiedCapabilities:
+                      type: array
+                      items: { type: string }
+                    route: { type: string }
+                    checkedAt: { type: string }
+                verification:
+                  type: object
+                  properties:
+                    manifest: { type: string, enum: [Pending, Verified, Failed] }
+                    signature: { type: string, enum: [Pending, Verified, Failed] }
+                    entryDigest: { type: string, enum: [Pending, Verified, Failed] }
+                    permissions: { type: string, enum: [Pending, Approved, Failed] }
+                serving:
+                  type: object
+                  properties:
+                    phase: { type: string, enum: [Pending, Current, LastKnownGood, Disabled, Unavailable] }
+                    reason: { type: string }
+                    observedAt: { type: string }
+                    # Exact release exposed by the active Service and Registry.
+                    digest: { type: string, pattern: '^(|sha256:[a-f0-9]{64})$' }
+                    manifestSha256: { type: string, pattern: '^(|[a-f0-9]{64})$' }
+                    artifactServiceId: { type: string, pattern: '^(|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)$' }
+                    revision: { type: string, pattern: '^(|[a-f0-9]{20})$' }
+                revalidation:
+                  type: object
+                  properties:
+                    phase: { type: string, enum: [Pending, Passed, Failed] }
+                    reason: { type: string }
+                    observedAt: { type: string }
+                integrations:
+                  type: object
+                  additionalProperties:
+                    type: object
+                    properties:
+                      phase: { type: string, enum: [DependencyPending, Ready, Degraded, Disabled, Failed] }
+                      reason: { type: string }
+                      message: { type: string }
+                      retryable: { type: boolean }
+                      lastTransitionTime: { type: string }
+                      nextRetryAt: { type: string }
+                      observedVersion: { type: string }
+                # reason: InvalidDigest(S1)/DigestMismatch/UntrustedKey/SignatureInvalid/SignatureUnreachable/
+                #   ManifestUnreachable/ShellCompatDrift/EntryDigestMismatch/EntryUnreachable/
+                #   WorkloadNotReady/PackageNotFound/InvalidPluginName (실패 시에만; 성공 상태는 빈 문자열)
+                reason: { type: string }
+                manifestUrl: { type: string }
+                lastTransitionTime: { type: string }
+      additionalPrinterColumns:
+        - { name: Desired, type: string, jsonPath: .spec.desiredState }
+        - { name: Phase, type: string, jsonPath: .status.phase }
+        - { name: Reason, type: string, jsonPath: .status.reason }

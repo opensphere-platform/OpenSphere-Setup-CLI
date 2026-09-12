@@ -1,0 +1,91 @@
+# os CLI is a Console-native core workload. It is not a UIPlugin or CLIDownload Binding.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: os-cli
+  namespace: opensphere-console
+  labels:
+    app: os-cli
+    app.kubernetes.io/name: os-cli
+    app.kubernetes.io/component: console-cli
+    app.kubernetes.io/part-of: opensphere-console
+    opensphere.io/scope: main-shell-core
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: os-cli } }
+  template:
+    metadata:
+      labels:
+        app: os-cli
+        app.kubernetes.io/name: os-cli
+        app.kubernetes.io/component: console-cli
+        app.kubernetes.io/part-of: opensphere-console
+        opensphere.io/scope: main-shell-core
+    spec:
+      # F-6: 정적 아티팩트 서버는 K8s API를 호출하지 않으므로 SA 토큰을 마운트하지 않는다.
+      automountServiceAccountToken: false
+      imagePullSecrets: [{ name: opensphere-ghcr-pull }]
+      # F-6: 2 replica가 가능하면 서로 다른 노드에 분산되도록(단일 노드 장애에 index.json 가용성 유지).
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector: { matchLabels: { app: os-cli } }
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: serve
+          # CLI artifact lifecycle is deliberately independent from the Angular
+          # shell. Publication/deployment replaces this closed placeholder with
+          # one exact GHCR digest; a mutable tag is never admitted at runtime.
+          image: __OPENSPHERE_OS_CLI_IMAGE__
+          imagePullPolicy: IfNotPresent
+          ports: [{ name: http, containerPort: 8080 }]
+          readinessProbe: { httpGet: { path: /index.json, port: http }, initialDelaySeconds: 2 }
+          livenessProbe: { httpGet: { path: /index.json, port: http }, initialDelaySeconds: 10, periodSeconds: 10 }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          volumeMounts:
+            - { name: nginx-tmp, mountPath: /tmp }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 101
+            runAsGroup: 101
+            seccompProfile: { type: RuntimeDefault }
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: nginx-tmp
+          emptyDir: { sizeLimit: 16Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: os-cli
+  namespace: opensphere-console
+  labels:
+    app: os-cli
+    app.kubernetes.io/component: console-cli
+    app.kubernetes.io/part-of: opensphere-console
+spec:
+  selector: { app: os-cli }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+# F-6: 노드 drain/롤아웃 중 최소 1 replica를 유지해 /api/cli/index.json 가용성을 보장한다.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: os-cli
+  namespace: opensphere-console
+  labels:
+    app: os-cli
+    app.kubernetes.io/component: console-cli
+    app.kubernetes.io/part-of: opensphere-console
+spec:
+  minAvailable: 1
+  selector: { matchLabels: { app: os-cli } }

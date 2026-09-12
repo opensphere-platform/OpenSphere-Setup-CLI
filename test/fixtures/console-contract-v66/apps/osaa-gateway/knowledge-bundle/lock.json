@@ -1,0 +1,8 @@
+{
+  "schema": "opensphere.knowledge-lock/v1",
+  "sha256": "2b2f4d8c0c9a9f792199f49af68da7a107e2638d1bc5baac7628bf2ea989f2c8",
+  "version": "knowledge-v0.1.0-edge.7",
+  "sourceRevision": "f7f1337da04461a1f41d24493a77cb08dd98ae71",
+  "knowledgeImage": "ghcr.io/opensphere-platform/opensphere-knowledge@sha256:d5fa1d9f44328fdfa5f430ae47c2295156daa56392f55071d98e2ce53d213491",
+  "source": "https://github.com/opensphere-platform/OpenSphere-Knowledge"
+}

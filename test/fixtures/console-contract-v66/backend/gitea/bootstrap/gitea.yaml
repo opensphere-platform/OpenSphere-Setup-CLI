@@ -1,0 +1,239 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opensphere-console-change
+  labels:
+    opensphere.io/layer: console-change
+    opensphere.io/change-authority: gitea
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: opensphere-gitea-postgres, namespace: opensphere-console-change }
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: opensphere-gitea, namespace: opensphere-console-change }
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: opensphere-gitea-postgres-init
+  namespace: opensphere-console-change
+data:
+  00-create-gitea.sh: |
+    #!/bin/sh
+    set -eu
+    : "${GITEA_DB_PASSWORD:?GITEA_DB_PASSWORD is required}"
+    psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" --dbname postgres --set=gitea_password="$GITEA_DB_PASSWORD" <<'SQL'
+    SELECT format('CREATE ROLE gitea LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L', :'gitea_password')
+    WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gitea') \gexec
+    SELECT format('ALTER ROLE gitea LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD %L', :'gitea_password')
+    WHERE EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'gitea') \gexec
+    SELECT 'CREATE DATABASE gitea OWNER gitea'
+    WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'gitea') \gexec
+    SQL
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: opensphere-gitea-postgres-data, namespace: opensphere-console-change }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: standard
+  resources: { requests: { storage: 8Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensphere-gitea-postgres
+  namespace: opensphere-console-change
+  labels: { app: opensphere-gitea-postgres, opensphere.io/component: gitea-postgres }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: opensphere-gitea-postgres } }
+  template:
+    metadata: { labels: { app: opensphere-gitea-postgres, opensphere.io/component: gitea-postgres } }
+    spec:
+      serviceAccountName: opensphere-gitea-postgres
+      imagePullSecrets: [{ name: opensphere-ghcr-pull }]
+      securityContext: { runAsNonRoot: true, runAsUser: 999, runAsGroup: 999, fsGroup: 999, seccompProfile: { type: RuntimeDefault } }
+      # rancher local-path provisions a root-owned volume.  This short-lived
+      # initializer has access only to that PVC; the database process remains
+      # UID/GID 999 with all Linux capabilities removed.
+      initContainers:
+        - name: prepare-data-volume
+          image: postgres:17-alpine
+          imagePullPolicy: IfNotPresent
+          command: [sh, -ec, 'mkdir -p /var/lib/postgresql/data && chown -R 999:999 /var/lib/postgresql/data']
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+            runAsGroup: 0
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"], add: ["CHOWN", "FOWNER", "DAC_OVERRIDE"] }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+      containers:
+        - name: postgres
+          image: postgres:17-alpine
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: POSTGRES_USER, value: postgres }
+            - { name: POSTGRES_DB, value: postgres }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: opensphere-gitea-runtime, key: postgres-password } }
+            - name: GITEA_DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: opensphere-gitea-runtime, key: db-password } }
+          ports: [{ name: postgres, containerPort: 5432 }]
+          startupProbe: { exec: { command: [sh, -ec, 'pg_isready -U postgres -d postgres'] }, periodSeconds: 5, failureThreshold: 60 }
+          readinessProbe: { exec: { command: [sh, -ec, 'pg_isready -U postgres -d postgres'] }, periodSeconds: 5, failureThreshold: 12 }
+          livenessProbe: { exec: { command: [sh, -ec, 'pg_isready -U postgres -d postgres'] }, periodSeconds: 15, failureThreshold: 3 }
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: init, mountPath: /docker-entrypoint-initdb.d, readOnly: true }
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: opensphere-gitea-postgres-data } }
+        - { name: init, configMap: { name: opensphere-gitea-postgres-init, defaultMode: 365 } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: opensphere-gitea-postgres, namespace: opensphere-console-change, labels: { app: opensphere-gitea-postgres } }
+spec:
+  selector: { app: opensphere-gitea-postgres }
+  ports: [{ name: postgres, port: 5432, targetPort: postgres }]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: opensphere-gitea-data, namespace: opensphere-console-change }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: standard
+  resources: { requests: { storage: 10Gi } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensphere-gitea
+  namespace: opensphere-console-change
+  labels: { app: opensphere-gitea, opensphere.io/component: gitea }
+spec:
+  # Restore enables this only after the database and private Gitea data have
+  # been restored. A fresh target must never create competing history first.
+  replicas: 0
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: opensphere-gitea } }
+  template:
+    metadata: { labels: { app: opensphere-gitea, opensphere.io/component: gitea } }
+    spec:
+      serviceAccountName: opensphere-gitea
+      imagePullSecrets: [{ name: opensphere-ghcr-pull }]
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
+      initContainers:
+        - name: materialize-config
+          image: __OPENSPHERE_GITEA_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: [sh, -ec, 'cp /source/app.ini /config/app.ini && chmod 600 /config/app.ini']
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          volumeMounts:
+            - { name: source-config, mountPath: /source, readOnly: true }
+            - { name: config, mountPath: /config }
+        # Server-only signing material is copied to an in-memory, owner-only
+        # volume. It is not exposed through the Console or any Gitea API.
+        - name: materialize-signing-key
+          image: __OPENSPHERE_GITEA_IMAGE__
+          imagePullPolicy: IfNotPresent
+          command: [sh, -ec, 'umask 077 && cp /source/gitea-signing-key /signing/gitea-signing-key && cp /source/gitea-signing-key.pub /signing/gitea-signing-key.pub && chmod 600 /signing/gitea-signing-key && chmod 644 /signing/gitea-signing-key.pub']
+          securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: [ALL] } }
+          volumeMounts:
+            - { name: signing-source, mountPath: /source, readOnly: true }
+            - { name: signing, mountPath: /signing }
+      containers:
+        - name: gitea
+          image: __OPENSPHERE_GITEA_IMAGE__
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: GITEA__database__DB_TYPE, value: postgres }
+            - { name: GITEA__database__HOST, value: opensphere-gitea-postgres.opensphere-console-change.svc.cluster.local:5432 }
+            - { name: GITEA__database__NAME, value: gitea }
+            - { name: GITEA__database__USER, value: gitea }
+            - name: GITEA__database__PASSWD
+              valueFrom: { secretKeyRef: { name: opensphere-gitea-runtime, key: db-password } }
+            - { name: GITEA__database__SSL_MODE, value: disable }
+            - { name: GITEA__security__INSTALL_LOCK, value: "true" }
+            - { name: GITEA__server__OFFLINE_MODE, value: "true" }
+            - { name: GITEA__server__ROOT_URL, value: http://opensphere-gitea.opensphere-console-change.svc.cluster.local:3000/ }
+            - { name: GITEA__server__HTTP_PORT, value: "3000" }
+            - { name: GITEA__lfs__STORAGE_TYPE, value: local }
+            - { name: GITEA__lfs__PATH, value: /var/lib/gitea/lfs }
+            - { name: GITEA__metrics__ENABLED, value: "true" }
+            # Gitea signs the API CRUD commit on a declaration branch and the
+            # approved PR merge. The protected main branch rejects unsigned
+            # commits independently of this server-side signing capability.
+            # Gitea environment mapping escapes the dot in [repository.signing]
+            # as _0x2E_. See `gitea config edit-ini --help`.
+            - { name: GITEA__repository_0x2E_signing__SIGNING_KEY, value: /var/lib/gitea/signing/gitea-signing-key.pub }
+            - { name: GITEA__repository_0x2E_signing__SIGNING_FORMAT, value: ssh }
+            - { name: GITEA__repository_0x2E_signing__SIGNING_NAME, value: OpenSphere Gitea }
+            - { name: GITEA__repository_0x2E_signing__SIGNING_EMAIL, value: gitea-signing@opensphere.local }
+            # A verified signature must belong to a repository collaborator and
+            # match the recorded committer. This avoids treating a generic
+            # server-verified signature as approval by an arbitrary key.
+            - { name: GITEA__repository_0x2E_signing__DEFAULT_TRUST_MODEL, value: collaboratorcommitter }
+            - { name: GITEA__repository_0x2E_signing__INITIAL_COMMIT, value: always }
+            - { name: GITEA__repository_0x2E_signing__CRUD_ACTIONS, value: always }
+            - { name: GITEA__repository_0x2E_signing__MERGES, value: "approved,commitssigned" }
+          ports: [{ name: http, containerPort: 3000 }]
+          startupProbe: { httpGet: { path: /api/healthz, port: http }, periodSeconds: 5, failureThreshold: 60 }
+          readinessProbe: { httpGet: { path: /api/healthz, port: http }, periodSeconds: 5, failureThreshold: 12 }
+          livenessProbe: { httpGet: { path: /api/healthz, port: http }, periodSeconds: 15, failureThreshold: 3 }
+          securityContext: { allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: { drop: [ALL] } }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/gitea }
+            - { name: config, mountPath: /etc/gitea }
+            - { name: tmp, mountPath: /tmp/gitea }
+            - { name: signing, mountPath: /var/lib/gitea/signing, readOnly: true }
+      volumes:
+        - { name: data, persistentVolumeClaim: { claimName: opensphere-gitea-data } }
+        - { name: source-config, secret: { secretName: opensphere-gitea-config, defaultMode: 256 } }
+        - { name: signing-source, secret: { secretName: opensphere-gitea-signing, defaultMode: 288 } }
+        - { name: config, emptyDir: {} }
+        - { name: tmp, emptyDir: {} }
+        - { name: signing, emptyDir: { medium: Memory } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: opensphere-gitea, namespace: opensphere-console-change, labels: { app: opensphere-gitea } }
+spec:
+  selector: { app: opensphere-gitea }
+  ports: [{ name: http, port: 3000, targetPort: http }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: opensphere-gitea-default-deny-ingress, namespace: opensphere-console-change }
+spec: { podSelector: {}, policyTypes: [Ingress] }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: opensphere-gitea-postgres-ingress, namespace: opensphere-console-change }
+spec:
+  podSelector: { matchLabels: { app: opensphere-gitea-postgres } }
+  policyTypes: [Ingress]
+  ingress:
+    - from: [{ podSelector: { matchLabels: { app: opensphere-gitea } } }]
+      ports: [{ protocol: TCP, port: 5432 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: opensphere-gitea-api-ingress, namespace: opensphere-console-change }
+spec:
+  podSelector: { matchLabels: { app: opensphere-gitea } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - { namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: opensphere-console } } }
+        - { podSelector: { matchLabels: { app: opensphere-gitea } } }
+      ports: [{ protocol: TCP, port: 3000 }]

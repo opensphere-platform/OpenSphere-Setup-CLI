@@ -1,0 +1,340 @@
+# opensphere-console-osaa-gateway — Main Shell native OSAA Core runtime (CONSTITUTION-0004 §4.2/§4.5).
+# Ownership and lifecycle are Console/Main Shell native, exactly like Manual. This is NOT an
+# optional AI staging manifest, NOT a subShell/Consumer, and NOT an independent
+# platform pillar. It is installed after Supabase Data & Identity and Gitea
+# Declarative Change Authority are Ready. Clean bootstrap, upgrade and uninstall
+# own its lifecycle; a normal install must not require a post-install patch.
+# Before Cluster Manager Activated + HISS Preflight Ready, Kubernetes mutation/action tools stay
+# fail closed (OSAA_MUTATION_ENABLED='false' below) and this base runtime grants no deployment
+# patch RBAC at all — see the removed *-controlled-operator ClusterRole/ClusterRoleBinding below.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opensphere-osaa-credentials
+  labels:
+    app.kubernetes.io/part-of: opensphere-console
+    opensphere.io/scope: osaa-provider-credentials
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: opensphere-console-osaa-gateway, namespace: opensphere-console }
+---
+# OSAA is a planner/read broker for managed resources, not a general Kubernetes
+# write principal. Provider credential custody is the one namespace-isolated
+# exception; all workload mutations remain owner-mediated.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: opensphere-console-osaa-gateway, namespace: opensphere-console }
+rules:
+  # Observer leader election is the only Kubernetes write granted to R2D2.
+  # All managed-resource mutation remains owner-mediated.
+  - { apiGroups: [coordination.k8s.io], resources: [leases], resourceNames: [r2d2-operational-observer], verbs: [get, update, patch] }
+  - { apiGroups: [coordination.k8s.io], resources: [leases], verbs: [create] }
+  - { apiGroups: [""], resources: [pods, services, endpoints, events, configmaps, persistentvolumeclaims], verbs: [get, list, watch] }
+  - { apiGroups: [""], resources: [pods/log], verbs: [get] }
+  - { apiGroups: [apps], resources: [deployments, statefulsets, daemonsets, replicasets], verbs: [get, list, watch] }
+  - { apiGroups: [batch], resources: [jobs, cronjobs], verbs: [get, list, watch] }
+  - { apiGroups: [networking.k8s.io], resources: [ingresses, networkpolicies], verbs: [get, list, watch] }
+  - { apiGroups: [discovery.k8s.io], resources: [endpointslices], verbs: [get, list, watch] }
+  - { apiGroups: [autoscaling], resources: [horizontalpodautoscalers], verbs: [get, list, watch] }
+  - { apiGroups: [policy], resources: [poddisruptionbudgets], verbs: [get, list, watch] }
+  - { apiGroups: [platform.opensphere.io], resources: [platformsupportprofiles], verbs: [get, list, watch] }
+  - { apiGroups: [plugins.opensphere.io], resources: [uipluginpackages, uipluginregistrations], verbs: [get, list, watch] }
+  - { apiGroups: [foundation.opensphere.io], resources: [foundationclaims, foundationbindings, identitydirectoryclaims, identitydirectorybindings], verbs: [get, list, watch] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: opensphere-console-osaa-gateway, namespace: opensphere-console }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: opensphere-console-osaa-gateway }
+subjects: [{ kind: ServiceAccount, name: opensphere-console-osaa-gateway, namespace: opensphere-console }]
+---
+# Provider credentials are isolated from Console auth, Gitea, Supabase, TLS and
+# notification Secrets. This namespace contains only `osaa-llm-*` objects.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: opensphere-console-osaa-gateway-credentials, namespace: opensphere-osaa-credentials }
+rules:
+  # Kubernetes RBAC cannot express the dynamic osaa-llm-* name prefix. The
+  # dedicated Restricted namespace is therefore the outer custody boundary;
+  # the C_AI owner validates the exact name and label before each write.
+  - { apiGroups: [""], resources: [secrets], verbs: [get, list, create, patch, delete] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: opensphere-console-osaa-gateway-credentials, namespace: opensphere-osaa-credentials }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: opensphere-console-osaa-gateway-credentials }
+subjects: [{ kind: ServiceAccount, name: opensphere-console-osaa-gateway, namespace: opensphere-console }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: opensphere-console-osaa-gateway-reader, namespace: opensphere-console-data }
+rules:
+  - { apiGroups: [""], resources: [pods, services, endpoints, events, configmaps, persistentvolumeclaims], verbs: [get, list, watch] }
+  - { apiGroups: [""], resources: [pods/log], verbs: [get] }
+  - { apiGroups: [apps], resources: [deployments, statefulsets, daemonsets, replicasets], verbs: [get, list, watch] }
+  - { apiGroups: [batch], resources: [jobs, cronjobs], verbs: [get, list, watch] }
+  - { apiGroups: [networking.k8s.io], resources: [ingresses, networkpolicies], verbs: [get, list, watch] }
+  - { apiGroups: [discovery.k8s.io], resources: [endpointslices], verbs: [get, list, watch] }
+  - { apiGroups: [autoscaling], resources: [horizontalpodautoscalers], verbs: [get, list, watch] }
+  - { apiGroups: [policy], resources: [poddisruptionbudgets], verbs: [get, list, watch] }
+  - { apiGroups: [platform.opensphere.io], resources: [platformsupportprofiles], verbs: [get, list, watch] }
+  - { apiGroups: [plugins.opensphere.io], resources: [uipluginpackages, uipluginregistrations], verbs: [get, list, watch] }
+  - { apiGroups: [foundation.opensphere.io], resources: [foundationclaims, foundationbindings, identitydirectoryclaims, identitydirectorybindings], verbs: [get, list, watch] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: opensphere-console-osaa-gateway-reader, namespace: opensphere-console-data }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: opensphere-console-osaa-gateway-reader }
+subjects: [{ kind: ServiceAccount, name: opensphere-console-osaa-gateway, namespace: opensphere-console }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: opensphere-console-osaa-gateway-reader, namespace: opensphere-console-change }
+rules:
+  - { apiGroups: [""], resources: [pods, services, endpoints, events, configmaps, persistentvolumeclaims], verbs: [get, list, watch] }
+  - { apiGroups: [""], resources: [pods/log], verbs: [get] }
+  - { apiGroups: [apps], resources: [deployments, statefulsets, daemonsets, replicasets], verbs: [get, list, watch] }
+  - { apiGroups: [batch], resources: [jobs, cronjobs], verbs: [get, list, watch] }
+  - { apiGroups: [networking.k8s.io], resources: [ingresses, networkpolicies], verbs: [get, list, watch] }
+  - { apiGroups: [discovery.k8s.io], resources: [endpointslices], verbs: [get, list, watch] }
+  - { apiGroups: [autoscaling], resources: [horizontalpodautoscalers], verbs: [get, list, watch] }
+  - { apiGroups: [policy], resources: [poddisruptionbudgets], verbs: [get, list, watch] }
+  - { apiGroups: [platform.opensphere.io], resources: [platformsupportprofiles], verbs: [get, list, watch] }
+  - { apiGroups: [plugins.opensphere.io], resources: [uipluginpackages, uipluginregistrations], verbs: [get, list, watch] }
+  - { apiGroups: [foundation.opensphere.io], resources: [foundationclaims, foundationbindings, identitydirectoryclaims, identitydirectorybindings], verbs: [get, list, watch] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: opensphere-console-osaa-gateway-reader, namespace: opensphere-console-change }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: opensphere-console-osaa-gateway-reader }
+subjects: [{ kind: ServiceAccount, name: opensphere-console-osaa-gateway, namespace: opensphere-console }]
+# Recovery and Foundation are Console-activated modules and may not exist when
+# OSAA is activated. Their owners create the corresponding namespace-local
+# read bindings as part of their own activation; this manifest never creates
+# or assumes those module namespaces.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: opensphere-console-osaa-gateway-reader, namespace: opensphere-system }
+rules:
+  - { apiGroups: [""], resources: [pods, services, endpoints, events, configmaps, persistentvolumeclaims], verbs: [get, list, watch] }
+  - { apiGroups: [""], resources: [pods/log], verbs: [get] }
+  - { apiGroups: [apps], resources: [deployments, statefulsets, daemonsets, replicasets], verbs: [get, list, watch] }
+  - { apiGroups: [batch], resources: [jobs, cronjobs], verbs: [get, list, watch] }
+  - { apiGroups: [networking.k8s.io], resources: [ingresses, networkpolicies], verbs: [get, list, watch] }
+  - { apiGroups: [discovery.k8s.io], resources: [endpointslices], verbs: [get, list, watch] }
+  - { apiGroups: [autoscaling], resources: [horizontalpodautoscalers], verbs: [get, list, watch] }
+  - { apiGroups: [policy], resources: [poddisruptionbudgets], verbs: [get, list, watch] }
+  - { apiGroups: [platform.opensphere.io], resources: [platformsupportprofiles], verbs: [get, list, watch] }
+  - { apiGroups: [plugins.opensphere.io], resources: [uipluginpackages, uipluginregistrations], verbs: [get, list, watch] }
+  - { apiGroups: [foundation.opensphere.io], resources: [foundationclaims, foundationbindings, identitydirectoryclaims, identitydirectorybindings], verbs: [get, list, watch] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: opensphere-console-osaa-gateway-reader, namespace: opensphere-system }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: opensphere-console-osaa-gateway-reader }
+subjects: [{ kind: ServiceAccount, name: opensphere-console-osaa-gateway, namespace: opensphere-console }]
+---
+# Read-only environment reader across the allowlisted namespaces the OSAA `/env`, `/pods`,
+# `/services`, `/events`, `/describe`, `/rollout` tools summarize. No write verb anywhere here.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: opensphere-console-osaa-gateway-environment-reader }
+rules:
+  # Cluster-wide Pod list is retained for the explicit cluster health summary; all detailed
+  # namespaced reads are still application-filtered and Role-bound to the Console namespaces.
+  - { apiGroups: [""], resources: [pods], verbs: [get, list] }
+  - { apiGroups: [""], resources: [nodes, namespaces, persistentvolumes], verbs: [get, list, watch] }
+  - { apiGroups: [storage.k8s.io], resources: [storageclasses], verbs: [get, list, watch] }
+  - { apiGroups: [apiextensions.k8s.io], resources: [customresourcedefinitions], verbs: [get, list, watch] }
+  - { apiGroups: [apiregistration.k8s.io], resources: [apiservices], verbs: [get, list, watch] }
+  - { apiGroups: [observability.opensphere.io], resources: [observabilitybindings], verbs: [get, list, watch] }
+  - { apiGroups: [foundation.opensphere.io], resources: [foundationmodels, foundationmoduledescriptors], verbs: [get, list, watch] }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: opensphere-console-osaa-gateway-environment-reader }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: opensphere-console-osaa-gateway-environment-reader }
+subjects: [{ kind: ServiceAccount, name: opensphere-console-osaa-gateway, namespace: opensphere-console }]
+---
+# CONSTITUTION-0004 §4.2: before Cluster Manager Activated + HISS Preflight Ready, OSAA must stay
+# read-only. The base runtime therefore grants NO deployment patch capability at all — the former
+# opensphere-console-osaa-gateway-controlled-operator ClusterRole/ClusterRoleBinding (apps/deployments
+# get/list/patch) is permanently removed from this manifest, not merely left unbound. Any later
+# controlled-mutation capability is a Cluster Manager Activated + HISS Preflight Ready gated addition,
+# never a base-install grant.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensphere-console-osaa-gateway
+  namespace: opensphere-console
+  labels:
+    app: opensphere-console-osaa-gateway
+    app.kubernetes.io/name: opensphere-console-osaa-gateway
+    app.kubernetes.io/component: osaa-core
+    app.kubernetes.io/part-of: opensphere-console
+    opensphere.io/layer: console-service
+    opensphere.io/scope: main-shell-core
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector: { matchLabels: { app: opensphere-console-osaa-gateway } }
+  template:
+    metadata:
+      labels:
+        app: opensphere-console-osaa-gateway
+        app.kubernetes.io/name: opensphere-console-osaa-gateway
+        app.kubernetes.io/component: osaa-core
+        app.kubernetes.io/part-of: opensphere-console
+        opensphere.io/layer: console-service
+        opensphere.io/scope: main-shell-core
+    spec:
+      # OSAA is a stateless Console-native service. Keep replicas in separate
+      # host failure domains when available; production promotion verifies the
+      # cluster capacity and durable data profile independently.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector: { matchLabels: { app: opensphere-console-osaa-gateway } }
+      serviceAccountName: opensphere-console-osaa-gateway
+      imagePullSecrets: [{ name: opensphere-ghcr-pull }]
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: gateway
+          # Setup renders the exact canonical GHCR digest from the signed release lock.
+
+          image: __OPENSPHERE_OSAA_GATEWAY_IMAGE__
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: OSAA_KNOWLEDGE_BUNDLE_DIR, value: /var/run/opensphere-knowledge }
+            - { name: APP_VERSION, value: "0.38.0-recovery-owner-read-plan" }
+            - { name: OSAA_NAMESPACE, value: opensphere-console }
+            - { name: OSAA_KEY_NAMESPACE, value: opensphere-osaa-credentials }
+            # Supabase-backed Console identity is the only Console token/role authority.
+            - { name: CONSOLE_IDENTITY_URL, value: http://opensphere-console-api.opensphere-console.svc.cluster.local:8080 }
+            - { name: CONSOLE_SESSION_AUTHORITY_URL, value: http://opensphere-console-api.opensphere-console.svc.cluster.local:8080 }
+            - { name: CONSOLE_KNOWLEDGE_RELEASE_CONTRACT, value: knowledge-release/v1 }
+            - { name: CONSOLE_TARGET_OWNER_ADMISSION, value: "true" }
+            - { name: OSDST_URL, value: http://opensphere-osdst.opensphere-console.svc.cluster.local:8080 }
+            - { name: REGISTRY_URL, value: http://opensphere-registry.opensphere-console.svc.cluster.local:8080 }
+            - { name: FOUNDATION_CONTROL_URL, value: http://foundation-osaa-owner.opensphere-console.svc.cluster.local:8080 }
+            - { name: CONSOLE_ADMIN_GROUP, value: console-admins }
+            - { name: NODE_EXTRA_CA_CERTS, value: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt }
+            # ADR-006 target: OSAA knowledge/control metadata lives in Supabase.
+            # The gateway can read this schema but is not its migration owner.
+            - { name: OSAA_DATA_AUTHORITY, value: supabase }
+            - { name: OSAA_ENV_NAMESPACES, value: "opensphere-console,opensphere-console-data,opensphere-console-change,opensphere-foundation,opensphere-system" }
+            - { name: OSAA_MUTATION_NAMESPACES, value: "opensphere-console,opensphere-console-data,opensphere-console-change" }
+            - { name: OSAA_PG_HOST, value: opensphere-supabase-postgres.opensphere-console-data.svc.cluster.local }
+            - { name: OSAA_PG_PORT, value: "5432" }
+            - { name: OSAA_PG_DB, value: postgres }
+            # The migration-owned opensphere_osaa_gateway role is NOLOGIN. The
+            # activation owner provisions a separate LOGIN that inherits only
+            # that role and stores it in this Gateway-only Secret.
+            - { name: OSAA_PG_USER, valueFrom: { secretKeyRef: { name: opensphere-osaa-gateway-db, key: username } } }
+            - { name: OSAA_PG_PASSWORD, valueFrom: { secretKeyRef: { name: opensphere-osaa-gateway-db, key: password } } }
+            - { name: OSAA_PG_SCHEMA, value: osaa }
+            # Cluster Manager owns activation of Operational Intelligence after
+            # its schema, dedicated least-privilege logins and reconcile scope
+            # are installed. Console bootstrap reports an explicit OFF
+            # projection until that later milestone; it never advertises an
+            # unavailable plane as active.
+            - { name: R2D2_OBSERVER_ENABLED, value: "false" }
+            - { name: R2D2_GRAPH_ENABLED, value: "false" }
+            - { name: R2D2_INCIDENT_ENABLED, value: "false" }
+            - { name: R2D2_GLOBAL_RISK_ENABLED, value: "false" }
+            - { name: R2D2_INCIDENT_RELAY_ENABLED, value: "false" }
+            - { name: R2D2_INCIDENT_LLM_ENABLED, value: "false" }
+            - { name: R2D2_CLUSTER_ID, value: local }
+            # Setup renders these values from the verified release lock and
+            # install inputs. C_AI accepts the development MFA exception only
+            # for the exact edge/development/local/loopback tuple.
+            - { name: OPENSPHERE_RELEASE_CHANNEL, value: "__OPENSPHERE_RELEASE_CHANNEL__" }
+            - { name: OPENSPHERE_AUTH_ENVIRONMENT, value: "__OPENSPHERE_AUTH_ENVIRONMENT__" }
+            - { name: OPENSPHERE_CONSOLE_ORIGIN, value: "__OPENSPHERE_CONSOLE_URL__" }
+            - name: R2D2_OBSERVER_PG_USER
+              valueFrom: { secretKeyRef: { name: opensphere-osaa-runtime, key: observer-pg-user, optional: true } }
+            - name: R2D2_OBSERVER_PG_PASSWORD
+              valueFrom: { secretKeyRef: { name: opensphere-osaa-runtime, key: observer-pg-password, optional: true } }
+            - name: R2D2_RELAY_PG_USER
+              valueFrom: { secretKeyRef: { name: opensphere-osaa-runtime, key: relay-pg-user, optional: true } }
+            - name: R2D2_RELAY_PG_PASSWORD
+              valueFrom: { secretKeyRef: { name: opensphere-osaa-runtime, key: relay-pg-password, optional: true } }
+            - { name: OSAA_EMBED_DIM, value: "1024" }
+            - { name: OSAA_ALLOW_HASH_EMBEDDINGS, value: "false" }
+            - { name: OSAA_RAG_TOP_K, value: "5" }
+            - { name: OSAA_K8S_WATCH_ENABLED, value: "true" }
+            - { name: OSAA_K8S_WATCH_HEARTBEAT_MS, value: "15000" }
+            # Master switch only. The Gateway and Backend still require live Cluster Manager
+            # Activated + HISS Preflight Ready evidence for every mutating action.
+            - { name: OSAA_ACTION_SUBMISSION_ENABLED, value: "true" }
+            # Dialogue state mode, persistence and lease ownership live in the
+            # independent OSDST CBSS Core Service. Gateway consumes its API.
+            # CONSTITUTION-0004 §4.2 fail-closed default: Kubernetes mutation/action tools stay
+            # unavailable until Cluster Manager Activated + HISS Preflight Ready explicitly flips this.
+            - { name: OSAA_MUTATION_ENABLED, value: "false" }
+            # Credential custody is independently gated from general R2D2
+            # action/workload mutation and remains AAL2-, audit-, reason-,
+            # UID- and resourceVersion-bound inside the C_AI owner.
+            - { name: OSAA_LLM_CREDENTIAL_MUTATION_ENABLED, value: "true" }
+            - { name: OSAA_LLM_CREDENTIAL_DELETION_ENABLED, value: "true" }
+          ports: [{ name: http, containerPort: 8080 }]
+          # /healthz is liveness/startup only. /readyz additionally requires PostgreSQL connectivity,
+          # the pgvector/schema migration, the bundled Manual Registry seed, and the tool registry
+          # seed and this replica's complete persisted watch-cursor set to be live before this Pod
+          # is added to the Service endpoints.
+          startupProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 3, failureThreshold: 40 }
+          # /readyz performs bounded PostgreSQL/schema/seed checks. During a
+          # host reboot those checks can legitimately exceed the Kubernetes
+          # one-second default while the database cache is warming. Keep the
+          # semantic gate unchanged and prevent transient CPU/I/O pressure from
+          # removing both replicas from Service endpoints.
+          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 5, timeoutSeconds: 5, failureThreshold: 3 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10, failureThreshold: 6 }
+          resources:
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: platform-knowledge, mountPath: /var/run/opensphere-knowledge, readOnly: true }
+      volumes:
+        - { name: tmp, emptyDir: {} }
+        - name: platform-knowledge
+          projected: { defaultMode: 292, sources: __OPENSPHERE_KNOWLEDGE_SOURCES__ }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: opensphere-console-osaa-gateway, namespace: opensphere-console, labels: { app: opensphere-console-osaa-gateway } }
+spec:
+  selector: { app: opensphere-console-osaa-gateway }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: opensphere-console-osaa-gateway, namespace: opensphere-console }
+spec: { minAvailable: 1, selector: { matchLabels: { app: opensphere-console-osaa-gateway } } }
+---
+# Browser/API ingress is accepted only from C_API; kubelet probes remain node-local.
+
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: opensphere-console-osaa-gateway-ingress, namespace: opensphere-console }
+spec:
+  podSelector: { matchLabels: { app: opensphere-console-osaa-gateway } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - { podSelector: { matchLabels: { app.kubernetes.io/name: opensphere-console-api } } }
+        - { podSelector: { matchLabels: { app: opensphere-console } } }
+        - { podSelector: { matchLabels: { app: opensphere-shell-api } } }
+      ports: [{ protocol: TCP, port: 8080 }]

@@ -1218,7 +1218,7 @@ test('a historical source-revision tag becomes a verified explicit rollback lock
       resolved.components,
       RELEASE_TRUST,
       resolved.releaseBom,
-      { auxiliaryArtifacts: resolved.auxiliaryArtifacts }
+      { auxiliaryArtifacts: resolved.auxiliaryArtifacts, digestFormat: resolved.digestFormat }
     )
   );
   assert.deepEqual(tagCalls, [

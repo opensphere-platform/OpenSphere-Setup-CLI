@@ -7,7 +7,7 @@ import { DEFAULT_CONSOLE_URL } from '../src/console-url.mjs';
 
 const consoleSource = process.env.OPENSPHERE_CONSOLE_SOURCE
   ? pathToFileURL(`${resolve(process.env.OPENSPHERE_CONSOLE_SOURCE)}${sep}`)
-  : new URL('../../OpenSphere-console/', import.meta.url);
+  : new URL('./fixtures/console-contract-v66/', import.meta.url);
 
 test('Docker Desktop Console contract exposes 1114 and keeps the internal HTTPS target', async () => {
   const manifest = await readFile(

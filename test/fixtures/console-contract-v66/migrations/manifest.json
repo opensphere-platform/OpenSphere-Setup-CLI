@@ -1,0 +1,669 @@
+{
+  "schemaVersion": 1,
+  "repository": "OpenSphere-Console",
+  "latestGlobalId": "opensphere-console/20260910/0066",
+  "migrationCount": 66,
+  "setDigest": "sha256:ab239cb2711f344e9e294d840df867ce2c1305173409f6e73f03a8d3bc3a1610",
+  "migrations": [
+    {
+      "globalId": "opensphere-console/20260902/0001",
+      "semanticKey": "console.authority.baseline",
+      "predecessorGlobalId": null,
+      "path": "migrations/baseline/0001_console_authority.sql",
+      "sha256": "ad9cc5bd66b35e8d9591b5894a24f16a59e4aaf658b711070684132330c1de68",
+      "sourceRevision": "8e4da5924ec54f09ad137ee67a8bf093342cbf0e",
+      "setDigest": "sha256:3866b59613f17bfa0cc019a2c895a9135e0d6e7e6b44b0997971bb075ccf90c4",
+      "setSize": 1
+    },
+    {
+      "globalId": "opensphere-console/20260902/0002",
+      "semanticKey": "console.identity.browser_session_credential_envelope",
+      "predecessorGlobalId": "opensphere-console/20260902/0001",
+      "path": "migrations/versions/0002_browser_session_credential_envelope.sql",
+      "sha256": "eb52db958b5da932c2b1d464af4b550fc8372c3ffa64e747d9e16c0fe98e9376",
+      "sourceRevision": "e6f3f2dc54012a9d655e4ec292da182f6b9ae5dd",
+      "setDigest": "sha256:4e1757ca56b40073d66840004f30c733be0935bb38119876c11b228cdb4089e2",
+      "setSize": 2
+    },
+    {
+      "globalId": "opensphere-console/20260902/0003",
+      "semanticKey": "console.identity.browser_session_mfa_activation",
+      "predecessorGlobalId": "opensphere-console/20260902/0002",
+      "path": "migrations/versions/0003_browser_session_mfa_activation.sql",
+      "sha256": "9c7971f502097ca213244a4ad52883983ab3fc61336cdaac53f1925af8a5d15d",
+      "sourceRevision": "d7c5d09ecdcfbeed01b32fd13a447c15b5692116",
+      "setDigest": "sha256:fb3a0a19bd9b1206e64da3e19eed26cf59a5ff18d39633f55111d405c5d5d49f",
+      "setSize": 3
+    },
+    {
+      "globalId": "opensphere-console/20260902/0004",
+      "semanticKey": "console.identity.browser_session_refresh_rotation",
+      "predecessorGlobalId": "opensphere-console/20260902/0003",
+      "path": "migrations/versions/0004_browser_session_refresh_rotation.sql",
+      "sha256": "b1e4696a778b670ad4b050032eac60433022ce6efbfc4421775553b06f808872",
+      "sourceRevision": "be81b21351e7a4d2d89ce08f988eb1c115ae85c3",
+      "setDigest": "sha256:eef7f89f32252152eff08c9cd14c2e8edbb4f66b472eab0ee843e5c5e178f341",
+      "setSize": 4
+    },
+    {
+      "globalId": "opensphere-console/20260902/0005",
+      "semanticKey": "console.identity.browser_session_activity_expiry",
+      "predecessorGlobalId": "opensphere-console/20260902/0004",
+      "path": "migrations/versions/0005_browser_session_activity_expiry.sql",
+      "sha256": "6a151cdd57759bd26f2368b3dec8238d2fe86d851d85910f31eb741ead0b92a2",
+      "sourceRevision": "188d23ae76ebdddea467efd0b7e5926f0dcd20e2",
+      "setDigest": "sha256:510ed0b8de75a1d8daddeef6c0ebb1a0cd0c69787f1b15ccd13a8c7656257e84",
+      "setSize": 5
+    },
+    {
+      "globalId": "opensphere-console/20260902/0006",
+      "semanticKey": "console.identity.browser_session_inventory_revocation",
+      "predecessorGlobalId": "opensphere-console/20260902/0005",
+      "path": "migrations/versions/0006_browser_session_inventory_revocation.sql",
+      "sha256": "43cab75a70239000fcedbb41462f2936714ab0c82efed49b17776e50a367438e",
+      "sourceRevision": "c74661efdcb9ebf31f8b997a70954704168d989d",
+      "setDigest": "sha256:505d3d76999f7354acdf3df6dd7de435b9358f1a44c0d9a96fb2ab12738454fe",
+      "setSize": 6
+    },
+    {
+      "globalId": "opensphere-console/20260902/0007",
+      "semanticKey": "console.identity.browser_session_totp_enrollment",
+      "predecessorGlobalId": "opensphere-console/20260902/0006",
+      "path": "migrations/versions/0007_browser_session_totp_enrollment.sql",
+      "sha256": "e01ff7baeb77a190010884a001a2261b48317ef37b07a9e6216cf82ed58a3a10",
+      "sourceRevision": "d94f8e039d3a11bb7cd014f37ae260078f802a91",
+      "setDigest": "sha256:6b36757bb7efe0bb128b070017e40365ee0f8b5b9e10d6e9bb6a2384406fe581",
+      "setSize": 7
+    },
+    {
+      "globalId": "opensphere-console/20260902/0008",
+      "semanticKey": "console.identity.browser_session_step_up",
+      "predecessorGlobalId": "opensphere-console/20260902/0007",
+      "path": "migrations/versions/0008_browser_session_step_up.sql",
+      "sha256": "b4017c73474eb15a96b33cf060b912c94ca4b4b02f5271606e7f1f00c87f3624",
+      "sourceRevision": "8634da0f007e9e5b6e715e3fde921058f199d073",
+      "setDigest": "sha256:7547b3134a3682c5c073120a954a0073638619ddf432abc5d06222810177471b",
+      "setSize": 8
+    },
+    {
+      "globalId": "opensphere-console/20260902/0009",
+      "semanticKey": "console.operation.recent_aal2_enforcement",
+      "predecessorGlobalId": "opensphere-console/20260902/0008",
+      "path": "migrations/versions/0009_recent_aal2_enforcement.sql",
+      "sha256": "172d1bcbaa9380f0a2bd7379ae1301402b944f4ffec7b25479932107f2e9a6f2",
+      "sourceRevision": "b5b9815a6a0826bb7c356a63ba39d8f03f8a9940",
+      "setDigest": "sha256:10d5cb46ebcbbbc71520627d8a515fb391c79ec61ad6636b645b9bb5193de5be",
+      "setSize": 9
+    },
+    {
+      "globalId": "opensphere-console/20260902/0010",
+      "semanticKey": "console.identity.password_recovery_session_revocation",
+      "predecessorGlobalId": "opensphere-console/20260902/0009",
+      "path": "migrations/versions/0010_password_recovery_session_revocation.sql",
+      "sha256": "6e60c81d0f0c17bd3960954c4169bcc6c5600dccb88dea884f664fc66ac15574",
+      "sourceRevision": "bd00f005de88e63cdae8573fa35b4e6e502c570a",
+      "setDigest": "sha256:b9251a63a3cf38642bde45f01b2e4ba63a85685424e12c03f758da287c11b16f",
+      "setSize": 10
+    },
+    {
+      "globalId": "opensphere-console/20260902/0011",
+      "semanticKey": "console.identity.initial_administrator_bootstrap",
+      "predecessorGlobalId": "opensphere-console/20260902/0010",
+      "path": "migrations/versions/0011_initial_administrator_bootstrap.sql",
+      "sha256": "43816be586fb7f56bb1e5a9f6a33fb8200028c05014740cbf6767acf987fecdb",
+      "sourceRevision": "45bec92bc352c3f0d16fdb5abf01cdaa680db139",
+      "setDigest": "sha256:76c94865493455a8b0d53e6fb0f92f86674e4cea55932ae34319fb9487184308",
+      "setSize": 11
+    },
+    {
+      "globalId": "opensphere-console/20260902/0012",
+      "semanticKey": "console.identity.browser_session_preference",
+      "predecessorGlobalId": "opensphere-console/20260902/0011",
+      "path": "migrations/versions/0012_browser_session_preference.sql",
+      "sha256": "835841e0ef69febb385b41cf71141e898106b004f6536db44367f8623700f819",
+      "sourceRevision": "450fd9305b60572bcce8fcaa19b82479cc293b77",
+      "setSize": 12,
+      "setDigest": "sha256:e14bda948af30e7d3a8ae82011246dd6bd46a54c9715e84c5c546ff3506681e7"
+    },
+    {
+      "globalId": "opensphere-console/20260902/0013",
+      "semanticKey": "console.identity.owned_browser_session_events",
+      "predecessorGlobalId": "opensphere-console/20260902/0012",
+      "path": "migrations/versions/0013_owned_browser_session_events.sql",
+      "sha256": "a3c751045eec335559035a59383804109dab8455e5aff3cfaf9f7573a51ce739",
+      "sourceRevision": "a63368d2765f96840a17028383dd2d666e5ba6f4",
+      "setSize": 13,
+      "setDigest": "sha256:327228d539e2a94a8d22bc4f2e76c9b9f88d8e6551a4dee527e91f6300cc0a7d"
+    },
+    {
+      "globalId": "opensphere-console/20260902/0014",
+      "semanticKey": "console.identity.owned_password_recovery_link",
+      "predecessorGlobalId": "opensphere-console/20260902/0013",
+      "path": "migrations/versions/0014_owned_password_recovery_link.sql",
+      "sha256": "f5eda8fa775aca905f6ab4aa472fa8ffd878a9ca1f77e2482556069f5a8a7ace",
+      "sourceRevision": "806b675c3d9e3e107d69d0670645dbf3008c4c57",
+      "setSize": 14,
+      "setDigest": "sha256:7980c1ec9c3c51a67c80bebbe3a8ce807e9e550f19eb906a2cdda38e5d9ab6d4"
+    },
+    {
+      "globalId": "opensphere-console/20260902/0015",
+      "semanticKey": "console.identity.owned_profile_avatar",
+      "predecessorGlobalId": "opensphere-console/20260902/0014",
+      "path": "migrations/versions/0015_owned_profile_avatar.sql",
+      "sha256": "d668e8440af575aaea5ecd3c4a0f002fc7f8972313b93240934cbf78e8346fcd",
+      "sourceRevision": "d29c46e715a1e890b97bfc008fda96e27f2e9bc8",
+      "setSize": 15,
+      "setDigest": "sha256:ab9a4c3a46c2d91a1fa83b5b1a69e409f178610469f997d5374bd5345cae2865"
+    },
+    {
+      "globalId": "opensphere-console/20260902/0016",
+      "semanticKey": "console.identity.managed_roles",
+      "predecessorGlobalId": "opensphere-console/20260902/0015",
+      "path": "migrations/versions/0016_managed_identity_roles.sql",
+      "sha256": "f22e9c09cf0c7e0dd17e641b4aa94eb6d4f0364d3e13135d310624cab3db7489",
+      "sourceRevision": "b4fd3db7d00d37506129cd15e9b4c3d026b6a0cc",
+      "setSize": 16,
+      "setDigest": "sha256:241d39b49da773262082a8d5ab6cdd03bd1c1e5f1de53616c7b69ccc8703c98b"
+    },
+    {
+      "globalId": "opensphere-console/20260902/0017",
+      "semanticKey": "console.identity.managed_lifecycle",
+      "predecessorGlobalId": "opensphere-console/20260902/0016",
+      "path": "migrations/versions/0017_managed_identity_lifecycle.sql",
+      "sha256": "e0e80ee17772e60a1d6bed5226082a8e3d2ff793f2796b87aadc13bef7b029d3",
+      "sourceRevision": "75d6bd2b1a5fe514390ef68f9a105d21aacdff4b",
+      "setSize": 17,
+      "setDigest": "sha256:0079b9aa637023dbc80b2633cdc349fbb7995699d556a1f950ba2b83bc7b4d18"
+    },
+    {
+      "globalId": "opensphere-console/20260902/0018",
+      "semanticKey": "console.identity.cli_device",
+      "predecessorGlobalId": "opensphere-console/20260902/0017",
+      "path": "migrations/versions/0018_cli_device_identity.sql",
+      "sha256": "acc7ee61a971cf0081dd26597bf895e54cb815f5dbaa8640800885201d9e3c97",
+      "sourceRevision": "e9d6354b826c9a60ab4d9e30327e08485c4fdac3",
+      "setSize": 18,
+      "setDigest": "sha256:d1e8a35bb25d05740f601c131980b91c0b19eed0d2408223d833b0b6f97c901a"
+    },
+    {
+      "globalId": "opensphere-console/20260902/0019",
+      "semanticKey": "console.identity.cli_bearer_device_management",
+      "predecessorGlobalId": "opensphere-console/20260902/0018",
+      "path": "migrations/versions/0019_cli_bearer_device_management.sql",
+      "sha256": "e3bfea1d5fab4f0961c6477f71bfd07dc1e4f1d9b355d9b84b4ffd7c9e351081",
+      "sourceRevision": "adf1af947ee0b0a8882c08e6c197022ae2b426a9",
+      "setSize": 19,
+      "setDigest": "sha256:de425cce3ee32a3c8d5214ba4f255a7ad8da090bfaa45da8d13da7e6a5ec03a7"
+    },
+    {
+      "globalId": "opensphere-console/20260902/0020",
+      "semanticKey": "console.data_identity.cli_rls_status",
+      "predecessorGlobalId": "opensphere-console/20260902/0019",
+      "path": "migrations/versions/0020_supabase_status_cli_rls.sql",
+      "sha256": "ed762769adc5a7aae43c39f361fb56868102f64e818f46a6c44800b64358d4d1",
+      "sourceRevision": "4f84bd0b5ef5324d2cb8e6f55bd9ab7a814243f2",
+      "setSize": 20,
+      "setDigest": "sha256:928006bc506840be69c04c6d6d2e5036af4ab57664c845b8c00b880da37510d4"
+    },
+    {
+      "globalId": "opensphere-console/20260902/0021",
+      "semanticKey": "console.identity.platform_change_permission",
+      "predecessorGlobalId": "opensphere-console/20260902/0020",
+      "path": "migrations/versions/0021_platform_change_permission.sql",
+      "sha256": "f026ee0fc4786a21d0a7c4e3cdecd2086c3bd228620fc98c1a27cc2571db411a",
+      "sourceRevision": "5968b497331baada94508442192411207bb8296e",
+      "setDigest": "sha256:94b1e617d3b3394c45579acf850d34b40a42b78aaf743c1a3aaf18086b92ab3c",
+      "setSize": 21
+    },
+    {
+      "globalId": "opensphere-console/20260902/0022",
+      "semanticKey": "console.operation.gitea_merge_receipt",
+      "predecessorGlobalId": "opensphere-console/20260902/0021",
+      "path": "migrations/versions/0022_gitea_merge_receipt.sql",
+      "sha256": "be79240ef8075f4ef6da780b9c1af1b0ec0b774fd1f3921b4cb26fa4268db3da",
+      "sourceRevision": "ecba08066cd93807f9127fd8f1d6b87cd5764a6c",
+      "setDigest": "sha256:bd89096ec40194d751595dd11d221c2b4256854cd8de3166298c39e9a431c5e2",
+      "setSize": 22
+    },
+    {
+      "globalId": "opensphere-console/20260902/0023",
+      "semanticKey": "console.operation.gitea_proposal_receipt",
+      "predecessorGlobalId": "opensphere-console/20260902/0022",
+      "path": "migrations/versions/0023_gitea_proposal_receipt.sql",
+      "sha256": "d91c4c31dc356af931d5c5d0d75c9f552568093ca007ac44b2ced1a0da3951ad",
+      "sourceRevision": "ad1961615479df63490da5dcc5dba1c65458e196",
+      "setDigest": "sha256:76518cba73d7c87991b8a49c7e4782d8fdd6382317e57f163baae5bc616f14a5",
+      "setSize": 23
+    },
+    {
+      "globalId": "opensphere-console/20260902/0024",
+      "semanticKey": "console.operation.gitea_change_inventory",
+      "predecessorGlobalId": "opensphere-console/20260902/0023",
+      "path": "migrations/versions/0024_gitea_change_inventory.sql",
+      "sha256": "82f39cbe24c0f76e01a01e5c23c5550eb56da4133f6787695adafe851c4ab19f",
+      "sourceRevision": "cfb17795b63d8403125a056ea21ecf28b2d44b21",
+      "setDigest": "sha256:aaa77d979b8c0475fbb1d44631feb19eaf7b71f88bddafba2cb53a5dafe64367",
+      "setSize": 24
+    },
+    {
+      "globalId": "opensphere-console/20260902/0025",
+      "semanticKey": "console.identity.owner_access_credential",
+      "predecessorGlobalId": "opensphere-console/20260902/0024",
+      "path": "migrations/versions/0025_owner_access_credential.sql",
+      "sha256": "ab3fdaff8b0ceb44efc6294d995cd77f141fde2e7c11c47e619062ca798994c0",
+      "sourceRevision": "8b77dcbd22bd7770513f6bb96224135c0fd70554",
+      "setDigest": "sha256:d5f24a2ca93efcf21861b8a2883caadf3805dcd9fb0e6dd9fe2360ac9bc6a92a",
+      "setSize": 25
+    },
+    {
+      "globalId": "opensphere-console/20260902/0026",
+      "semanticKey": "console.extension.management_projection",
+      "predecessorGlobalId": "opensphere-console/20260902/0025",
+      "path": "migrations/versions/0026_extension_management_projection.sql",
+      "sha256": "a0ad442297add79ab4290cb4b4f4e9f86ed669672efc82b56cc52332125423c6",
+      "sourceRevision": "5a7b599c936cd4329544a33f8ac2313fc35ee322",
+      "setDigest": "sha256:d7dea994fdc3a6af11b80c75e78066a374c6c6da1586380c1eefd14871274754",
+      "setSize": 26
+    },
+    {
+      "globalId": "opensphere-console/20260903/0027",
+      "semanticKey": "console.extension.registry_credential_lifecycle",
+      "predecessorGlobalId": "opensphere-console/20260902/0026",
+      "path": "migrations/versions/0027_registry_credential_lifecycle.sql",
+      "sha256": "aa3aba4410f0604fe584931db0aea3dc2e4f1da5d96c37562fc7e794717e8189",
+      "sourceRevision": "bcde4e0533ea110c13960a17a36a6a90dea7f2c9",
+      "setSize": 27,
+      "setDigest": "sha256:51811a603f248ae818cf230d8371661518e2a2b70a42f4585ef6d423c53f52f6"
+    },
+    {
+      "globalId": "opensphere-console/20260903/0028",
+      "semanticKey": "console.identity.supabase_status_extension_rls",
+      "predecessorGlobalId": "opensphere-console/20260903/0027",
+      "path": "migrations/versions/0028_supabase_status_extension_rls.sql",
+      "sha256": "3dab50a1fa3defc621a24ef3690745c0c7c354b817343f55f5ad458a7ee6c73d",
+      "sourceRevision": "fa287c6cbf2e8cff5a2e0f46658beafc0c758a1d",
+      "setSize": 28,
+      "setDigest": "sha256:da5993f76c206dff8a748c912ce91fbb9fb929cb3210f86f1063de29d7eff2d5"
+    },
+    {
+      "globalId": "opensphere-console/20260903/0029",
+      "semanticKey": "console.shell.native_authority",
+      "predecessorGlobalId": "opensphere-console/20260903/0028",
+      "path": "migrations/versions/0029_native_shell_authority.sql",
+      "sha256": "a385ed25e5d5797192793b0fca79794e571815095a933979792f88739405491d",
+      "sourceRevision": "7b4cef1ee3e9f9fd62da79a349de3136bd5724ed",
+      "setSize": 29,
+      "setDigest": "sha256:d5f1577ec050ddd662c32c1c34d0eb94dfd3f4c6e24f3fa6b7dcee370a58b2e9"
+    },
+    {
+      "globalId": "opensphere-console/20260903/0030",
+      "semanticKey": "console.osaa.native_dialogue_authority",
+      "predecessorGlobalId": "opensphere-console/20260903/0029",
+      "path": "migrations/versions/0030_native_osdst_authority.sql",
+      "sha256": "a548ae7ae9ede6e9510d05225aa5b3eeb28b2eb46651ad79c0af445687c8ea16",
+      "sourceRevision": "98c3d0bc357594b466d420ee00cb8dddea074ace",
+      "setSize": 30,
+      "setDigest": "sha256:28ad8acc23915ece540488ae040d0daa11ebeaa7d1f555dce6e7b05f4645ef86"
+    },
+    {
+      "globalId": "opensphere-console/20260903/0031",
+      "semanticKey": "console.osaa.native_serving_authority",
+      "predecessorGlobalId": "opensphere-console/20260903/0030",
+      "path": "migrations/versions/0031_native_osaa_serving_authority.sql",
+      "sha256": "647e43cb4c96b42fe15d55c92efa48db9860543a533bd16fec6421194c2faeea",
+      "sourceRevision": "67ff04ddb1b9ef2fb2a5ea3a22bb1d48c6545909",
+      "setSize": 31,
+      "setDigest": "sha256:e185f52230ff6020297e56294f173e93ae18f36443615370031bdffaf010c780"
+    },
+    {
+      "globalId": "opensphere-console/20260903/0032",
+      "semanticKey": "console.osaa.watch_state_contract",
+      "predecessorGlobalId": "opensphere-console/20260903/0031",
+      "path": "migrations/versions/0032_osaa_watch_state_contract.sql",
+      "sha256": "258c42129642eeffb4a101d80c6794a9b13ef9e47585b61a9d4c30850a4856e5",
+      "sourceRevision": "05d983360cefd938f1aecaeeefc894a5b56ed5dd",
+      "setSize": 32,
+      "setDigest": "sha256:7c2bc2023976417bc5f34583826de786217c7f0a603e35113c55b4318ea8d8b0"
+    },
+    {
+      "globalId": "opensphere-console/20260904/0033",
+      "semanticKey": "console.extension.supply_chain_navigation",
+      "predecessorGlobalId": "opensphere-console/20260903/0032",
+      "path": "migrations/versions/0033_extension_supply_chain_and_navigation.sql",
+      "sha256": "a6eced9500d8f7a47927ea7bed9dd6fc095b4ebd2cec2797ea1d42f4ccaffa65",
+      "sourceRevision": "2b53b5a7b1df255082384943251019b1672c64d7",
+      "setSize": 33,
+      "setDigest": "sha256:7ab6ab5ab25adaf811d1becc867e987c1b32e745c00b21e6603b7ef433bbb663"
+    },
+    {
+      "globalId": "opensphere-console/20260904/0034",
+      "semanticKey": "console.osaa.local_edge_development_mfa_audit",
+      "predecessorGlobalId": "opensphere-console/20260904/0033",
+      "path": "migrations/versions/0034_local_edge_development_mfa_audit.sql",
+      "sha256": "bbe9c6a44d1db7b2b8240037bcaeee3ad260266d2e20cb945f0b05a5700278d4",
+      "sourceRevision": "76e4aa5557298863ba88c446637c91332d58ccf9",
+      "setSize": 34,
+      "setDigest": "sha256:97648638173f621644684c4b4c2c9a84f95226aba4ccf49a374ae94471a19182"
+    },
+    {
+      "globalId": "opensphere-console/20260905/0035",
+      "semanticKey": "console.shell.setup_native_runtime_activation",
+      "predecessorGlobalId": "opensphere-console/20260904/0034",
+      "path": "migrations/versions/0035_setup_native_runtime_activation.sql",
+      "sha256": "b3c09262079fde85cb25c331c0cbbe3bc1bda6723d5b155139b7c12d3dbc7b83",
+      "sourceRevision": "676e7c75e9135c49b3041e96019f3b5c197ad9a8",
+      "setSize": 35,
+      "setDigest": "sha256:07f76261bfaac0e9ed897e1156af6cf3417ac2140cd0b88a47cc739fb2b3de73"
+    },
+    {
+      "globalId": "opensphere-console/20260905/0036",
+      "semanticKey": "console.extension.development_module_installation",
+      "predecessorGlobalId": "opensphere-console/20260905/0035",
+      "path": "migrations/versions/0036_development_module_installation.sql",
+      "sha256": "4a5cdaa8c50857f26227fa370c858b3da3e352f2513f30fc3ab4f3e9f0910d74",
+      "sourceRevision": "5610c24520d99ba217ed39c6f199c21da0956e55",
+      "setSize": 36,
+      "setDigest": "sha256:6767504ad25cae80e8055321daf3d47a6cf37cef81a5b1517673a6ab8ede6fa1"
+    },
+    {
+      "globalId": "opensphere-console/20260905/0037",
+      "semanticKey": "console.osaa.verification_evidence_kind",
+      "predecessorGlobalId": "opensphere-console/20260905/0036",
+      "path": "migrations/versions/0037_osaa_verification_evidence_kind.sql",
+      "sha256": "0721dfd4d60c55fe8fd6b92cdf947941f54f7767ecfd579a167ea45c4e3662e2",
+      "sourceRevision": "32c8d18e139ac0a1d5b33320525710f44060d1dd",
+      "setSize": 37,
+      "setDigest": "sha256:094248a7e3c34f1adecbcdd45d6b769defed698786cba4d6b2b1f829768a2dfe"
+    },
+    {
+      "globalId": "opensphere-console/20260905/0038",
+      "semanticKey": "console.data_identity.operational_projection",
+      "predecessorGlobalId": "opensphere-console/20260905/0037",
+      "path": "migrations/versions/0038_data_identity_operational_projection.sql",
+      "sha256": "5fe1ea13c886a76465e6b941420e227579067e7216197536d04f66f6700340eb",
+      "sourceRevision": "9f8d9c4838fbdb4807b4d5f41a5cb7d55d49c7c6",
+      "setDigest": "sha256:dfa34f9d0070368e761a7df41f1f7ae36e550fada7120df1fc418b3ddde40fe5",
+      "setSize": 38
+    },
+    {
+      "globalId": "opensphere-console/20260905/0039",
+      "semanticKey": "console.gitea.module_dispatch",
+      "predecessorGlobalId": "opensphere-console/20260905/0038",
+      "path": "migrations/versions/0039_gitea_module_dispatch.sql",
+      "sha256": "8f31f519731b173f75dd3199487f0b39b7105d5284915f9549a432adb68ccdbb",
+      "sourceRevision": "d7fc701d500393116dae4c847515e8583b5fa7b7",
+      "setDigest": "sha256:aac31fa11e0d2ad7218645973429b73a2a80a05015c72805ff948748a6211347",
+      "setSize": 39
+    },
+    {
+      "globalId": "opensphere-console/20260906/0040",
+      "semanticKey": "console.module.requester_confirmed_install",
+      "predecessorGlobalId": "opensphere-console/20260905/0039",
+      "path": "migrations/versions/0040_requester_confirmed_module_install.sql",
+      "sha256": "f3362b45386d66b2284f51fedf36c8cde8c44f2fb22af6e84b482b4a191c9d2e",
+      "sourceRevision": "7a69c30d024ada75ab715b237e9675d3e58fa0ac",
+      "setSize": 40,
+      "setDigest": "sha256:2290ffca6e8e30a0ecdbfee440402e9cc4dba47156a70be6f807d56d2e8a74e2"
+    },
+    {
+      "globalId": "opensphere-console/20260906/0041",
+      "semanticKey": "console.cluster_manager.owner_audit",
+      "predecessorGlobalId": "opensphere-console/20260906/0040",
+      "path": "migrations/versions/0041_cluster_manager_owner_audit.sql",
+      "sha256": "3f654bc116591a02ebdf74c2479861b0831f3464c637c72bb2a078d9461ba88e",
+      "sourceRevision": "9e1b0abb30f84b0bff053bb8225d3a76a74298eb",
+      "setSize": 41,
+      "setDigest": "sha256:799455be13dbe1d7b2bfb6b1ab2ccaf8b8a1d4bc1c598adb0c80c4f77bf8cd12"
+    },
+    {
+      "globalId": "opensphere-console/20260906/0042",
+      "semanticKey": "console.module.installation_request_lookup",
+      "predecessorGlobalId": "opensphere-console/20260906/0041",
+      "path": "migrations/versions/0042_module_installation_request_lookup.sql",
+      "sha256": "276e562d43d1b63479897a384ce14945e7ea95e25a66905e6b9f474a20929853",
+      "sourceRevision": "1b1264bc29810f6f539dec1768ced333bdc947f4",
+      "setSize": 42,
+      "setDigest": "sha256:2ae14fd92b3c212610c40117906cdac327f077c325ddeef47057b73b16374083"
+    },
+    {
+      "globalId": "opensphere-console/20260906/0043",
+      "semanticKey": "console.shell.command_ledger",
+      "predecessorGlobalId": "opensphere-console/20260906/0042",
+      "path": "migrations/versions/0043_shell_command_ledger.sql",
+      "sha256": "58bc42c6f41c76a085423ad483f9d5192eefc34119e321967e198e0ff846cf7e",
+      "sourceRevision": "247bd6eb6a21d0a44cdbe0ddfe5e0c8471a6d121",
+      "setSize": 43,
+      "setDigest": "sha256:e1b7bb9df152af49672aff85bec9e8248adc32cb2f3d6d36f1cbf45aaa31e29a"
+    },
+    {
+      "globalId": "opensphere-console/20260907/0044",
+      "semanticKey": "console.shell.owner_command_namespace",
+      "predecessorGlobalId": "opensphere-console/20260906/0043",
+      "path": "migrations/versions/0044_shell_owner_command_namespace.sql",
+      "sha256": "967a4c40bdf113519301e44d586e03c8f5f1553310e3632968bff38f7052bbda",
+      "sourceRevision": "4fa23b5edf7bfc4c759b998d79136484db8655ca",
+      "setSize": 44,
+      "setDigest": "sha256:ca51bf7d1485460755fd2e526cbcd996aa71c12ab059d52c01a16c89bf4b415b"
+    },
+    {
+      "globalId": "opensphere-console/20260907/0045",
+      "semanticKey": "console.module.platform_support_installation",
+      "predecessorGlobalId": "opensphere-console/20260907/0044",
+      "path": "migrations/versions/0045_platform_support_installation.sql",
+      "sha256": "3a443f3bb7c5f5950cddf2310c18521ef93f51a37caadfb8bc893ea3887db936",
+      "sourceRevision": "0d580dbf1fdb69d3ac02bee5ef9a224dcc1656ff",
+      "setSize": 45,
+      "setDigest": "sha256:a247d535e1ef028da262055f751e1301721f5e8564a5bd68daae5b28717ade4a"
+    },
+    {
+      "globalId": "opensphere-console/20260907/0046",
+      "semanticKey": "console.platform_core.owner_audit",
+      "predecessorGlobalId": "opensphere-console/20260907/0045",
+      "path": "migrations/versions/0046_platform_core_owner_audit.sql",
+      "sha256": "efd68ee962c3a48f7e63c54c1c97043b1adb87b033ba49a5ca7acf4c5f7dafe1",
+      "sourceRevision": "ac76dec2d733fee752b4896c029dea1e8ad8123d",
+      "setSize": 46,
+      "setDigest": "sha256:5bb4442343c5249f25d6314eab224874e4fd4eb3dc6fc976850422a7ec4bdea5"
+    },
+    {
+      "globalId": "opensphere-console/20260908/0047",
+      "semanticKey": "console.shell.owned_request_inspection",
+      "predecessorGlobalId": "opensphere-console/20260907/0046",
+      "path": "migrations/versions/0047_owned_shell_request_inspection.sql",
+      "sha256": "504f5d1651514235e39da8f37d83628ec4a05560e15b850bf78fa3f9e5733cbc",
+      "sourceRevision": "4348be88061affa424599c88a8091dd3c270f13f",
+      "setSize": 47,
+      "setDigest": "sha256:7692e12be34ebb47a70008d2670fc092f0adc827c12cdbf17ce29b8d00d70c03"
+    },
+    {
+      "globalId": "opensphere-console/20260908/0048",
+      "semanticKey": "console.shell.permission_admission",
+      "predecessorGlobalId": "opensphere-console/20260908/0047",
+      "path": "migrations/versions/0048_shell_command_permission_admission.sql",
+      "sha256": "75bdcf961d960012b8df9ae54aa3c173bc93618133bc1a995f2149baa33b7b49",
+      "sourceRevision": "5a737395a8b9c02d1b9b22d2b03c50b3f1e94004",
+      "setSize": 48,
+      "setDigest": "sha256:7bce59559d14c0e24ef4c860d66d61ab35e5264617baabfa196506923cf2a560"
+    },
+    {
+      "globalId": "opensphere-console/20260908/0049",
+      "semanticKey": "console.knowledge.embedding_dimension",
+      "predecessorGlobalId": "opensphere-console/20260908/0048",
+      "path": "migrations/versions/0049_knowledge_embedding_dimension.sql",
+      "sha256": "6cea67f2a0d694dad8303e2ebf8123696659a81716d0c201035d99801d96e9bc",
+      "sourceRevision": "41eb8e9e03577993075336e5925f2da9bcb2206f",
+      "setSize": 49,
+      "setDigest": "sha256:2a9817ab3027cf70209977e2e6c2979e5d0cc506aff7c53016239a81cfb4b9f5"
+    },
+    {
+      "globalId": "opensphere-console/20260908/0050",
+      "semanticKey": "console.knowledge.shell_admission",
+      "predecessorGlobalId": "opensphere-console/20260908/0049",
+      "path": "migrations/versions/0050_knowledge_shell_admission.sql",
+      "sha256": "299909fcab9749627221586951401e676e3111912c28f97ce9c51f5ffbc42e49",
+      "sourceRevision": "ea62b4ebff1e09e1973d9fb27a56511bbe0a5c8f",
+      "setSize": 50,
+      "setDigest": "sha256:8cbd1adc135465d3accfe83567b9d6070b32231e9a321946da58ddfb6721c77e"
+    },
+    {
+      "globalId": "opensphere-console/20260909/0051",
+      "semanticKey": "console.osdst.native_graph",
+      "predecessorGlobalId": "opensphere-console/20260908/0050",
+      "path": "migrations/versions/0051_osdst_native_graph.sql",
+      "sha256": "3dbfda76e2ffbbaf8dcee175fbd9071a6a223913c20cbd5cc262d066f359ecf3",
+      "sourceRevision": "b55ec8af354e4088d2f90e4160b2937bcd777c2c",
+      "setSize": 51,
+      "setDigest": "sha256:bccb256f17ee1fc398974687cf3f131f2c7477fae6a42161e713b1866f366b6e"
+    },
+    {
+      "globalId": "opensphere-console/20260909/0052",
+      "semanticKey": "console.registry.development_mfa",
+      "predecessorGlobalId": "opensphere-console/20260909/0051",
+      "path": "migrations/versions/0052_registry_development_mfa.sql",
+      "sha256": "22cbd13301c348fd8b8003d996e58b74690a158cb99128af2dc9d78c8f5167d8",
+      "sourceRevision": "45f19daed453e712ad857fe3cf6c8defd2be9bab",
+      "setSize": 52,
+      "setDigest": "sha256:092c008bc3cdc22fef0ab95648822b7812dd91f4c1eaeb429e51555bf7d39a7c"
+    },
+    {
+      "globalId": "opensphere-console/20260909/0053",
+      "semanticKey": "console.registry.broker_development_mfa",
+      "predecessorGlobalId": "opensphere-console/20260909/0052",
+      "path": "migrations/versions/0053_registry_broker_development_mfa.sql",
+      "sha256": "49b10d1feeddee25a7456a8fd6aec2c834342080e6c63e6b21ea6749016124a3",
+      "sourceRevision": "b160592cc2d42b0e0c00b6a937d1fa5a016bda53",
+      "setSize": 53,
+      "setDigest": "sha256:cac2162a455872ee83ad7e7077734d8ce74537da5a1f3921d6a5df4209caf012"
+    },
+    {
+      "globalId": "opensphere-console/20260909/0054",
+      "semanticKey": "console.osdst.persistent_model_budget",
+      "predecessorGlobalId": "opensphere-console/20260909/0053",
+      "path": "migrations/versions/0054_osdst_persistent_model_budget.sql",
+      "sha256": "7e62807ea7a27668b05580a7a0d3526eeaff0e52a9491cbbce93304f8bf278a0",
+      "sourceRevision": "2d375d6cc38bf30d7fdff36ede3ee9dc5c511117",
+      "setSize": 54,
+      "setDigest": "sha256:86b5698bf8682c6d0e21e0a1b24499ec5010bdd05feeaf093464f4ab9a8898cc"
+    },
+    {
+      "globalId": "opensphere-console/20260909/0055",
+      "semanticKey": "console.shell.typed_request_ledger",
+      "predecessorGlobalId": "opensphere-console/20260909/0054",
+      "path": "migrations/versions/0055_shell_request_kind.sql",
+      "sha256": "59c8173e32a2cb983753557bb326a43c5225edd3cffe43902c5108e7402553dc",
+      "sourceRevision": "6a7d0a53cf43c18a6fe0cd4489186731b831db28",
+      "setSize": 55,
+      "setDigest": "sha256:2af41641a7776a891f8de494a4a24f3e6e5f770b1fb07f5d0b3c9432e2c926b7"
+    },
+    {
+      "globalId": "opensphere-console/20260909/0056",
+      "semanticKey": "console.knowledge.durable_embedding_preparation",
+      "predecessorGlobalId": "opensphere-console/20260909/0055",
+      "path": "migrations/versions/0056_knowledge_embedding_work.sql",
+      "sha256": "7c86cc20bba8e919b1ac6cfb980aaf70b523eaffb96134e38048e0381ea6006a",
+      "sourceRevision": "b3580b0676b3b5581b31229a93ca11dbcd2e5081",
+      "setSize": 56,
+      "setDigest": "sha256:22be28a53353281bcb484c05d66fd770512b211ddbdae3164987bc1b8aeb9ab7"
+    },
+    {
+      "globalId": "opensphere-console/20260910/0057",
+      "semanticKey": "console.knowledge.release_operations",
+      "predecessorGlobalId": "opensphere-console/20260909/0056",
+      "path": "migrations/versions/0057_knowledge_release_operations.sql",
+      "sha256": "f370b274c69c3281dcce4e8a7975c4e0b87e43eda9b63f6a77906b4255b21237",
+      "sourceRevision": "69a728620f96bd8be005f3cb53182d7ab31b347e",
+      "setSize": 57,
+      "setDigest": "sha256:2618056ab8caf1e03088b8472ce88ca26772d484a6ce896bbf025bc16cca73a1"
+    },
+    {
+      "globalId": "opensphere-console/20260910/0058",
+      "semanticKey": "console.knowledge.shell_session_admission",
+      "predecessorGlobalId": "opensphere-console/20260910/0057",
+      "path": "migrations/versions/0058_knowledge_shell_session_admission.sql",
+      "sha256": "beae7bfa5f357725f945d93caf535be23dee089092fb96d87ab1e0942dde0f40",
+      "sourceRevision": "40ac9a2e0a9f6f8562f4f45d78a647e68b748318",
+      "setSize": 58,
+      "setDigest": "sha256:13f1e8a1f8618a2a41738a9f8885c5a1c9043480178ea471e7b858b97c974977"
+    },
+    {
+      "globalId": "opensphere-console/20260910/0059",
+      "semanticKey": "console.knowledge.owner_observation_authority",
+      "predecessorGlobalId": "opensphere-console/20260910/0058",
+      "path": "migrations/versions/0059_knowledge_owner_observation_authority.sql",
+      "sha256": "e6a7fc7aba414c712cd05c995828f5bf6af8d4830710e462e106ce4ec3752b57",
+      "sourceRevision": "5c13d602b335604832a2e4738038cc916622d2ce",
+      "setSize": 59,
+      "setDigest": "sha256:073e0f254eab5f7cd86ba764e717a8b3f82636b7da88ecd1d586322fb27dca34"
+    },
+    {
+      "globalId": "opensphere-console/20260910/0060",
+      "semanticKey": "console.knowledge.reconciliation_budget",
+      "predecessorGlobalId": "opensphere-console/20260910/0059",
+      "path": "migrations/versions/0060_knowledge_reconciliation_budget.sql",
+      "sha256": "6133c33094ba3171198645961123ab64cfcc24784f7fde2f31b7cb3990ca7928",
+      "sourceRevision": "c27c3ef53191d9f7c7f21e5d65b40200c6942886",
+      "setDigest": "sha256:937336bd12ab19ad5e8e565f784a10a33567aa98b03c9a995bbc212860ff745f",
+      "setSize": 60
+    },
+    {
+      "globalId": "opensphere-console/20260910/0061",
+      "semanticKey": "console.shell.data_catalog_admission",
+      "predecessorGlobalId": "opensphere-console/20260910/0060",
+      "path": "migrations/versions/0061_data_catalog_shell_admission.sql",
+      "sha256": "4e0068fa3b8ba2b62772d95b5e7b888cf5c54205ee29cb56f431d16bbbdd58fd",
+      "sourceRevision": "42f9b9d0bd727a826bc7110e1c26772110d9a062",
+      "setDigest": "sha256:75f8c780153bce819b95fbdb73712af45284843ffc7ad3d8785471bc7802c747",
+      "setSize": 61
+    },
+    {
+      "globalId": "opensphere-console/20260910/0062",
+      "semanticKey": "console.audit.shell_session_read",
+      "predecessorGlobalId": "opensphere-console/20260910/0061",
+      "path": "migrations/versions/0062_audit_shell_session_read.sql",
+      "sha256": "f6532b6945017186ea10eeaec1e1d737345ce6a92d527a4b950c000f1b3cfc1a",
+      "sourceRevision": "013f7c0a6bc1733331ea9337fd47f46d84f57bee",
+      "setSize": 62,
+      "setDigest": "sha256:962129afaca1311b3411746cdb95925e11a177a93fe9a78a24257a953ff8394c"
+    },
+    {
+      "globalId": "opensphere-console/20260910/0063",
+      "semanticKey": "console.agent.history_shell_read",
+      "predecessorGlobalId": "opensphere-console/20260910/0062",
+      "path": "migrations/versions/0063_agent_history_shell_read.sql",
+      "sha256": "13673d352882e6157ecf4506f16e8b28613e52adc07ac0614ceb49a96bad5ca2",
+      "sourceRevision": "13330ffec9cbf5083df3be673093174dc4650eef",
+      "setSize": 63,
+      "setDigest": "sha256:a51eb7b0c15aff08930548acf13a26036c5409caf5ce3bbabc8441b327085e89"
+    },
+    {
+      "globalId": "opensphere-console/20260910/0064",
+      "semanticKey": "console.backbone.shell_read",
+      "predecessorGlobalId": "opensphere-console/20260910/0063",
+      "path": "migrations/versions/0064_backbone_shell_read.sql",
+      "sha256": "dc8aae9455b2783f86e92e9255582d76698dcea97eb463d46ce9afd9d3592acd",
+      "sourceRevision": "bfc991deeb9ec3d86c8c2b33a90b89a1293b086d",
+      "setSize": 64,
+      "setDigest": "sha256:37f862707dab3f526574c8fb953100502c2f7e6253ac002c040835d7ff05e2c9"
+    },
+    {
+      "globalId": "opensphere-console/20260910/0065",
+      "semanticKey": "console.changes.shell_read",
+      "predecessorGlobalId": "opensphere-console/20260910/0064",
+      "path": "migrations/versions/0065_change_history_shell_read.sql",
+      "sha256": "fcd880276b323b8b1d0e3704a90aa67f1c98b73bce149515ff094743ddae4eee",
+      "sourceRevision": "aace30f8b9244744acd958670fe197df0b5681b3",
+      "setSize": 65,
+      "setDigest": "sha256:03b3cae1dcc747969c914b19a3c20d29b18163118a7f5500a871db63b377c5e8"
+    },
+    {
+      "globalId": "opensphere-console/20260910/0066",
+      "semanticKey": "console.setup.journal_read",
+      "predecessorGlobalId": "opensphere-console/20260910/0065",
+      "path": "migrations/versions/0066_setup_journal_shell_read.sql",
+      "sha256": "a367b61db8c8603b683cf7e648cc235854ae3820139755d85a52f2737433b91c",
+      "sourceRevision": "4a926b668f3b2aa9b87105209eb8888854aaf18f",
+      "setSize": 66,
+      "setDigest": "sha256:ab239cb2711f344e9e294d840df867ce2c1305173409f6e73f03a8d3bc3a1610"
+    }
+  ]
+}

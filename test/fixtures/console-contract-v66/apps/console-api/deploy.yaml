@@ -1,0 +1,649 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opensphere-console-api
+  namespace: opensphere-console
+  labels:
+    app.kubernetes.io/name: opensphere-console-api
+    app.kubernetes.io/part-of: opensphere-console
+    opensphere.io/component: C_API
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensphere-console-api
+  namespace: opensphere-console
+  labels:
+    app.kubernetes.io/name: opensphere-console-api
+    app.kubernetes.io/part-of: opensphere-console
+    opensphere.io/component: C_API
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opensphere-console-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opensphere-console-api
+        app.kubernetes.io/part-of: opensphere-console
+        opensphere.io/component: C_API
+    spec:
+      serviceAccountName: opensphere-console-api
+      automountServiceAccountToken: false
+      imagePullSecrets:
+        - name: opensphere-ghcr-pull
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: __OPENSPHERE_CONSOLE_API_IMAGE__
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: shell-cred-tls
+              containerPort: 8444
+            - name: console-api-tls
+              containerPort: 8445
+            - name: http
+              containerPort: 8080
+          env:
+            - { name: CONSOLE_KNOWLEDGE_RELEASE_CONTRACT, value: knowledge-release/v1 }
+            # The native-runtime installer owns this gate and the referenced
+            # Secrets. A pre-native bootstrap therefore starts C_API with the
+            # listener disabled; the installer restarts it after the complete
+            # trust set and credentials have been provisioned.
+            - name: OS_SHELL_CREDENTIAL_AUTHORITY_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: opensphere-shell-control-gates
+                  key: credential-authority-enabled
+                  optional: true
+            - name: OS_SHELL_DELEGATION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: opensphere-shell-control-runtime
+                  key: delegation-secret
+                  optional: true
+            - name: OS_SHELL_DELEGATION_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: opensphere-shell-control-runtime
+                  key: delegation-signing-key
+                  optional: true
+            - { name: OS_SHELL_CREDENTIAL_AUTHORITY_CERT_FILE, value: /var/run/opensphere-shell-credential-authority-tls/tls.crt }
+            - { name: OS_SHELL_CREDENTIAL_AUTHORITY_KEY_FILE, value: /var/run/opensphere-shell-credential-authority-tls/tls.key }
+            - { name: OS_SHELL_CONSOLE_API_CERT_FILE, value: /var/run/opensphere-shell-console-api-tls/tls.crt }
+            - { name: OS_SHELL_CONSOLE_API_KEY_FILE, value: /var/run/opensphere-shell-console-api-tls/tls.key }
+            # Approved 2026-09-03: only the six named registry Secrets below.
+            - name: CONSOLE_REGISTRY_AUTH_CONTRACT
+              value: registry-auth/v1
+            - name: OPENSPHERE_GITHUB_OAUTH_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: opensphere-registry-auth
+                  key: oauth-client-id
+                  optional: true
+            # This Secret is an input contract. This manifest never creates a
+            # database login or stores a password. The URL must identify a LOGIN
+            # role that inherits only the NOLOGIN console_api authority role.
+            - name: CONSOLE_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: opensphere-console-api-runtime
+                  key: database-url
+            - name: CONSOLE_SESSION_ENCRYPTION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: opensphere-console-api-runtime
+                  key: session-encryption-key
+            - name: CONSOLE_SUPABASE_SERVICE_ROLE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: opensphere-console-api-runtime
+                  key: supabase-service-role-key
+            - name: CONSOLE_GITEA_CONTROL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: opensphere-gitea-control-plane
+                  key: token
+                  optional: true
+            - name: CONSOLE_GITEA_REVIEW_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: opensphere-gitea-control-plane
+                  key: review-token
+                  optional: true
+            - name: CONSOLE_PUBLIC_ORIGIN
+              value: __OPENSPHERE_CONSOLE_URL__
+            - name: CONSOLE_REGISTRY_URL
+              value: http://opensphere-registry.opensphere-console.svc.cluster.local:8080
+            - name: CONSOLE_SUPABASE_AUTH_URL
+              value: http://opensphere-supabase-auth.opensphere-console-data.svc.cluster.local:9999
+            - name: CONSOLE_SUPABASE_REST_URL
+              value: http://opensphere-supabase-rest.opensphere-console-data.svc.cluster.local:3000
+            - name: CONSOLE_SUPABASE_STORAGE_URL
+              value: http://opensphere-supabase-storage.opensphere-console-data.svc.cluster.local:5000
+            - name: CONSOLE_GITEA_URL
+              value: http://opensphere-gitea.opensphere-console-change.svc.cluster.local:3000
+            - name: CONSOLE_BESZEL_URL
+              value: http://beszel-hub.opensphere-monitoring.svc.cluster.local:8090
+            - name: CONSOLE_BESZEL_READER_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: opensphere-baseline-monitoring-reader
+                  key: email
+            - name: CONSOLE_BESZEL_READER_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: opensphere-baseline-monitoring-reader
+                  key: password
+            - name: CONSOLE_GITEA_ORGANIZATION
+              value: opensphere
+            - name: CONSOLE_GITEA_REPOSITORY
+              value: platform-declarations
+            - name: CONSOLE_GITEA_DEFAULT_BRANCH
+              value: main
+            - name: CONSOLE_INSTALLATION_RELEASE_PATH
+              value: /var/run/opensphere/release/release.json
+            - name: CONSOLE_SETUP_JOURNAL_PATH
+              value: /var/run/opensphere/setup/journal.json
+          volumeMounts:
+            - name: setup-journal
+              mountPath: /var/run/opensphere/setup
+              readOnly: true
+            - name: recovery-evidence
+              mountPath: /var/run/opensphere/recovery
+              readOnly: true
+            - name: opensphere-shell-credential-authority-tls
+              mountPath: /var/run/opensphere-shell-credential-authority-tls
+              readOnly: true
+            - name: opensphere-shell-console-api-tls
+              mountPath: /var/run/opensphere-shell-console-api-tls
+              readOnly: true
+            - name: registry-kubernetes-identity
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+            - name: installation-release
+              mountPath: /var/run/opensphere/release
+              readOnly: true
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 2
+            timeoutSeconds: 3
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /livez, port: http }
+            initialDelaySeconds: 10
+            timeoutSeconds: 3
+            periodSeconds: 15
+            failureThreshold: 3
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+      volumes:
+        - name: setup-journal
+          configMap:
+            name: opensphere-setup-journal
+            optional: true
+            items:
+              - key: journal.json
+                path: journal.json
+        - name: recovery-evidence
+          configMap:
+            name: opensphere-platform-recovery-evidence
+            optional: true
+            items:
+              - key: recovery-evidence.json
+                path: recovery-evidence.json
+        - name: opensphere-shell-credential-authority-tls
+          secret:
+            secretName: opensphere-shell-credential-authority-tls
+            optional: true
+        - name: opensphere-shell-console-api-tls
+          secret:
+            secretName: opensphere-shell-console-api-tls
+            optional: true
+        # Short-lived projected identity; never a persisted service-account Secret.
+        - name: registry-kubernetes-identity
+          projected:
+            defaultMode: 292 # 0444; decimal avoids YAML 1.1/1.2 ambiguity
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: 600
+              - configMap:
+                  name: kube-root-ca.crt
+                  items:
+                    - key: ca.crt
+                      path: ca.crt
+        - name: installation-release
+          configMap:
+            name: opensphere-installation-lock
+            optional: true
+            items:
+              - key: release.json
+                path: release.json
+              - key: config.json
+                path: config.json
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensphere-console-api
+  namespace: opensphere-console
+  labels:
+    app.kubernetes.io/name: opensphere-console-api
+    app.kubernetes.io/part-of: opensphere-console
+    opensphere.io/component: C_API
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: opensphere-console-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opensphere-console-api
+  namespace: opensphere-console
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: opensphere-console-api
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: opensphere-console
+      ports:
+        - { protocol: TCP, port: 8080 }
+    - from:
+        - podSelector:
+            matchLabels:
+              app: opensphere-console-osaa-gateway
+      ports:
+        - { protocol: TCP, port: 8080 }
+    # Target Owners revalidate exchanged bearer/session authority at
+    # GET /api/identity/me. Keep this callback allowlist exact.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: opensphere-osdst
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opensphere-extension-controller
+        - podSelector:
+            matchLabels:
+              opensphere.io/extension-id: cluster-manager
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: opensphere-extension-controller
+              opensphere.io/extension-id: platform-support
+        - podSelector:
+            matchLabels:
+              app: opensphere-notification-dispatcher
+        - podSelector:
+            matchLabels:
+              app: opensphere-external-channel-executor
+        - podSelector:
+            matchLabels:
+              app: opensphere-shell-api
+        - podSelector:
+            matchLabels:
+              app: opensphere-shell-gateway
+      ports:
+        - { protocol: TCP, port: 8080 }
+  egress:
+    # Standard NetworkPolicy cannot restrict FQDNs. The broker pins provider
+    # HTTPS origins and rejects redirects; TCP/443 is the documented exception.
+    - ports:
+        - { protocol: TCP, port: 443 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: opensphere-console-data
+          podSelector:
+            matchLabels:
+              app: opensphere-supabase-postgres
+      ports:
+        - { protocol: TCP, port: 5432 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: opensphere-console-data
+          podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [opensphere-supabase-auth, opensphere-supabase-rest, opensphere-supabase-storage]
+      ports:
+        - { protocol: TCP, port: 9999 }
+        - { protocol: TCP, port: 3000 }
+        - { protocol: TCP, port: 5000 }
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opensphere-registry
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: opensphere-extension-controller
+        - podSelector:
+            matchLabels:
+              app: opensphere-console-osaa-gateway
+      ports:
+        - { protocol: TCP, port: 8080 }
+    - to:
+        - podSelector:
+            matchLabels:
+              app: opensphere-shell-api
+      ports:
+        - { protocol: TCP, port: 8080 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: opensphere-console-change
+          podSelector:
+            matchLabels:
+              app: opensphere-gitea
+      ports:
+        - { protocol: TCP, port: 3000 }
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: opensphere-monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: beszel-hub
+      ports:
+        - { protocol: TCP, port: 8090 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opensphere-console-api-kubernetes-egress
+  namespace: opensphere-console
+  labels:
+    app.kubernetes.io/managed-by: opensphere-extension-controller
+    app.kubernetes.io/part-of: opensphere-console
+    opensphere.io/contract: registry-kubernetes-egress-v1
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: opensphere-console-api
+  policyTypes: [Egress]
+  egress:
+    # Setup renders the initial exact addresses. C_EXT refreshes only this
+    # pre-owned policy after Docker Desktop rotates its API endpoint.
+    - __OPENSPHERE_REGISTRY_KUBERNETES_EGRESS__
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensphere-registry-credential-broker
+  namespace: opensphere-console-data
+rules:
+  - apiGroups: ['']
+    resources: [secrets]
+    resourceNames: [opensphere-ghcr-pull]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensphere-registry-credential-broker
+  namespace: opensphere-console-data
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensphere-registry-credential-broker
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-console-api
+    namespace: opensphere-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensphere-registry-credential-broker
+  namespace: opensphere-console-change
+rules:
+  - apiGroups: ['']
+    resources: [secrets]
+    resourceNames: [opensphere-ghcr-pull]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensphere-registry-credential-broker
+  namespace: opensphere-console-change
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensphere-registry-credential-broker
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-console-api
+    namespace: opensphere-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensphere-registry-credential-broker
+  namespace: opensphere-monitoring
+rules:
+  - apiGroups: ['']
+    resources: [secrets]
+    resourceNames: [opensphere-ghcr-pull]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensphere-registry-credential-broker
+  namespace: opensphere-monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensphere-registry-credential-broker
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-console-api
+    namespace: opensphere-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensphere-registry-credential-broker
+  namespace: opensphere-console
+rules:
+  - apiGroups: ['']
+    resources: [secrets]
+    resourceNames: [opensphere-ghcr-pull, opensphere-registry-auth]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensphere-registry-credential-broker
+  namespace: opensphere-console
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensphere-registry-credential-broker
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-console-api
+    namespace: opensphere-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensphere-registry-credential-broker
+  namespace: opensphere-system
+rules:
+  - apiGroups: ['']
+    resources: [secrets]
+    resourceNames: [opensphere-ghcr-pull]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensphere-registry-credential-broker
+  namespace: opensphere-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensphere-registry-credential-broker
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-console-api
+    namespace: opensphere-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensphere-registry-credential-broker
+  namespace: opensphere-shell-sessions
+rules:
+  - apiGroups: ['']
+    resources: [secrets]
+    resourceNames: [opensphere-ghcr-pull]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensphere-registry-credential-broker
+  namespace: opensphere-shell-sessions
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensphere-registry-credential-broker
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-console-api
+    namespace: opensphere-console
+---
+{
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "Role",
+  "metadata": {
+    "name": "opensphere-console-knowledge-delivery",
+    "namespace": "opensphere-console"
+  },
+  "rules": [
+    {
+      "apiGroups": [
+        ""
+      ],
+      "resources": [
+        "configmaps"
+      ],
+      "verbs": [
+        "get",
+        "create"
+      ]
+    },
+    {
+      "apiGroups": [
+        ""
+      ],
+      "resources": [
+        "configmaps"
+      ],
+      "resourceNames": [
+        "opensphere-installation-lock",
+        "opensphere-release-inventory",
+        "opensphere-installation-evidence"
+      ],
+      "verbs": [
+        "patch"
+      ]
+    },
+    {
+      "apiGroups": [
+        "apps"
+      ],
+      "resources": [
+        "deployments"
+      ],
+      "resourceNames": [
+        "opensphere-console-osaa-gateway"
+      ],
+      "verbs": [
+        "get",
+        "patch"
+      ]
+    },
+    {
+      "apiGroups": [
+        ""
+      ],
+      "resources": [
+        "pods"
+      ],
+      "verbs": [
+        "list"
+      ]
+    },
+    {
+      "apiGroups": [
+        "apps"
+      ],
+      "resources": [
+        "replicasets"
+      ],
+      "verbs": [
+        "list"
+      ]
+    }
+  ]
+}
+---
+{
+  "apiVersion": "rbac.authorization.k8s.io/v1",
+  "kind": "RoleBinding",
+  "metadata": {
+    "name": "opensphere-console-knowledge-delivery",
+    "namespace": "opensphere-console"
+  },
+  "roleRef": {
+    "apiGroup": "rbac.authorization.k8s.io",
+    "kind": "Role",
+    "name": "opensphere-console-knowledge-delivery"
+  },
+  "subjects": [
+    {
+      "kind": "ServiceAccount",
+      "name": "opensphere-console-api",
+      "namespace": "opensphere-console"
+    }
+  ]
+}
