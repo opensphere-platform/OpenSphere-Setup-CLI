@@ -24,8 +24,8 @@ async function archive(entries) {
   for (const [header, bytes] of entries) pack.entry(header, bytes);
   pack.finalize(); return done;
 }
-async function fixture({ mutateConfig = () => {}, entries, index = false, mutateIndex = () => {} } = {}) {
-  const bytes = bundle();
+async function fixture({ mutateConfig = () => {}, entries, index = false, mutateIndex = () => {}, content } = {}) {
+  const bytes = bundle(content);
   const raw = await archive(entries || [[{ name: 'knowledge/', type: 'directory' }, null], [{ name: 'knowledge/bundle.json', type: 'file' }, bytes]]);
   const layer = gzipSync(raw), objects = new Map();
   const put = b => { const digest = imageDigest(b); objects.set(digest, b); return { digest, size: b.length }; };
@@ -201,7 +201,9 @@ test('admitted independent pointer overrides the old source pointer and unsuppor
  await assert.rejects(renderKnowledgeManifest('sources: '+KNOWLEDGE_SLOT,{...options,admittedLock:corrupted}),/digest mismatch/);
 });
 test('runtime delivery checks actual immutable bytes and every live Gateway volume, not just Ready labels', async()=>{
- const f=await fixture(),projection=contract.packageProjection(f.lock,f.bytes);
+ const f=await fixture({content:'합성 지식 데이터. '.repeat(7000)}),projection=contract.packageProjection(f.lock,f.bytes);
+ for(const map of projection.configMaps) map.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration']=JSON.stringify(map);
+ assert.ok(Buffer.byteLength(JSON.stringify(projection.configMaps[1]))>200*1024,'exercise a full part with real apply metadata');
  const lock={knowledge:f.lock,components:{osaaGateway:{image:'ghcr.io/opensphere-platform/opensphere-console-osaa-gateway@sha256:'+'c'.repeat(64)}}};
  const spec={containers:[{name:'gateway',image:lock.components.osaaGateway.image,env:[{name:'OSAA_KNOWLEDGE_BUNDLE_DIR',value:'/var/run/opensphere-knowledge'}],volumeMounts:[{name:'platform-knowledge',mountPath:'/var/run/opensphere-knowledge',readOnly:true}]}],volumes:[{name:'platform-knowledge',projected:{defaultMode:292,sources:projection.sources}}]};
  const make=()=>({
@@ -222,7 +224,7 @@ test('runtime delivery checks actual immutable bytes and every live Gateway volu
  }});
  const evidence=check(make());assert.equal(evidence.state,'Delivered');assert.equal(evidence.documents,1);assert.equal(evidence.pods,2);
  assert.equal(evidence.activation,'NotObserved');assert.equal(evidence.semanticSearch,'NotObserved');
- for(const mutate of [s=>{s.maps[1].binaryData['part-0000']=Buffer.from('tampered').toString('base64');},s=>{s.maps[0].immutable=false;},s=>{s.pods[1].spec.volumes[0].projected.sources=[];},s=>{s.pods[0].spec.containers[0].volumeMounts[0].readOnly=false;},s=>{s.deployment.status.observedGeneration=2;},s=>{s.pods.pop();},s=>{s.pods[0].status.conditions=[];}]){
+ for(const mutate of [s=>{s.maps[1].metadata.annotations.excess='x'.repeat(512*1024);},s=>{s.maps[1].binaryData['part-0000']=Buffer.from('tampered').toString('base64');},s=>{s.maps[0].immutable=false;},s=>{s.pods[1].spec.volumes[0].projected.sources=[];},s=>{s.pods[0].spec.containers[0].volumeMounts[0].readOnly=false;},s=>{s.deployment.status.observedGeneration=2;},s=>{s.pods.pop();},s=>{s.pods[0].status.conditions=[];}]){
   const state=make();mutate(state);assert.throws(()=>check(state));
  }
  assert.equal(verifyKnowledgeDelivery({}, {query:()=>{throw Error('no unexpected reads');}}).state,'NotRecorded');

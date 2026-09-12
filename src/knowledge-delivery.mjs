@@ -18,7 +18,10 @@ export function verifyKnowledgeDelivery(lock,{query=kubectl}={}){
  if(!index||!Array.isArray(index.parts)||index.parts.length<1||index.parts.length>32)throw Error('Knowledge delivery part inventory is invalid');
  const maps=[metadata],files=new Map(Object.entries(metadata.data||{}).map(([name,data])=>[name,Buffer.from(data)]));
  for(let i=0;i<index.parts.length;i++){
-  const cm=read(['configmap',metadataName+'-'+i],200*1024);maps.push(cm);
+  // A 128 KiB binary part is base64 encoded and kubectl apply may keep a
+  // second encoded copy in its last-applied annotation. The payload itself
+  // remains bounded and hash-checked by the 128 KiB/4 MiB package contract.
+  const cm=read(['configmap',metadataName+'-'+i],512*1024);maps.push(cm);
   for(const [name,data] of Object.entries(cm.binaryData||{})){
    if(files.has(name)||typeof data!=='string'||!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data))throw Error('Knowledge delivery contains invalid binary data');
    files.set(name,Buffer.from(data,'base64'));
