@@ -215,7 +215,8 @@ test('runtime delivery checks actual immutable bytes and every live Gateway volu
    ownerReferences:[{controller:true,kind:'ReplicaSet',uid:'rs-1'}]},spec:structuredClone(spec),
    status:{phase:'Running',conditions:[{type:'Ready',status:'True'}]}}))
  });
- const check=state=>verifyKnowledgeDelivery(lock,{query:args=>{
+ const check=state=>verifyKnowledgeDelivery(lock,{query:(args,options)=>{
+  assert.equal(options.capture,true,'real kubectl must return JSON rather than inherit stdout');
   assert.deepEqual(args.slice(0,3),['-n','opensphere-console','get']);
   return JSON.stringify(args[3]==='configmap'?state.maps.find(cm=>cm.metadata.name===args[4]):args[3]==='deployment'?state.deployment:{items:args[3]==='replicasets'?state.replicaSets:state.pods});
  }});

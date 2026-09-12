@@ -268,6 +268,8 @@ function runtime(previous, events, {
       name: `release-${release[0].yaml}`
     }],
     readReleaseInventory: () => recordedInventory,
+    prepareForwardRepairInventory: async()=>({inventory:recordedInventory ?? [],manifests:[]}),
+    runForwardRepairBootstrap: ()=>{events.push('bootstrap-proof');return {completed:true};},
     recordReleaseInventory: (release) => events.push(`inventory:${release.sourceRevision}`),
     pruneReleaseResources: (from, to) => {
       events.push(`prune:${from[0]?.name ?? 'none'}->${to[0]?.name ?? 'none'}`);
@@ -354,6 +356,30 @@ test('forward repair does not begin when target provenance fails or the reviewed
     await assert.rejects(upgrade(previous,target,{runtime:operations,forwardRepairRecordDigest:installationRecordDigest(record)}),failure==='target'?/signature/:/fresh repair plan/);
     assert.ok(!events.some(e=>e.startsWith('install')||e.startsWith('record:')||e.startsWith('prune:')));
   }
+});
+
+test('missing inventory is reconstructed only for explicit repair and never adopts arbitrary live objects',async()=>{
+  const {previous,target,record,config}=repairFixture(),events=[];
+  const operations=runtime(previous,events),states=[];
+  operations.readInstallationRecord=()=>structuredClone(record);
+  operations.readInstallationConfig=()=>config;
+  operations.currentKubeContext=()=> 'docker-desktop';
+  const fixed=[{apiVersion:'v1',kind:'Service',namespace:'opensphere-console-data',name:'declared-backbone'}];
+  operations.prepareForwardRepairInventory=async release=>{
+    assert.equal(release.releaseDigest,target.releaseDigest);events.push('recover-inventory');return {inventory:fixed,manifests:[]};
+  };
+  operations.recordReleaseInventory=(_release,items)=>{
+    assert.ok(items.some(i=>i.name==='declared-backbone'));
+    assert.ok(!items.some(i=>i.name==='unrelated-live-object'));
+  };
+  operations.recordInstallationState=(release,_sc,_admin,_url,_env,_tls,phase,options)=>{
+    assert.equal(options.forwardRepair.inventoryReconstruction,'governed-source-manifests');
+    record.data['release.json']=JSON.stringify(release);record.metadata.resourceVersion+='1';states.push(phase);
+  };
+  operations.verifyInstallation=async()=>({verifiedAt:'2026-09-12T00:00:00Z'});
+  await upgrade(previous,target,{runtime:operations,forwardRepairRecordDigest:installationRecordDigest(record)});
+  assert.equal(states.at(-1),'Ready');assert.ok(events.includes('recover-inventory'));
+  assert.ok(!events.some(e=>e.startsWith('prune:')));
 });
 
 test('Knowledge-only upgrade and failure recovery retain all images and persist the exact data pointer', async()=>{

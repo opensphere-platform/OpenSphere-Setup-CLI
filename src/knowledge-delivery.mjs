@@ -8,7 +8,7 @@ export function verifyKnowledgeDelivery(lock,{query=kubectl}={}){
  if(!lock.knowledge)return {state:'NotRecorded',activation:'NotObserved',semanticSearch:'NotObserved'};
  contract.validateLock(lock.knowledge);
  const read=(args,max=1024*1024)=>{
-  const raw=query(['-n',NS,'get',...args,'-o','json']);
+  const raw=query(['-n',NS,'get',...args,'-o','json'],{capture:true});
   if(typeof raw!=='string'||Buffer.byteLength(raw)>max)throw Error('Knowledge delivery read exceeds its budget');
   return JSON.parse(raw);
  };

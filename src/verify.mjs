@@ -825,6 +825,22 @@ export function recordInstallationEvidence(evidence, { apply = kubectl } = {}) {
   return manifest;
 }
 
+// Dependency preflight has no installation-state write and makes no target
+// rollout claim. Reuse the same real service checks before an expiring login.
+export async function verifyUpgradeDependencies(lock,{storageClass,installationState=null,recordedEvidence=null}={}) {
+  validateLock(lock);
+  const secretCount=verifySecrets(lock);
+  const registryPull=verifyRegistryPullPath(lock);
+  const pvcCount=verifyPersistentStorage(storageClass);
+  const serviceEndpoints=await eventuallyReady(async()=>verifyServiceEndpoints(lock));
+  const postgresql=verifySupabaseDatabase(lock);
+  const supabase=await verifySupabaseServices();
+  const gitea=await verifyGitea();
+  const beszel=await verifyBeszel(lock,installationState,recordedEvidence);
+  const consoleApi=await verifyConsoleApi();
+  return {scope:'dependency-preflight',secretCount,registryPull,pvcCount,serviceEndpoints,postgresql,supabase,gitea,beszel,consoleApi};
+}
+
 export async function verifyInstallation(lock, {
   requireZeroRestarts = false,
   consoleUrl,

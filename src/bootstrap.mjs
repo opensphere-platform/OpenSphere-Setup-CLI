@@ -1612,16 +1612,58 @@ export function releaseResourceInventory(release, kubectlFn = kubectl) {
     inventoryKey(left).localeCompare(inventoryKey(right)));
 }
 
-function readReleaseInventory() {
-  try {
-    const configMap = JSON.parse(kubectl([
-      '-n', 'opensphere-console', 'get', 'configmap', RELEASE_INVENTORY_CONFIGMAP, '-o', 'json'
-    ], { capture: true }));
-    const parsed = JSON.parse(configMap.data?.['resources.json'] ?? 'null');
-    return Array.isArray(parsed) ? parsed : null;
-  } catch {
-    return null;
+export function readReleaseInventory() {
+  const raw=kubectl(['-n','opensphere-console','get','configmap',RELEASE_INVENTORY_CONFIGMAP,
+    '--ignore-not-found','-o','json'],{capture:true});
+  if (!raw.trim()) return null;
+  const configMap=JSON.parse(raw),parsed=JSON.parse(configMap.data?.['resources.json'] ?? 'null');
+  if (!Array.isArray(parsed) || parsed.length===0) throw Error('Existing release inventory is malformed');
+  return parsed;
+}
+
+// Reconstruct only the fixed Setup-owned resources from governed source
+// manifests. Never adopt every object in a namespace or apply these manifests.
+export async function prepareForwardRepairInventory(lock,storageClass,consoleUrl,authEnvironment,options={}) {
+  const manifests=await Promise.all([
+    ...foundationManifestSpecs(lock),...baseManifestSpecs(lock),...ACTIVATED_MODULE_MANIFESTS,
+  ].map(async spec=>{
+    const revisions=new Set([...manifestSpecComponents(spec)].map(owner=>
+      (lock.components?.[owner] ?? lock.auxiliaryArtifacts?.[owner])?.sourceRevision));
+    if (revisions.has(undefined)||revisions.size>1) throw Error(`Cannot reconstruct a mixed-source inventory: ${spec.path}`);
+    const sourceRevision=revisions.size===1?[...revisions][0]:lock.sourceRevision;
+    return {path:spec.path,yaml:await fetchManifest(lock,spec,storageClass,consoleUrl,authEnvironment,{...options,sourceRevision})};
+  }));
+  const inventory=releaseResourceInventory(manifests);
+  if (!inventory.length) throw Error('Reconstructed release inventory is empty');
+  return {inventory,manifests};
+}
+
+export function runForwardRepairBootstrap(lock,prepared,{query=kubectl}={}) {
+  const args=['-n','opensphere-monitoring'];
+  let raw=query([...args,'get','job','beszel-bootstrap-v0187','--ignore-not-found','-o','json'],{capture:true});
+  if(raw.trim()) {
+    const existing=JSON.parse(raw);
+    if(existing.spec?.template?.spec?.containers?.find(c=>c.name==='configure')?.image!==lock.components.beszelBootstrap.image
+      || (existing.status?.failed ?? 0)>0) throw Error('Existing Beszel bootstrap Job is failed or differs from the target; refusing to replace it');
   }
+  if (!raw.trim()) {
+    const source=prepared.manifests.find(m=>m.path===BESZEL_MANIFEST.path);
+    const docs=manifestDocuments(source?.yaml ?? '').filter(doc=>/^kind: Job$/mu.test(doc)
+      && /^  name: beszel-bootstrap-v0187$/mu.test(doc));
+    if (docs.length!==1 || !docs[0].includes(lock.components.beszelBootstrap.image)) {
+      throw Error('Missing governed Beszel bootstrap Job for forward repair');
+    }
+    // Existing namespace, service account and Secret references are retained.
+    // Only this absent, idempotent official bootstrap Job is created.
+    query(['create','-f','-'],{capture:true,input:docs[0]+'\n'});
+    console.log('[복구] 만료된 Beszel 초기 구성 증거를 공식 bootstrap Job으로 다시 검증');
+  }
+  query([...args,'wait','--for=condition=complete','job/beszel-bootstrap-v0187','--timeout=300s'],{capture:true});
+  raw=query([...args,'get','job','beszel-bootstrap-v0187','-o','json'],{capture:true});
+  const job=JSON.parse(raw);
+  if (job.spec.template.spec.containers.find(c=>c.name==='configure')?.image!==lock.components.beszelBootstrap.image
+    || (job.status.succeeded ?? 0)<1 || (job.status.failed ?? 0)>0) throw Error('Beszel bootstrap proof does not match the target');
+  return {jobUid:job.metadata.uid,completed:true,image:lock.components.beszelBootstrap.image};
 }
 
 function recordReleaseInventory(lock, inventory) {
@@ -2688,6 +2730,8 @@ export async function upgrade(
     verifyInstallation,
     recordInstallationState,
     readReleaseInventory,
+    prepareForwardRepairInventory,
+    runForwardRepairBootstrap,
     releaseResourceInventory,
     pruneReleaseResources,
     recordReleaseInventory,
@@ -2816,10 +2860,20 @@ export async function upgrade(
         )
       ]);
     const recordedInventory = operations.readReleaseInventory();
-    if (componentTransition && !recordedInventory) {
+    if (componentTransition && !recordedInventory && !repair) {
       throw new Error('Component release requires the existing complete release inventory');
     }
-    const previousInventory = recordedInventory
+    const repairResources = repair
+      ? await operations.prepareForwardRepairInventory(targetLock,config.storageClass,effectiveConsoleUrl,
+        config.authEnvironment,{sourceArtifactCredential,registryCredentials})
+      : null;
+    const recoveredInventory = !recordedInventory ? repairResources : null;
+    if (recoveredInventory) {
+      repair.inventoryReconstruction='governed-source-manifests';
+      repair.reconstructedResourceCount=recoveredInventory.inventory.length;
+      console.log(`[복구 준비] 공식 설치 선언에서 관리 자원 ${repair.reconstructedResourceCount}개 재구성; 자원 적용·삭제 없음`);
+    }
+    const previousInventory = recordedInventory ?? recoveredInventory?.inventory
       ?? operations.releaseResourceInventory(rollback.all);
     const previousComponentInventory = componentTransition && rollback.all.length > 0
       ? operations.releaseResourceInventory(rollback.all)
@@ -2849,6 +2903,7 @@ export async function upgrade(
         operations.recordInstallationState(targetLock,config.storageClass,initialAdmin,effectiveConsoleUrl,
           config.authEnvironment,config.shellTlsSecret,'Installing',{recordPrecondition:repair,forwardRepair:repair});
         forwardRepairStarted = true;
+        repair.bootstrap=operations.runForwardRepairBootstrap(targetLock,repairResources);
       }
       if (componentTransition) {
         operations.installPreparedComponentRelease(

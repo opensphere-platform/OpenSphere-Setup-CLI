@@ -13,6 +13,7 @@ import {
   preflightReleaseArtifacts,
   readInstallationLock,
   readInstallationRecord,
+  readReleaseInventory,
   uninstallManagedInstallation,
   upgrade
 } from './bootstrap.mjs';
@@ -488,6 +489,18 @@ async function main() {
   if (command === 'upgrade') {
     validateChannel(channel);
     const sourceArtifactCredential = takeSourceArtifactCredential();
+    if (forwardRepairRecordDigest !== undefined || repairPlan) {
+      // Check local state before requesting another expiring user login.
+      const preview=await readLock(lockPath),record=readInstallationRecord();
+      assertForwardRepair({previous:JSON.parse(record.data['release.json']),target:preview,record,
+        expectedRecordDigest:forwardRepairRecordDigest ?? installationRecordDigest(record),
+        context:process.env.OPENSPHERE_KUBE_CONTEXT || kubectl(['config','current-context'],{capture:true})});
+      const inventory=readReleaseInventory();
+      console.log(inventory ? `[사전검사] 관리 자원 목록 ${inventory.length}개 확인` : '[사전검사] 관리 목록 부재: 공식 설치 선언으로 재구성 예정; 임의 자원 편입 없음');
+      for(const [kind,name] of [['serviceaccount','beszel-bootstrap'],['secret','beszel-runtime'],['secret','opensphere-ghcr-pull']]) {
+        kubectl(['-n','opensphere-monitoring','get',kind,name,'-o','jsonpath={.metadata.uid}'],{capture:true});
+      }
+    }
     const registryCredentials = await registryCredentialsOption();
     assertKubectl();
     const targetPlatforms = readNodePlatforms();
