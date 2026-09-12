@@ -9,9 +9,14 @@ const stable = (await readFile(new URL('../channels/stable', import.meta.url), '
 const workflow = await readFile(new URL('../.github/workflows/publish-platforms.yml', import.meta.url), 'utf8');
 const documentation = await readFile(new URL('../docs/PLATFORM-INSTALL.md', import.meta.url), 'utf8');
 
-test('current Setup package is the declared edge channel target', () => {
+test('published edge channel may lag the source candidate but cannot lead it', () => {
   assert.match(pkg.version, /^[0-9]+[.][0-9]+[.][0-9]+-edge[.][0-9]+$/);
-  assert.equal(edge, `setup-v${pkg.version}`);
+  const pattern = /^setup-v([0-9]+)[.]([0-9]+)[.]([0-9]+)-edge[.]([0-9]+)$/;
+  assert.match(edge, pattern);
+  const published = edge.match(pattern).slice(1).map(Number);
+  const candidateVersion = `setup-v${pkg.version}`.match(pattern).slice(1).map(Number);
+  const firstDifference = published.map((value, index) => value - candidateVersion[index]).find(value => value !== 0);
+  assert.ok(firstDifference === undefined || firstDifference < 0, 'Unpublished candidate must not move the public channel forward');
   assert.equal(candidate, 'HOLD');
   assert.equal(stable, 'HOLD');
 });
