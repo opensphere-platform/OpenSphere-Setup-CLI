@@ -14,6 +14,7 @@ function fixture(){
    assert.deepEqual(options.recordPrecondition,record.metadata);
    phases.push(phase);record.metadata.resourceVersion=String(+record.metadata.resourceVersion+1);
    record.data['state.json']=JSON.stringify({...state,phase});
+   return {state:JSON.parse(record.data['state.json']),config:JSON.parse(record.data['config.json'])};
   },
   verifyInstallation:async supplied=>{assert.equal(supplied.releaseDigest,lock.releaseDigest);assert.equal(phases.at(-1),'Installing');return {releaseDigest:lock.releaseDigest,verifiedAt:'2026-09-12T14:00:00Z'};}};
  return {record,phases,runtime};
@@ -42,4 +43,12 @@ test('another installation writer cannot be overwritten after verification',asyn
  const f=fixture();f.runtime.verifyInstallation=async()=>{f.record.metadata.uid='replacement';return {releaseDigest:lock.releaseDigest,verifiedAt:'2026-09-12T14:00:00Z'};};
  await assert.rejects(completeInstallationVerification(lock,{runtime:f.runtime}),/ownership changed/);
  assert.deepEqual(f.phases,['Installing']);
+});
+test('a concurrent same-UID configuration update cannot be adopted and overwritten',async()=>{
+ const f=fixture();f.runtime.verifyInstallation=async()=>{
+  f.record.metadata.resourceVersion='99';f.record.data['config.json']=JSON.stringify({changedByAnotherWriter:true});
+  return {releaseDigest:lock.releaseDigest,verifiedAt:'2026-09-12T14:00:00Z'};
+ };
+ await assert.rejects(completeInstallationVerification(lock,{runtime:f.runtime}),/changed during verification/);
+ assert.deepEqual(f.phases,['Installing']);assert.equal(JSON.parse(f.record.data['config.json']).changedByAnotherWriter,true);
 });

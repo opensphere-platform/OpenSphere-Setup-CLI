@@ -2021,13 +2021,19 @@ export async function completeInstallationVerification(lock, {consoleUrl, requir
   if (!ops.readReleaseInventory()?.length) throw Error('Verification completion requires the recorded release inventory');
   if (consoleUrl && normalizeConsoleUrl(consoleUrl)!==normalizeConsoleUrl(config.consoleUrl)) throw Error('Verification completion cannot change the Console URL');
   const repair=original.data['repair.json']?JSON.parse(original.data['repair.json']):undefined;
+  let expectedRecordVersion=original.metadata.resourceVersion;
   const write=(phase,extra={})=>{
     const current=ops.readInstallationRecord();
     if(current.metadata.uid!==original.metadata.uid||JSON.parse(current.data['release.json']).releaseDigest!==lock.releaseDigest) throw Error('Installation ownership changed during verification completion');
-    if(phase==='Installing'&&current.metadata.resourceVersion!==original.metadata.resourceVersion) throw Error('Installation changed before verification completion');
-    return ops.recordInstallationState(lock,config.storageClass,config.initialAdmin,config.consoleUrl,
+    if(current.metadata.resourceVersion!==expectedRecordVersion) throw Error('Installation changed during verification completion');
+    const written=ops.recordInstallationState(lock,config.storageClass,config.initialAdmin,config.consoleUrl,
       config.authEnvironment,config.shellTlsSecret,phase,{...extra,...(repair?{forwardRepair:repair}:{}),
         recordPrecondition:{uid:current.metadata.uid,resourceVersion:current.metadata.resourceVersion}});
+    const after=ops.readInstallationRecord();
+    if(after.metadata.uid!==original.metadata.uid||JSON.parse(after.data['release.json']).releaseDigest!==lock.releaseDigest
+      ||after.data['state.json']!==JSON.stringify(written.state)||after.data['config.json']!==JSON.stringify(written.config)) throw Error('Installation changed during verification state write');
+    expectedRecordVersion=after.metadata.resourceVersion;
+    return written;
   };
   write('Installing');
   try {
