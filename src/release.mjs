@@ -900,8 +900,11 @@ async function verifyLocalEdgeLock(lock, {
     return { name, ...observed };
   }));
   const releaseScope = validated.releaseScope ?? RELEASE_SCOPE_INTEGRATED;
+  const changedArtifacts = new Set([
+    ...(validated.changedComponents ?? []), ...(validated.changedAuxiliaryArtifacts ?? [])
+  ]);
   const comparable = releaseScope === RELEASE_SCOPE_COMPONENT
-    ? metadata.filter(({ name }) => validated.changedComponents.includes(name))
+    ? metadata.filter(({ name }) => changedArtifacts.has(name))
     : metadata;
   if (new Set(comparable.map(({ releaseTag }) => releaseTag)).size !== 1) {
     throw new Error(

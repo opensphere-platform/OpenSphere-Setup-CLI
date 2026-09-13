@@ -930,6 +930,30 @@ test('localhost edge resolves one target platform through immutable local tags w
   assert.doesNotThrow(() => validateLock(resolved));
 });
 
+test('auxiliary-only edge updates verify the entire changed Shell bundle and reject mixed dates', async () => {
+  for (const changedComponents of [[], ['osdst']]) {
+    const {base,target}=validComponentTransition(changedComponents);
+    target.changedAuxiliaryArtifacts=['cliArtifacts','osShellControl','osShellRuntime'];
+    for(const name of target.changedAuxiliaryArtifacts){
+      const item=target.auxiliaryArtifacts[name];item.sourceRevision=target.sourceRevision;
+      item.image=`ghcr.io/opensphere-platform/${item.repository}@sha256:${'b'.repeat(64)}`;
+    }
+    target.releaseDigest=calculateReleaseDigest(target.channel,target.components,target.trust,undefined,target);
+    validateReleaseTransition(base,target);
+    const changed=new Set([...target.changedComponents,...target.changedAuxiliaryArtifacts]);
+    let mismatched=false;const inspected=[];
+    const options={requiredPlatforms:['linux/amd64'],inspectImageFn:async(repository,image)=>{
+      const [name,item]=Object.entries({...target.components,...target.auxiliaryArtifacts}).find(([,v])=>v.repository===repository);
+      inspected.push(name);
+      return inspectedArtifact(repository,image,{revision:item.sourceRevision,
+        releaseTag:mismatched&&name==='osShellRuntime'?'202609140748':changed.has(name)?'202609140747':RELEASE_TAG});
+    }};
+    assert.match((await verifyReleaseLock(target,options)).localVerifiedAt,/^\d{4}-/);
+    assert.equal(inspected.length,Object.keys(target.components).length+Object.keys(target.auxiliaryArtifacts).length);
+    mismatched=true;await assert.rejects(verifyReleaseLock(target,options),/Changed local edge component release tags differ/);
+  }
+});
+
 test('new image resolution refuses a missing, spoofed or upstream-only official identity', async () => {
   for (const overrides of [
     {'org.opencontainers.image.version':undefined},
