@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { validateLock, validateReleaseTransition, calculateReleaseDigest } from '../src/release.mjs';
 import { componentReleaseWorkloadComponents, componentReleaseManifestSpecs, componentReleaseWorkloadManifests,
-  OS_SHELL_MANIFEST, renderManifest, COMPONENT_ROLLOUTS } from '../src/bootstrap.mjs';
+  OS_SHELL_MANIFEST, renderManifest, COMPONENT_ROLLOUTS, componentMigrationSourceRevision } from '../src/bootstrap.mjs';
 import { verifyShellRuntimeReferences } from '../src/verify.mjs';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/knowledge-release-v1.json', import.meta.url)));
@@ -42,6 +42,22 @@ test('partial, unlisted and wrong-source Shell artifacts cannot be admitted', ()
   const {base,target}=transition(); target.auxiliaryArtifacts.osShellRuntime.sourceRevision='c'.repeat(40);
   target.releaseDigest=calculateReleaseDigest(target.channel,target.components,target.trust,undefined,target);
   assert.throws(()=>validateReleaseTransition(base,target),/source revision/);
+});
+
+test('schema-consuming Gateway, OSDST and Shell upgrades require their exact SQL lineage before rollout', () => {
+  const {target}=transition();
+  const changed=componentReleaseWorkloadComponents(target);
+  assert.equal(componentMigrationSourceRevision(target,changed),target.sourceRevision);
+  assert.equal(componentMigrationSourceRevision(target,['osdst']),target.sourceRevision);
+  assert.equal(componentMigrationSourceRevision(target,['osShellControl']),target.sourceRevision);
+  target.components.osaaGateway.sourceRevision=target.sourceRevision;
+  assert.equal(componentMigrationSourceRevision(target,['osaaGateway']),target.sourceRevision);
+  assert.equal(componentMigrationSourceRevision(target,['console','cliArtifacts']),null);
+  assert.equal(componentMigrationSourceRevision(target,changed,false),null,'rollback never applies target SQL');
+  target.auxiliaryArtifacts.osShellControl.sourceRevision='c'.repeat(40);
+  assert.throws(()=>componentMigrationSourceRevision(target,changed),/one exact/);
+  delete target.components.osdst.sourceRevision;
+  assert.throws(()=>componentMigrationSourceRevision(target,['osdst']),/one exact/);
 });
 
 test('source-rendered Shell keeps the runtime, CLI digest and exact template evidence together', () => {

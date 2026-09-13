@@ -297,7 +297,10 @@ export const LEGACY_BASE_MANIFESTS = Object.freeze([
 
 export const SUPABASE_MIGRATION_MANIFEST = 'migrations/manifest.json';
 export const LEGACY_SUPABASE_MIGRATION_MANIFEST = 'backend/supabase/migrations/manifest.json';
-const MIGRATION_OWNER_COMPONENTS = Object.freeze(['consoleApi', 'extensionController']);
+// Every schema-consuming runtime must bring its immutable migration lineage.
+// A Gateway/OSDST/Shell-only upgrade must not skip required SQL simply because
+// the Console API image is unchanged.
+const MIGRATION_OWNER_COMPONENTS = Object.freeze(['consoleApi', 'extensionController', 'osaaGateway', 'osdst', 'osShellControl']);
 
 function sha256Text(value) {
   return createHash('sha256').update(String(value).replace(/\r\n?/gu, '\n'), 'utf8').digest('hex');
@@ -2294,6 +2297,18 @@ async function prepareRelease(
   return { foundation, base, all: [...foundation.release, ...base] };
 }
 
+export function componentMigrationSourceRevision(lock, changedComponents, includeMigrations = true) {
+  const consumers = includeMigrations ? changedComponents.filter(component => MIGRATION_OWNER_COMPONENTS.includes(component)) : [];
+  const revisions = new Set(consumers.map(component =>
+    (lock.components?.[component] || lock.auxiliaryArtifacts?.[component])?.sourceRevision));
+  if (revisions.has(undefined) || revisions.has(null) || revisions.size > 1) {
+    throw new Error('Component-scoped migrations require one exact Console source revision');
+  }
+  const revision = revisions.size === 1 ? [...revisions][0] : null;
+  if (revision && !/^[a-f0-9]{40}$/u.test(revision)) throw new Error('Component-scoped migrations lack an immutable source revision');
+  return revision;
+}
+
 export async function prepareComponentRelease(
   lock,
   root,
@@ -2308,17 +2323,7 @@ export async function prepareComponentRelease(
   } = {}
 ) {
   const specs = componentReleaseManifestSpecs(lock, changedComponents);
-  const migrationOwners = includeMigrations
-    ? changedComponents.filter((component) => MIGRATION_OWNER_COMPONENTS.includes(component))
-    : [];
-  const migrationSourceRevisions = new Set(migrationOwners.map((component) => lock.components?.[component]?.sourceRevision));
-  if (migrationSourceRevisions.has(undefined) || migrationSourceRevisions.has(null) || migrationSourceRevisions.size > 1) {
-    throw new Error('Component-scoped migrations require one exact Console source revision');
-  }
-  const migrationSourceRevision = migrationSourceRevisions.size === 1 ? [...migrationSourceRevisions][0] : null;
-  if (migrationSourceRevision && !/^[a-f0-9]{40}$/u.test(migrationSourceRevision)) {
-    throw new Error('Component-scoped migrations lack an immutable source revision');
-  }
+  const migrationSourceRevision = componentMigrationSourceRevision(lock, changedComponents, includeMigrations);
   const [foundationRelease, base] = await Promise.all([
     Promise.all(specs.foundation.map(async (spec) => ({
       path: spec.path,
