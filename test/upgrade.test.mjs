@@ -215,6 +215,7 @@ function runtime(previous, events, {
     ensureManagedNamespaces: () => events.push('namespaces'),
     ensureRegistryPullSecrets: () => events.push('registry'),
     readInstallationLock: () => previous,
+    readBeszelBootstrapHistory: () => null,
     readInstallationConfig: () => ({
       architecture: 'supabase-data-identity+gitea-change-authority',
       storageClass: 'hostpath',
@@ -300,6 +301,27 @@ function repairFixture() {
       'state.json':JSON.stringify({phase:'Failed'})}};
   return {previous,target,record,config};
 }
+
+test('normal upgrade captures bootstrap history before Installing and retains it for failed-target rollback', async()=>{
+  for(const failTarget of [false,true]) {
+    const previous=lock('a'.repeat(40),'a'),target=lock('b'.repeat(40),'b');
+    const events=[],operations=runtime(previous,events,{failTarget});
+    const history=Object.freeze({scope:'test-bootstrap-history'});
+    let captured=false,verified=0;
+    operations.readBeszelBootstrapHistory=release=>{
+      assert.equal(release,previous);assert.equal(events.some(e=>e.startsWith('record:')),false);
+      captured=true;return history;
+    };
+    const record=operations.recordInstallationState,verify=operations.verifyInstallation;
+    operations.recordInstallationState=(...args)=>{assert.equal(captured,true);return record(...args);};
+    operations.verifyInstallation=async(release,options)=>{
+      assert.equal(options.bootstrapHistory,history);verified++;return verify(release,options);
+    };
+    if(failTarget)await assert.rejects(upgrade(previous,target,{runtime:operations}),/previous release was restored/);
+    else await upgrade(previous,target,{runtime:operations});
+    assert.equal(verified,failTarget?2:1);
+  }
+});
 
 test('forward repair requires the reviewed record and rejects healthy, remote and replaced installations',()=>{
   const {previous,target,record}=repairFixture();

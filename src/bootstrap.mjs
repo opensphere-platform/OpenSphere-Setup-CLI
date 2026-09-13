@@ -22,7 +22,7 @@ import {
   validateReleaseTransition,
   verifyReleaseLock
 } from './release.mjs';
-import { verifyInstallation } from './verify.mjs';
+import { verifyInstallation, readBeszelBootstrapHistory } from './verify.mjs';
 import {
   BASELINE_OBSERVABILITY_REQUIREMENT,
   INSTALLATION_PHASES,
@@ -2793,6 +2793,7 @@ export async function upgrade(
     waitForCoreRollouts,
     waitForComponentRollouts,
     verifyInstallation,
+    readBeszelBootstrapHistory,
     recordInstallationState,
     readReleaseInventory,
     prepareForwardRepairInventory,
@@ -2950,6 +2951,10 @@ export async function upgrade(
     const targetInventory = componentTransition
       ? replaceComponentInventory(previousInventory, previousComponentInventory, targetComponentInventory)
       : operations.releaseResourceInventory(target.all);
+    // Capture before Installing clears the previous Ready verification anchor.
+    // Only the fixed Beszel bootstrap Job with unchanged images can reuse it;
+    // all live services, credentials, databases and workloads are checked anew.
+    const bootstrapHistory = repair ? null : operations.readBeszelBootstrapHistory(previousLock);
     let agentIdentityMigrationCommitted = false;
     let forwardRepairStarted = false;
     const repairStateOptions = (extra = {}) => {
@@ -3008,6 +3013,7 @@ export async function upgrade(
       const evidence = await operations.verifyInstallation(targetLock, {
         consoleUrl: effectiveConsoleUrl,
         requireZeroRestarts: false,
+        bootstrapHistory,
         componentSelection: componentTransition ? changedWorkloadComponents : null
       });
       let retainedKnowledge = [];
@@ -3112,6 +3118,7 @@ export async function upgrade(
         const rollbackEvidence = await operations.verifyInstallation(previousLock, {
           consoleUrl: effectiveConsoleUrl,
           requireZeroRestarts: false,
+          bootstrapHistory,
           mode: 'rollback',
           componentSelection: componentTransition && rollbackChangedComponents.length > 0
             ? rollbackChangedComponents

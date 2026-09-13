@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {
   hasDurableBeszelBootstrapEvidence,
+  captureBeszelBootstrapHistory,
+  hasBeszelBootstrapHistory,
+  isBeszelBootstrapWorkload,
   isRetryableInstallationReadinessError
 } from '../src/verify.mjs';
 
@@ -19,6 +22,38 @@ test('only transient endpoint and pod readiness failures are retried', () => {
   assert.equal(isRetryableInstallationReadinessError(
     new Error('Workload does not reference the governed registry pull Secret: opensphere-console/opensphere-console')
   ), false);
+});
+
+test('transaction history survives a release transition only for identical Beszel images and installation UID', () => {
+  const {lock,state,evidence}=JSON.parse(readFileSync(new URL('./fixtures/knowledge-installation-v1.json',import.meta.url)));
+  const history=captureBeszelBootstrapHistory(lock,state,evidence,'same-installation');
+  assert.ok(history);
+  const target=structuredClone(lock);target.releaseDigest='sha256:'+'f'.repeat(64);
+  assert.equal(hasBeszelBootstrapHistory(history,target,'same-installation'),true);
+  assert.equal(hasBeszelBootstrapHistory(history,lock,'same-installation'),true); // rollback
+  assert.equal(hasBeszelBootstrapHistory(history,target,'replacement-installation'),false);
+  for(const key of ['beszelHub','beszelAgent','beszelBootstrap']) {
+    const changed=structuredClone(target);changed.components[key].image+='different';
+    assert.equal(hasBeszelBootstrapHistory(history,changed,'same-installation'),false);
+  }
+  for(const fake of [null,{},JSON.parse(JSON.stringify(history))])
+    assert.equal(hasBeszelBootstrapHistory(fake,target,'same-installation'),false);
+  for(const phase of ['Installing','Failed',undefined])
+    assert.equal(captureBeszelBootstrapHistory(lock,{...state,phase},evidence,'same-installation'),null);
+  for(const mutate of [e=>{e.releaseDigest='sha256:'+'f'.repeat(64);},e=>{e.historicalBootstrap.images.beszelHub+='different';},e=>{e.schema='unknown/v1';}]) {
+    const invalid=structuredClone(evidence);mutate(invalid);
+    assert.equal(captureBeszelBootstrapHistory(lock,state,invalid,'same-installation'),null);
+  }
+  assert.equal(captureBeszelBootstrapHistory(lock,{...state,verification:{}},evidence,'same-installation'),null);
+});
+
+test('historical proof never excuses another ephemeral workload, namespace, kind or container', () => {
+  const spec={component:'beszelBootstrap',namespace:'opensphere-monitoring',kind:'job',name:'beszel-bootstrap-v0187',container:'configure',ephemeral:true};
+  assert.equal(isBeszelBootstrapWorkload(spec),true);
+  for(const key of Object.keys(spec)) {
+    assert.equal(isBeszelBootstrapWorkload({...spec,[key]:'other'}),false);
+    const missing={...spec};delete missing[key];assert.equal(isBeszelBootstrapWorkload(missing),false);
+  }
 });
 
 test('Knowledge component receipt supplies only exact historical Beszel bootstrap evidence to normal Setup',()=>{

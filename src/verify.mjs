@@ -168,6 +168,45 @@ export function hasDurableBeszelBootstrapEvidence(evidence, lock, installationSt
   );
 }
 
+// Transaction-local proof of one historical bootstrap, never current health.
+// Only an opaque handle captured from a completed installation can be reused.
+const bootstrapHistories = new WeakMap();
+const BESZEL_COMPONENTS = ['beszelHub', 'beszelAgent', 'beszelBootstrap'];
+export function isBeszelBootstrapWorkload(spec) {
+  return spec?.component === 'beszelBootstrap' && spec.namespace === 'opensphere-monitoring'
+    && spec.kind === 'job' && spec.name === 'beszel-bootstrap-v0187'
+    && spec.container === 'configure' && spec.ephemeral === true;
+}
+
+export function captureBeszelBootstrapHistory(lock, state, evidence, installationUid) {
+  if (!installationUid || state?.phase !== 'Ready'
+      || state.releaseDigest !== lock.releaseDigest
+      || state.verification?.evidenceConfigMap !== 'opensphere-installation-evidence'
+      || !Number.isFinite(Date.parse(state.verification?.verifiedAt))
+      || !hasDurableBeszelBootstrapEvidence(evidence, lock, state)) return null;
+  const images = Object.fromEntries(BESZEL_COMPONENTS.map(key => [key, lock.components?.[key]?.image]));
+  if (Object.values(images).some(image => !/^ghcr\.io\/opensphere-platform\/[a-z0-9-]+@sha256:[a-f0-9]{64}$/.test(image ?? ''))) return null;
+  const handle = Object.freeze({scope: 'historical-beszel-bootstrap', sourceReleaseDigest: lock.releaseDigest});
+  bootstrapHistories.set(handle, {installationUid, images});
+  return handle;
+}
+
+export function hasBeszelBootstrapHistory(handle, lock, installationUid) {
+  const history = handle && bootstrapHistories.get(handle);
+  return Boolean(history && history.installationUid === installationUid
+    && BESZEL_COMPONENTS.every(key => history.images[key] === lock.components?.[key]?.image));
+}
+
+export function readBeszelBootstrapHistory(lock) {
+  const record = getJson(['-n', 'opensphere-console', 'get', 'configmap', 'opensphere-installation-lock']);
+  const stored = validateLock(JSON.parse(record.data?.['release.json'] ?? '{}'), {
+    allowLegacyComponentSet: true, allowInstalledAgentIdentityCutover: true
+  });
+  if (stored.releaseDigest !== lock.releaseDigest) throw new Error('Installation changed before bootstrap evidence capture');
+  return captureBeszelBootstrapHistory(stored, JSON.parse(record.data?.['state.json'] ?? '{}'),
+    readRecordedInstallationEvidence(), record.metadata.uid);
+}
+
 function readRecordedInstallationEvidence() {
   const configMap = getJsonOrNull([
     '-n', 'opensphere-console', 'get', 'configmap', 'opensphere-installation-evidence'
@@ -250,7 +289,7 @@ function verifyInstallationLock(lock, { allowLegacyComponentSet = false } = {}) 
         || !/^\d{4}-\d{2}-\d{2}T/u.test(state.verification?.verifiedAt ?? ''))) {
     throw new Error('Ready installation state lacks completed verification evidence');
   }
-  return { ...config, installationState: state };
+  return { ...config, installationState: state, installationUid: configMap.metadata.uid };
 }
 
 export function requiredSecretsForLock(_lock) {
@@ -396,7 +435,8 @@ function verifyWorkloads(lock, {
   requireZeroRestarts,
   componentSelection = null,
   recordedEvidence = null,
-  installationState = null
+  installationState = null,
+  historicalBootstrapVerified = false
 }) {
   const selectedComponents = componentSelection ? new Set(componentSelection) : null;
   const expected = new Set();
@@ -412,7 +452,8 @@ function verifyWorkloads(lock, {
       ? lock.auxiliaryArtifacts?.[spec.artifact]?.image
       : lock.components?.[spec.component]?.image;
     if (!resource && spec.ephemeral) {
-      if (!hasDurableBeszelBootstrapEvidence(recordedEvidence, lock, installationState)) {
+      if (!isBeszelBootstrapWorkload(spec)
+          || (!historicalBootstrapVerified && !hasDurableBeszelBootstrapEvidence(recordedEvidence, lock, installationState))) {
         throw new Error(`Ephemeral workload is absent without matching durable installation evidence: ${spec.namespace}/${spec.kind}/${spec.name}`);
       }
       expected.add(expectedImage);
@@ -768,7 +809,7 @@ async function verifyConsoleApi() {
   });
 }
 
-async function verifyBeszel(lock, installationState, recordedEvidence) {
+async function verifyBeszel(lock, installationState, recordedEvidence, historicalBootstrapVerified = false) {
   const service = getJson(['-n', 'opensphere-monitoring', 'get', 'service', 'beszel-hub']);
   if (service.spec?.type !== 'ClusterIP' || service.spec?.clusterIP === 'None'
       || (service.spec?.ports ?? []).some((port) => port.nodePort !== undefined)) {
@@ -784,7 +825,7 @@ async function verifyBeszel(lock, installationState, recordedEvidence) {
     '-n', 'opensphere-monitoring', 'get', 'job', 'beszel-bootstrap-v0187'
   ]);
   const durableBootstrapEvidence = !bootstrap
-    && hasDurableBeszelBootstrapEvidence(recordedEvidence, lock, installationState);
+    && (historicalBootstrapVerified || hasDurableBeszelBootstrapEvidence(recordedEvidence, lock, installationState));
   if (!bootstrap && !durableBootstrapEvidence) {
     throw new Error('Beszel bootstrap Job is absent without matching durable installation evidence');
   }
@@ -851,7 +892,8 @@ export async function verifyInstallation(lock, {
   consoleUrl,
   requireRecoveryDrill = false,
   mode = 'strict',
-  componentSelection = null
+  componentSelection = null,
+  bootstrapHistory = null
 } = {}) {
   if (!['strict', 'rollback'].includes(mode)) throw new Error(`Unsupported installation verification mode: ${mode}`);
   const allowLegacyComponentSet = mode === 'rollback';
@@ -863,6 +905,7 @@ export async function verifyInstallation(lock, {
   const recordedEvidence = config.installationState.phase === 'Ready'
     ? readRecordedInstallationEvidence()
     : null;
+  const historicalBootstrapVerified = hasBeszelBootstrapHistory(bootstrapHistory, lock, config.installationUid);
   const secretCount = verifySecrets(lock);
   const registryPull = verifyRegistryPullPath(lock);
   const pvcCount = verifyPersistentStorage(config.storageClass);
@@ -871,12 +914,13 @@ export async function verifyInstallation(lock, {
     requireZeroRestarts,
     componentSelection,
     recordedEvidence,
-    installationState: config.installationState
+    installationState: config.installationState,
+    historicalBootstrapVerified
   }));
   const postgresql = verifySupabaseDatabase(lock);
   const supabase = await verifySupabaseServices();
   const gitea = await verifyGitea();
-  const beszel = await verifyBeszel(lock, config.installationState, recordedEvidence);
+  const beszel = await verifyBeszel(lock, config.installationState, recordedEvidence, historicalBootstrapVerified);
   const consoleApi = await verifyConsoleApi();
   const knowledgeDelivery = verifyKnowledgeDelivery(lock);
   if (consoleUrl && config.consoleUrl !== consoleUrl) {
