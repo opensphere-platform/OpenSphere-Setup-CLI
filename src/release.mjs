@@ -226,6 +226,8 @@ const LOCAL_EDGE_LABELS = Object.freeze({
   'opensphere.io/ga-eligible': 'false'
 });
 const RELEASE_METADATA_LABELS = Object.freeze([
+  'org.opencontainers.image.version',
+  'org.opencontainers.image.revision',
   'io.opensphere.console-index-content',
   'io.opensphere.channel',
   'io.opensphere.release-tag',
@@ -407,7 +409,7 @@ async function inspectRegistryImage(repository, reference, expectedDigest, {
     throw new Error(`Source revision labels differ across required platforms for ${repository}:${reference}`);
   }
   const metadata = Object.fromEntries(RELEASE_METADATA_LABELS.map((label) => {
-    const values = new Set(configs.map((config) => config.config?.Labels?.[label]).filter((value) => value !== undefined));
+    const values = new Set(configs.map((config) => config.config?.Labels?.[label]));
     if (values.size > 1) {
       throw new Error(`Release metadata label ${label} differs across required platforms for ${repository}:${reference}`);
     }
@@ -669,6 +671,9 @@ export function validateReleaseBom(bom, {
     if (component.sourceRevision !== bom.sourceRevision) {
       throw new Error(`Signed release BOM component ${name} source revision differs`);
     }
+    if (component.artifactVersion !== undefined && component.artifactVersion !== bom.releaseTag) {
+      throw new Error(`Signed release BOM component ${name} artifact version differs`);
+    }
   }
   if (subject && bom.components.console.image !== subject) {
     throw new Error('Signed release BOM subject is not its Console anchor image');
@@ -801,7 +806,23 @@ export function assertReleaseArtifactMetadata(image, {
       || labels['io.opensphere.release-tag'] !== releaseTag) {
     throw new Error(`Release image ${repository ?? 'artifact'} release tag differs from the signed release`);
   }
+  assertArtifactIdentity(image, releaseTag);
   return image;
+}
+
+export function assertArtifactIdentity(image, expectedVersion) {
+  const labels=image?.labels ?? {};
+  const version=labels['org.opencontainers.image.version'];
+  if (typeof version !== 'string' || !/^[0-9]{12}$/.test(version)
+      || labels['io.opensphere.release-tag'] !== version
+      || (expectedVersion !== undefined && expectedVersion !== version)) {
+    throw new Error('Artifact version differs from the exact image official version');
+  }
+  if (labels['org.opencontainers.image.revision'] !== image.sourceRevision
+      || labels['io.opensphere.source-revision'] !== image.sourceRevision) {
+    throw new Error('Artifact standard source revision differs from the exact image source');
+  }
+  return version;
 }
 
 export function assertLocalEdgeImage(image, {
@@ -874,6 +895,7 @@ async function verifyLocalEdgeLock(lock, {
       sourceRevision: component.sourceRevision,
       artifactScope
     });
+    if (component.artifactVersion !== undefined) assertArtifactIdentity(inspected, component.artifactVersion);
     report(onProgress, { type: 'local-component-complete', component: name, image: component.image });
     return { name, ...observed };
   }));
@@ -993,9 +1015,17 @@ export async function verifyReleaseLock(lock, {
   for (const name of Object.keys(validated.components)) {
     const expected = bom.components[name];
     const actual = validated.components[name];
-    if (actual.repository !== expected.repository || actual.image !== expected.image || actual.sourceRevision !== expected.sourceRevision) {
+    if (actual.repository !== expected.repository || actual.image !== expected.image || actual.sourceRevision !== expected.sourceRevision
+      || (actual.artifactVersion !== undefined && actual.artifactVersion !== bom.releaseTag)
+      || (expected.artifactVersion !== undefined && expected.artifactVersion !== bom.releaseTag)) {
       throw new Error(`Release lock component ${name} differs from the signed Release BOM`);
     }
+    const inspected = await inspectImageFn(actual.repository, actual.image, { registryCredentials, requiredPlatforms });
+    if (inspected.image !== actual.image) throw new Error(`Release lock component ${name} differs from the registry`);
+    assertReleaseArtifactMetadata(inspected, {
+      repository: actual.repository, sourceRevision: actual.sourceRevision,
+      releaseTag: bom.releaseTag, artifactScope: 'canonical'
+    });
   }
   for (const [name, actual] of Object.entries(validated.auxiliaryArtifacts ?? {})) {
     const inspected = await inspectImageFn(actual.repository, actual.image, {
@@ -1011,6 +1041,7 @@ export async function verifyReleaseLock(lock, {
       releaseTag: pointer.releaseTag,
       artifactScope: 'auxiliary'
     });
+    if (actual.artifactVersion !== undefined) assertArtifactIdentity(inspected, actual.artifactVersion);
   }
   return verifyReleaseProvenance(validated, {
     verifyImage,
@@ -1142,6 +1173,10 @@ export function validateLock(lock, {
     if (!/^[a-f0-9]{40}$/.test(component.sourceRevision ?? '')) {
       throw new Error(`Component ${name} source revision is invalid`);
     }
+    if (component.artifactVersion !== undefined
+        && (typeof component.artifactVersion !== 'string' || !/^[0-9]{12}$/.test(component.artifactVersion))) {
+      throw new Error(`Component ${name} artifactVersion is invalid`);
+    }
     if (releaseScope === RELEASE_SCOPE_INTEGRATED && component.sourceRevision !== lock.sourceRevision) {
       throw new Error(`Component ${name} source revision differs from the release`);
     }
@@ -1176,6 +1211,10 @@ export function validateLock(lock, {
       }
       if (!/^[a-f0-9]{40}$/.test(artifact?.sourceRevision ?? '')) {
         throw new Error(`Auxiliary artifact ${name} source revision is invalid`);
+      }
+      if (artifact.artifactVersion !== undefined
+          && (typeof artifact.artifactVersion !== 'string' || !/^[0-9]{12}$/.test(artifact.artifactVersion))) {
+        throw new Error(`Auxiliary artifact ${name} artifactVersion is invalid`);
       }
       if (releaseScope === RELEASE_SCOPE_INTEGRATED
           && artifact.sourceRevision !== lock.sourceRevision) {
@@ -1318,6 +1357,7 @@ function releaseComponent(repository, inspected) {
     repository,
     image: inspected.image,
     sourceRevision: inspected.sourceRevision,
+    artifactVersion: assertArtifactIdentity(inspected),
     registryCredentialsRequired: inspected.registryCredentialsRequired
   };
 }

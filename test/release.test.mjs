@@ -72,6 +72,8 @@ function releaseLabels(repository, {
     ...(repository === 'opensphere-console' ? { 'io.opensphere.console-index-content': 'console-index-renderer/v1' } : {}),
     'io.opensphere.channel': 'edge',
     'io.opensphere.release-tag': releaseTag,
+    'org.opencontainers.image.version': releaseTag,
+    'org.opencontainers.image.revision': revision,
     'io.opensphere.source-revision': revision,
     'io.opensphere.release-scope': artifactScope(repository),
     'opensphere.io/build-authority': 'localhost',
@@ -104,6 +106,8 @@ function signedArtifact(repository, image, {
     labels: {
       ...(repository === 'opensphere-console' ? { 'io.opensphere.console-index-content': 'console-index-renderer/v1' } : {}),
       'io.opensphere.release-tag': releaseTag,
+      'org.opencontainers.image.version': releaseTag,
+      'org.opencontainers.image.revision': revision,
       'io.opensphere.source-revision': revision,
       'io.opensphere.release-scope': artifactScope(repository)
     },
@@ -904,12 +908,14 @@ test('localhost edge resolves one target platform through immutable local tags w
   assert.equal(resolved.trust, LOCAL_EDGE_TRUST);
   assert.equal(resolved.releaseBom, undefined);
   assert.equal(resolved.sourceRevision, REVISION);
+  for (const component of Object.values(resolved.components)) assert.equal(component.artifactVersion, RELEASE_TAG);
   assert.deepEqual(Object.keys(resolved.auxiliaryArtifacts), Object.keys(AUXILIARY_ARTIFACTS));
   for (const [name, repository] of Object.entries(AUXILIARY_ARTIFACTS)) {
     assert.deepEqual(resolved.auxiliaryArtifacts[name], {
       repository,
       image: `ghcr.io/opensphere-platform/${repository}@${DIGEST}`,
       sourceRevision: REVISION,
+      artifactVersion: RELEASE_TAG,
       registryCredentialsRequired: false
     });
   }
@@ -922,6 +928,36 @@ test('localhost edge resolves one target platform through immutable local tags w
   assert.equal(calls.slice(1).every(({ reference }) => reference === `local-${REVISION.slice(0, 12)}`), true);
   assert.equal(calls.every(({ platforms }) => platforms.length === 1 && platforms[0] === 'linux/amd64'), true);
   assert.doesNotThrow(() => validateLock(resolved));
+});
+
+test('new image resolution refuses a missing, spoofed or upstream-only official identity', async () => {
+  for (const overrides of [
+    {'org.opencontainers.image.version':undefined},
+    {'org.opencontainers.image.version':'0.3.6'},
+    {'org.opencontainers.image.version':'202609131758'},
+    {'org.opencontainers.image.revision':undefined},
+    {'org.opencontainers.image.revision':'a'.repeat(40)},
+  ]) {
+    await assert.rejects(resolveChannel('edge', {
+      requiredPlatforms:['linux/amd64'],
+      resolveImageFn:async(repository)=>inspectedArtifact(repository,`ghcr.io/opensphere-platform/${repository}@${DIGEST}`,{overrides}),
+      verifyBom(){throw Error('unexpected attestation');}
+    }), /Artifact (version|standard source revision)/);
+  }
+});
+
+test('recorded artifact versions are digest-bound and rechecked against exact image labels', async () => {
+  const edge=validLock(); edge.trust=LOCAL_EDGE_TRUST;
+  const rehash=()=>{edge.releaseDigest=calculateReleaseDigest(edge.channel,edge.components,edge.trust,undefined,{auxiliaryArtifacts:edge.auxiliaryArtifacts});};
+  for(const artifact of [...Object.values(edge.components),...Object.values(edge.auxiliaryArtifacts)])artifact.artifactVersion=RELEASE_TAG;
+  rehash();
+  const options={inspectImageFn:async(repository,image)=>inspectedArtifact(repository,image),verifyBom(){throw Error('unexpected attestation');}};
+  await assert.doesNotReject(verifyReleaseLock(edge,options));
+  edge.components.console.artifactVersion='202609131758';
+  assert.throws(()=>validateLock(edge),/Release lock digest does not match/);
+  rehash(); await assert.rejects(verifyReleaseLock(edge,options),/Artifact version differs/);
+  edge.components.console.artifactVersion=202609131758; rehash();
+  assert.throws(()=>validateLock(edge),/artifactVersion is invalid/);
 });
 
 test('localhost edge rejects any auxiliary artifact from another source revision', async () => {
@@ -1134,6 +1170,7 @@ test('pre-recovery component locks are accepted only as explicit installed rollb
   assert.doesNotThrow(() => validateLock(lock, { allowLegacyComponentSet: true }));
   await assert.doesNotReject(verifyReleaseLock(lock, {
     verifyBom: bomVerifier(bom),
+    inspectImageFn: async (repository, image) => signedArtifact(repository, image),
     verifyImage: async () => {},
     verifySbom: async () => {},
     allowLegacyComponentSet: true,
