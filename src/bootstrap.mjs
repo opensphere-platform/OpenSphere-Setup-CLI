@@ -873,7 +873,27 @@ function ensureExternalShellTlsSecret(reference, source) {
   })}\n`);
 }
 
-export function ensureRegistryPullSecrets(lock, suppliedCredentials, {lifecycleEnabled=false}={}) {
+// A successful host supply-chain login does not establish runtime pull access.
+// Reuse the existing owner observation; do not copy temporary OAuth credentials.
+export function assertManagedRegistryReady(owner, pullSecrets, {now=Date.now()}={}) {
+  const observed=Date.parse(owner?.observation?.verifiedAt || '');
+  const expires=owner?.credentials?.lifecycle?.expiresAt;
+  const expected=[...REGISTRY_NAMESPACES].sort();
+  const actual=owner?.observation?.namespaces;
+  if(owner?.phase!=='Ready' || !owner.credentials || !Number.isFinite(observed)
+    || observed>now+30000 || now-observed>=20*60*1000
+    || (expires!=null && (!Number.isFinite(Date.parse(expires)) || Date.parse(expires)<=now))
+    || owner.observation.generation!==owner.generation
+    || !Array.isArray(actual) || JSON.stringify([...actual].sort())!==JSON.stringify(expected)
+    || REGISTRY_NAMESPACES.some(namespace=>{
+      const secret=pullSecrets.get(namespace);
+      return !secretHasGhcrCredential(secret) || secret.metadata?.annotations?.[GENERATION_ANNOTATION]!==owner.generation;
+    })) {
+    throw new Error('Console runtime GHCR connection is not ready. Verify or renew it at /manage/extensions/registry-connections before upgrading. The Setup login verifies release downloads only; runtime credentials were not replaced.');
+  }
+}
+
+export function ensureRegistryPullSecrets(lock, suppliedCredentials, {lifecycleEnabled=false,requireRuntimeReady=false}={}) {
   if(suppliedCredentials)validateCredential(suppliedCredentials);
   if(suppliedCredentials?.lifecycle?.mode==='github-device' && !lifecycleEnabled)throw new Error('Target Console has not enabled registry-auth/v1; OAuth runtime handoff is blocked');
   const requiresCredentials = releaseNeedsRegistryCredentials(lock);
@@ -890,6 +910,7 @@ export function ensureRegistryPullSecrets(lock, suppliedCredentials, {lifecycleE
   if(ownerJson.trim()){
     const owner=parseRegistryState(JSON.parse(ownerJson));
     if(!everyNamespaceReady)throw new Error('Runtime-owned registry pull Secrets are incomplete; repair through Console or an explicit recovery procedure');
+    if(requireRuntimeReady && requiresCredentials)assertManagedRegistryReady(owner,existing);
     return {credentialsRequired:requiresCredentials,credentialSource:'console-managed',lifecycleGeneration:owner.generation};
   }
   if (!suppliedCredentials && everyNamespaceReady && !lifecycleEnabled) {
@@ -2829,7 +2850,8 @@ export async function upgrade(
   // owner/pull Secrets; runtime reauthorization remains a Console operation.
   operations.ensureRegistryPullSecrets(
     targetLock,
-    registryCredentials?.lifecycle?.mode === 'github-device' ? null : registryCredentials
+    registryCredentials?.lifecycle?.mode === 'github-device' ? null : registryCredentials,
+    {requireRuntimeReady: true}
   );
   const initialAdmin = config.initialAdmin;
   const componentTransition = targetLock.releaseScope === RELEASE_SCOPE_COMPONENT;

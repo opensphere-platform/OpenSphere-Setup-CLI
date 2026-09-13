@@ -708,9 +708,10 @@ test('OAuth upgrade verifies supply chains but never forwards temporary credenti
     assert.equal(options.registryCredentials, credentials);
     checked.push(release.releaseDigest);
   };
-  operations.ensureRegistryPullSecrets = (release, supplied) => {
+  operations.ensureRegistryPullSecrets = (release, supplied, options) => {
     assert.equal(release.releaseDigest, target.releaseDigest);
     assert.equal(supplied, null, 'runtime credential authority must be preserved');
+    assert.deepEqual(options,{requireRuntimeReady:true});
     events.push('preserved-registry-owner');
     return {credentialSource: 'console-managed'};
   };

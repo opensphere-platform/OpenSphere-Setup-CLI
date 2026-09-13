@@ -345,6 +345,8 @@ deploy/opensphere-console.yaml
 
 **Console 설치와 운영 인계는 별도 호환 조건이다.** OAuth credential을 `bootstrap`에 넘기려면 대상 Console이 `registry-auth/v1`을 활성화해야 한다. 기존 Console 릴리스가 이를 지원하지 않으면 namespace/credential 쓰기 전에 중단한다. 이 Setup 릴리스만으로 기존 Console에 refresh worker를 설치하거나 활성화하지 않는다. 기존 설치의 `upgrade --registry-auth oauth`는 임시 인증을 공급망 검증에만 사용하며 기존 운영 Secret을 보존한다. 운영 credential 교체·갱신은 Console 재인증 또는 별도 복구 절차를 따른다.
 
+비공개 이미지를 사용하는 기존 Console의 업그레이드는 Pod를 변경하기 전에 운영 Registry가 Ready인지도 검사한다. 현재 자격증명의 만료, 20분 이내의 동일 세대 검증, 필수 6개 namespace의 관측 및 pull Secret 세대 일치를 확인한다. `ReauthorizationRequired`, 인증 대기, 오래되거나 불완전한 검증이면 `/manage/extensions/registry-connections`에서 연결을 갱신·검증한 뒤 다시 진행한다. Setup에서 방금 로그인했다는 사실로 운영 연결을 Ready로 간주하지 않는다. 이 사전 검사는 이후의 공급자 장애나 자격증명 철회까지 예방하지는 않으므로 실제 이미지 다운로드와 rollout 검증도 계속 수행한다.
+
 [인증·저장·재인증 계약과 현재 검증 범위](docs/REGISTRY-AUTH-LIFECYCLE.md)를 참고한다.
 
 ## 불완전한 localhost edge 설치의 복구
