@@ -12,6 +12,10 @@ const begin = source.indexOf('async function materializeFoundationInstallers(');
 const end = source.indexOf('\nfunction currentKubeContext()', begin);
 assert.ok(begin >= 0 && end > begin);
 const body = source.slice(begin, end);
+const dependencyBegin = source.indexOf('export async function fetchFoundationInstallerArtifacts(');
+const dependencyEnd = source.indexOf('\nfunction isPreRecoveryRelease(', dependencyBegin);
+assert.ok(dependencyBegin >= 0 && dependencyEnd > dependencyBegin);
+const dependencyBody = source.slice(dependencyBegin, dependencyEnd).replace(/^export /, '');
 const raw = 'image: __OPENSPHERE_CONSOLE_API_IMAGE__\norigin: __OPENSPHERE_CONSOLE_URL__\negress:\n  - ' + KUBERNETES_EGRESS_SLOT + '\n';
 const rules = [{to:[{ipBlock:{cidr:'10.96.0.1/32'}}],ports:[{protocol:'TCP',port:443}]}];
 const KNOWLEDGE_LOCK_PATH='apps/osaa-gateway/knowledge-bundle/lock.json';
@@ -35,6 +39,7 @@ function harness(discovered = rules) {
     materializeSupabaseMigrationSet: async () => ({evidence:{}}),
     writeReleaseArtifact: async (_root,path,contents) => { writes.push({path,contents}); },
   };
+  context.fetchFoundationInstallerArtifacts = vm.runInNewContext('(' + dependencyBody + ')',context);
   return { run:vm.runInNewContext('(' + body + ')',context), writes, knowledgeCalls, discoveries:()=>discoveries };
 }
 test('materialized target installer receives discovered egress and retains only PowerShell-owned placeholders', async () => {
