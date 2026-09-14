@@ -553,6 +553,21 @@ function foundationArtifactPaths(lock) {
     : LEGACY_FOUNDATION_ARTIFACT_PATHS;
 }
 
+// Resolve this fixed dependency pair from the selected immutable installer.
+// Older Console releases do not invoke it; a new installer must have both files.
+export async function fetchFoundationInstallerArtifacts(lock, readArtifact) {
+  const paths = foundationArtifactPaths(lock);
+  if (!isTargetConsoleRelease(lock)) return Promise.all(paths.map(async path => ({path, contents:await readArtifact(path)})));
+  const installerPath = 'scripts/Install-ConsoleApiRuntime.ps1';
+  const installer = await readArtifact(installerPath);
+  if (typeof installer !== 'string') throw new Error('Native Console installer source is missing');
+  const dependencies = new Set(['scripts/Prepare-FoundationPrerequisites.ps1', 'apps/extension-controller/src/foundation-bootstrap.json']);
+  const preparesFoundation = installer.includes('Prepare-FoundationPrerequisites.ps1');
+  return Promise.all(paths.filter(path => preparesFoundation || !dependencies.has(path)).map(async path => ({
+    path, contents:path === installerPath ? installer : await readArtifact(path)
+  })));
+}
+
 function isPreRecoveryRelease(lock) {
   return !lock?.components?.recovery;
 }
@@ -639,9 +654,9 @@ export function componentReleaseManifestSpecs(
   return { foundation, base };
 }
 
-function installArtifactCount(lock) {
+function installArtifactCount(lock, foundationPaths = foundationArtifactPaths(lock)) {
   return new Set([
-    ...foundationArtifactPaths(lock),
+    ...foundationPaths,
     migrationManifestPath(lock),
     ...foundationManifestSpecs(lock).map(({ path }) => path),
     ...baseManifestSpecs(lock).map(({ path }) => path)
@@ -1189,13 +1204,10 @@ async function materializeFoundationInstallers(
     const installerTemplate = renderRegistryKubernetesEgress(raw, kubernetesApiEgress);
     return { spec, installerTemplate, rendered };
   }));
-  const artifacts = (await Promise.all(foundationArtifactPaths(lock).map(async (path) => {
-    const contents = await fetchReleaseArtifact(lock, path, {
+  const artifacts = (await fetchFoundationInstallerArtifacts(lock, path => fetchReleaseArtifact(lock, path, {
       optional404: optionalArtifacts.has(path),
       sourceArtifactCredential
-    });
-    return contents === null ? null : { path, contents };
-  }))).filter(Boolean);
+    }))).filter(artifact => artifact.contents !== null);
   for (const artifact of artifacts) await writeReleaseArtifact(root, artifact.path, artifact.contents);
   let knowledgeDirectory;
   if (target) {
@@ -1233,6 +1245,7 @@ async function materializeFoundationInstallers(
     root,
     target,
     knowledgeDirectory,
+    installerArtifactPaths: artifacts.map(artifact => artifact.path),
     hissScope: prepareHiss ? hissScope : null,
     migration,
     release: manifestArtifacts.map(({ spec, rendered }) => ({
@@ -2413,7 +2426,7 @@ export async function preflightReleaseArtifacts(lock, {
       { sourceArtifactCredential, registryCredentials }
     );
     return {
-      artifactCount: installArtifactCount(lock) + Number(prepared.foundation?.migration?.manifest?.migrationCount || 0),
+      artifactCount: installArtifactCount(lock, prepared.foundation?.installerArtifactPaths) + Number(prepared.foundation?.migration?.manifest?.migrationCount || 0),
       manifestGroupCount: prepared.all.length
     };
   } finally {
@@ -2573,7 +2586,7 @@ export async function bootstrap(lock, {
       effectiveAuthEnvironment,
       { sourceArtifactCredential, registryCredentials }
     );
-    progress?.done(`${installArtifactCount(lock) + Number(prepared.foundation?.migration?.manifest?.migrationCount || 0)} artifacts, ${prepared.all.length} manifest groups`);
+    progress?.done(`${installArtifactCount(lock, prepared.foundation?.installerArtifactPaths) + Number(prepared.foundation?.migration?.manifest?.migrationCount || 0)} artifacts, ${prepared.all.length} manifest groups`);
 
     const registryLifecycleEnabled=prepared.all.some(entry=>entry.yaml.includes('CONSOLE_REGISTRY_AUTH_CONTRACT') && entry.yaml.includes('registry-auth/v1'));
     if(registryCredentials?.lifecycle?.mode==='github-device' && !registryLifecycleEnabled)throw new Error('Target Console has not enabled registry-auth/v1; no OAuth credentials or namespaces were written');
