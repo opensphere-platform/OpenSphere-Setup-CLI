@@ -10,16 +10,35 @@ export const MANAGED_NAMESPACES = Object.freeze([
   'opensphere-osaa-credentials',
   'opensphere-shell-sessions',
   'opensphere-hiss-validation',
-  'opensphere-system'
+  'opensphere-system',
+  'opensphere-foundation'
 ]);
 
 export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
   customResourceDefinitions: Object.freeze([
     'uipluginpackages.plugins.opensphere.io',
-    'uipluginregistrations.plugins.opensphere.io'
+    'uipluginregistrations.plugins.opensphere.io',
+    "foundationmodels.foundation.opensphere.io",
+    "foundationmoduledescriptors.foundation.opensphere.io",
+    "foundationclaims.foundation.opensphere.io",
+    "foundationbindings.foundation.opensphere.io",
+    "identitydirectoryclaims.foundation.opensphere.io",
+    "identitydirectorybindings.foundation.opensphere.io",
+    "postgresclaims.provisioning.opensphere.io",
+    "addoncapabilities.catalog.opensphere.io",
+    "addonofferings.catalog.opensphere.io",
+    "addonplans.catalog.opensphere.io",
+    "postgresruntimecatalogs.catalog.opensphere.io",
+    "addoninstalls.catalog.opensphere.io"
   ]),
   clusterRbac: Object.freeze([
     ...CEPH_PREPARATION_CLUSTER_RBAC,
+    "clusterrole/opensphere-foundation-runtime",
+    "clusterrolebinding/opensphere-foundation-runtime",
+    "clusterrole/opensphere-foundation-profile-reader",
+    "clusterrolebinding/opensphere-foundation-profile-reader",
+    "clusterrole/opensphere-foundation-contract-controller",
+    "clusterrolebinding/opensphere-foundation-contract-controller",
     'clusterrolebinding/opensphere-extension-controller-cli-downloads',
     'clusterrolebinding/opensphere-registry',
     'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',

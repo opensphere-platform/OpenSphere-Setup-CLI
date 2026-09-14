@@ -498,6 +498,8 @@ export const FOUNDATION_ARTIFACT_PATHS = Object.freeze([
   HISS_EXECUTION_PROFILE.consoleArtifactPath,
   HISS_VALIDATION_ARTIFACT,
   'scripts/Install-ConsoleApiRuntime.ps1',
+  'scripts/Prepare-FoundationPrerequisites.ps1',
+  'apps/extension-controller/src/foundation-bootstrap.json',
   'scripts/Install-ConsoleNativeRuntime.ps1',
   'scripts/render-knowledge-package.mjs',
   'packages/contracts/runtime/knowledge-package.cjs',
