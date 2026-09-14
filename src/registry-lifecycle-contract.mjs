@@ -42,12 +42,13 @@ export function publicRegistryState(state,{clientId='',actorRef=null,now=Date.no
   const checked=Date.parse(state.observation?.verifiedAt || '');
   const fresh=Number.isFinite(checked) && now-checked<20*60*1000;
   const expired=life?.expiresAt && Date.parse(life.expiresAt)<=now;
-  const ready=state.phase==='Ready' && fresh && !expired;
+  const synchronized=JSON.stringify([...(state.observation?.namespaces||[])].sort())===JSON.stringify([...REGISTRY_NAMESPACES].sort());
+  const ready=state.phase==='Ready' && fresh && !expired && synchronized;
   const pending=state.pending && state.pending.actorRef===actorRef && Date.parse(state.pending.flow?.expiresAt)>now ? {userCode:state.pending.flow.userCode,verificationUri:state.pending.flow.verificationUri,expiresAt:state.pending.flow.expiresAt}:null;
   return {connectionId:'opensphere-ghcr',registryOrigin:'ghcr.io',registry:'ghcr.io',namespace:'opensphere-platform',contract:REGISTRY_AUTH_CONTRACT,
     credentialPresent:Boolean(state.credentials),username:state.credentials?.username || null,credentialVersion:state.generation,
     configurationState:ready?'Configured':state.phase,lastVerifiedAt:state.observation?.verifiedAt || null,lastVerificationCode:state.errorCode || null,
-    phase:expired?'ReauthorizationRequired':state.phase==='Ready'&&!fresh?'Stale':state.phase,verified:ready,
+    phase:expired?'ReauthorizationRequired':state.phase==='Ready'&&!synchronized?'Pending':state.phase==='Ready'&&!fresh?'Stale':state.phase,verified:ready,
     authenticationMode:life?.mode || 'anonymous',refreshPolicy:life?.refreshPolicy || 'none',expiresAt:life?.expiresAt || null,
     refreshExpiresAt:life?.refreshExpiresAt || null,verifiedAt:state.observation?.verifiedAt || null,updatedAt:state.updatedAt,
     errorCode:state.errorCode || null,oauthAvailable:Boolean(clientId),oauthProductionVerified:false,authorization:pending,
