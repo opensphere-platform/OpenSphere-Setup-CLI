@@ -1591,6 +1591,27 @@ export function componentReleaseWorkloadManifests(
   return [...selected.values()];
 }
 
+// Admit a new Gateway only after its durable-state and command consumers are
+// Ready. Alphabetical manifest order alone can start the producer first.
+export function applyComponentReleaseInDependencyOrder(release, changedComponents, {
+  apply, wait
+}) {
+  const pending = new Set(release);
+  const consumers = [['osdst'], ['consoleApi', 'extensionController', 'osShellControl', 'cliArtifacts']];
+  if (changedComponents.includes('osaaGateway')) {
+    for (const family of consumers) {
+      const selected = family.filter(key => changedComponents.includes(key));
+      if (!selected.length) continue;
+      const stage = [...pending].filter(manifest => selected.some(key => manifest.path.endsWith(`#${key}`)));
+      if (!stage.length) throw new Error(`Missing prerequisite manifests: ${selected.join(',')}`);
+      apply(stage);
+      wait(selected);
+      for (const manifest of stage) pending.delete(manifest);
+    }
+  }
+  if (pending.size) apply([...pending]);
+}
+
 function installPreparedComponentRelease(
   lock,
   prepared,
@@ -1603,7 +1624,10 @@ function installPreparedComponentRelease(
 ) {
   if (applyMigrations) runComponentMigrations(prepared.foundation, progress);
   const release = componentReleaseWorkloadManifests(lock, prepared, changedComponents);
-  applyRelease(release, label, progress, { preserveHostLocalEdgeTrust: isLocalEdgeLock(lock) });
+  applyComponentReleaseInDependencyOrder(release, changedComponents, {
+    apply: stage => applyRelease(stage, label, progress, { preserveHostLocalEdgeTrust: isLocalEdgeLock(lock) }),
+    wait: components => waitForComponentRollouts(components, progress)
+  });
 }
 
 function inventoryKey(resource) {
