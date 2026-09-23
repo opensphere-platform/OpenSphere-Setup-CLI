@@ -1,4 +1,4 @@
-import {KUBERNETES_EGRESS_SLOT,discoverRegistryKubernetesEgress,renderRegistryKubernetesEgress} from './registry-runtime-access.mjs';
+import {KUBERNETES_EGRESS_SLOT,discoverRegistryKubernetesEgress,renderRegistryKubernetesEgress,discoverConsoleApiCiliumPolicy} from './registry-runtime-access.mjs';
 import {setTimeout as registryDelay} from 'node:timers/promises';
 import {REGISTRY_AUTH_SECRET,REGISTRY_AUTH_CONTRACT,REGISTRY_NAMESPACES,initialRegistryState,registryStateSecret,parseRegistryState,requiredImages,pullSecretData,GENERATION_ANNOTATION,validateCredential} from './registry-lifecycle-contract.mjs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
@@ -1193,6 +1193,8 @@ async function materializeFoundationInstallers(
     const raw = await fetchReleaseArtifact(lock, spec.path, { sourceArtifactCredential });
     const kubernetesApiEgress = raw.includes(KUBERNETES_EGRESS_SLOT)
       ? discoverRegistryKubernetesEgress(kubectl) : undefined;
+    const ciliumPolicy=spec.path==='apps/console-api/deploy.yaml' && kubernetesApiEgress
+      ? discoverConsoleApiCiliumPolicy(kubernetesApiEgress,kubectl) : '';
     const rendered = renderManifest(
       lock,
       spec,
@@ -1204,8 +1206,8 @@ async function materializeFoundationInstallers(
     );
     // PowerShell owns image/origin substitution; Setup owns API discovery.
     // Persist the same discovered egress that passed preflight rendering.
-    const installerTemplate = renderRegistryKubernetesEgress(raw, kubernetesApiEgress);
-    return { spec, installerTemplate, rendered };
+    const installerTemplate = renderRegistryKubernetesEgress(raw, kubernetesApiEgress)+ciliumPolicy;
+    return { spec, installerTemplate, rendered:rendered+ciliumPolicy };
   }));
   const artifacts = (await fetchFoundationInstallerArtifacts(lock, path => fetchReleaseArtifact(lock, path, {
       optional404: optionalArtifacts.has(path),

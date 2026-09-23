@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {beszelCleanupJob,purgeBeszelHostState,purgeExternalConsoleRbac} from '../src/uninstall-residuals.mjs';
+import {beszelCleanupJob,beszelInspectionJob,purgeBeszelHostState,purgeExternalConsoleRbac} from '../src/uninstall-residuals.mjs';
 const lock={releaseDigest:'sha256:'+'a'.repeat(64),components:{beszelBootstrap:{image:'ghcr.io/opensphere-platform/opensphere-console-beszel-bootstrap@sha256:'+'b'.repeat(64)}}};
 function hostRuntime(){
   const state={events:[],plan:null,daemon:{metadata:{uid:'agent-uid'},spec:{template:{spec:{volumes:[{hostPath:{path:'/var/lib/opensphere/beszel-agent'}}]}}}},
@@ -10,10 +10,11 @@ function hostRuntime(){
     if(args[0]==='create'){
       const object=JSON.parse(options.input);
       if(object.kind==='ConfigMap'){state.plan=object;return '';}
-      state.job=object;return JSON.stringify({metadata:{name:'console-purge-beszel-test'}});
+      state.job=object;return JSON.stringify({metadata:{name:object.metadata.generateName+'test'}});
     }
     if(args.includes('configmap'))return state.plan?JSON.stringify(state.plan):'';
     if(args.includes('nodes'))return JSON.stringify({items:state.nodes});
+    if(args.includes('pods'))return JSON.stringify({items:state.pods||[]});
     if(args.includes('get')&&args.includes('daemonset'))return state.daemon?JSON.stringify(state.daemon):'';
     if(args.includes('delete')&&args.includes('daemonset'))state.daemon=null;
     if(state.failWait&&args.includes('wait'))throw Error('cleanup timeout');
@@ -51,10 +52,27 @@ test('failed cleanup remains resumable after agent deletion',()=>{
   state.failWait=false;
   assert.equal(purgeBeszelHostState(lock,{run}).status,'Purged');
 });
-test('missing agent without an earlier ownership checkpoint cannot claim completed cleanup',()=>{
+test('an interrupted install before Beszel needs successful read-only inspection of every node',()=>{
   const {state,run}=hostRuntime();state.daemon=null;
-  assert.throws(()=>purgeBeszelHostState(lock,{run}),/ownership requires operator inspection/);
-  assert.ok(!state.events.some(e=>e.startsWith('create')||e.includes('delete')));
+  assert.deepEqual(purgeBeszelHostState(lock,{run}),{nodes:['node-a'],status:'VerifiedEmpty'});
+  assert.equal(state.plan,null,'inspection must not invent a deleted DaemonSet ownership checkpoint');
+  assert.equal(state.job.spec.template.spec.containers[0].volumeMounts[0].readOnly,true);
+  assert.doesNotMatch(state.job.spec.template.spec.containers[0].command.join(' '),/rm |delete/);
+  assert.ok(!state.events.some(e=>e.includes('delete daemonset')||e.includes('delete namespace')));
+});
+
+test('missing agent with nonempty/unreadable/offline host state or a remaining writer refuses purge',()=>{
+  const {state,run}=hostRuntime();state.daemon=null;state.failWait=true;
+  assert.throws(()=>purgeBeszelHostState(lock,{run}),/not verified empty/);
+  assert.ok(!state.events.some(e=>e.includes('delete')));
+  state.failWait=false;state.nodes[0].status.conditions[0].status='False';
+  assert.throws(()=>purgeBeszelHostState(lock,{run}),/every exact node/);
+  state.nodes[0].status.conditions[0].status='True';
+  state.pods=[{status:{phase:'Running'},spec:{volumes:[{hostPath:{path:'/var/lib/opensphere/beszel-agent'}}]}}];
+  assert.throws(()=>purgeBeszelHostState(lock,{run}),/live Pod/);
+  const job=beszelInspectionJob('node-a',lock.components.beszelBootstrap.image,lock.releaseDigest);
+  assert.equal(job.spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem,true);
+  assert.deepEqual(job.spec.template.spec.containers[0].securityContext.capabilities,{drop:['ALL']});
 });
 test('shared namespaces are never deleted and foreign RBAC subjects prevent deletion',()=>{
   for(const foreign of [false,true]){

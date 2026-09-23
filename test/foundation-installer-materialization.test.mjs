@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { join } from 'node:path';
-import { renderRegistryKubernetesEgress, KUBERNETES_EGRESS_SLOT } from '../src/registry-runtime-access.mjs';
+import { renderRegistryKubernetesEgress, KUBERNETES_EGRESS_SLOT, discoverConsoleApiCiliumPolicy } from '../src/registry-runtime-access.mjs';
 
 // Execute the actual materialization function with only external I/O isolated.
 // A render-only test missed the old branch that wrote raw instead of verified egress.
@@ -20,7 +20,7 @@ const raw = 'image: __OPENSPHERE_CONSOLE_API_IMAGE__\norigin: __OPENSPHERE_CONSO
 const rules = [{to:[{ipBlock:{cidr:'10.96.0.1/32'}}],ports:[{protocol:'TCP',port:443}]}];
 const KNOWLEDGE_LOCK_PATH='apps/osaa-gateway/knowledge-bundle/lock.json';
 const knowledge={schema:'synthetic-source-package',sha256:'a'.repeat(64),knowledgeImage:'synthetic-verified-image'};
-function harness(discovered = rules) {
+function harness(discovered = rules, cilium=false) {
   const writes = []; const knowledgeCalls=[]; let discoveries = 0;
   const context = {
     Set, Promise, KUBERNETES_EGRESS_SLOT, KNOWLEDGE_LOCK_PATH, join,
@@ -29,9 +29,13 @@ function harness(discovered = rules) {
     foundationArtifactPaths: () => [KNOWLEDGE_LOCK_PATH],
     fetchReleaseArtifact: async (_lock,path) => path===KNOWLEDGE_LOCK_PATH ? JSON.stringify(knowledge) : raw,
     materializeKnowledgeDirectory: async (lock,directory,options) => {knowledgeCalls.push({lock,directory,options});},
-    kubectl: () => { throw Error('No real kubectl in materialization test'); },
+    kubectl: args => {
+      assert.deepEqual(Array.from(args),['get','customresourcedefinition','ciliumnetworkpolicies.cilium.io','--ignore-not-found','-o','json']);
+      return cilium ? JSON.stringify({metadata:{name:'ciliumnetworkpolicies.cilium.io'},spec:{group:'cilium.io',names:{kind:'CiliumNetworkPolicy'}}}) : '';
+    },
     discoverRegistryKubernetesEgress: () => { discoveries++; return discovered; },
     renderRegistryKubernetesEgress,
+    discoverConsoleApiCiliumPolicy,
     renderManifest: (_lock,_spec,value,_sc,_url,_auth,{kubernetesApiEgress}) =>
       renderRegistryKubernetesEgress(value,kubernetesApiEgress)
         .replace('__OPENSPHERE_CONSOLE_API_IMAGE__','ghcr.io/example/api@sha256:'+'a'.repeat(64))
@@ -61,4 +65,13 @@ test('failed API discovery cannot write an unresolved installer template', async
   const h = harness([]);
   await assert.rejects(h.run({sourceRevision:'a'.repeat(40)},'/unused','standard','https://localhost:1114','development'), /Registry Kubernetes egress/);
   assert.equal(h.writes.length,0);
+});
+
+test('Cilium compatibility policy reaches both preflight and the actual PowerShell installer template',async()=>{
+  const h=harness(rules,true);
+  const result=await h.run({sourceRevision:'a'.repeat(40),knowledge},'/unused','longhorn','https://console.example.test','production');
+  const installer=h.writes.find(w=>w.path==='apps/console-api/deploy.yaml').contents;
+  assert.match(installer,/"kind":"CiliumNetworkPolicy"/);
+  assert.match(result.release[0].yaml,/"toEntities":\["kube-apiserver"\]/);
+  assert.equal(installer.split('---\n')[1],result.release[0].yaml.split('---\n')[1]);
 });
