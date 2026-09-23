@@ -32,6 +32,12 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     "addoninstalls.catalog.opensphere.io"
   ]),
   clusterRbac: Object.freeze([
+    'clusterrole/opensphere-cluster-manager-read',
+    'clusterrolebinding/opensphere-cluster-manager-read',
+    'clusterrole/opensphere-platform-support-core-observer',
+    'clusterrolebinding/opensphere-platform-support-core-observer',
+    'clusterrole/opensphere-platform-support-runtime',
+    'clusterrolebinding/opensphere-platform-support-runtime',
     ...CEPH_PREPARATION_CLUSTER_RBAC,
     "clusterrole/opensphere-foundation-runtime",
     "clusterrolebinding/opensphere-foundation-runtime",

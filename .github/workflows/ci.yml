@@ -62,6 +62,8 @@ jobs:
           ref: ${{ steps.console_source.outputs.revision }}
           fetch-depth: 0
           path: _fixtures/OpenSphere-console
+          token: ${{ secrets.CONSOLE_SOURCE_READ_TOKEN }}
+          persist-credentials: false
       - name: Verify governed Console checkout
         shell: pwsh
         run: |

@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { kubectl, run } from './process.mjs';
+import {purgeBeszelHostState,purgeExternalConsoleRbac} from './uninstall-residuals.mjs';
 import { preflight } from './preflight.mjs';
 import { fetchWithRetry } from './http.mjs';
 import { sourceArtifactRequest } from './source-artifact-credential.mjs';
@@ -2249,6 +2250,8 @@ export function listClusterWideCustomResourceInstances(crd) {
 
 export async function uninstallManagedInstallation({ runtime = {} } = {}) {
   const operations = {
+    purgeBeszelHostState,
+    purgeExternalConsoleRbac,
     readInstallationLock,
     readInstallationState,
     existingOpenSphereNamespaces,
@@ -2289,6 +2292,8 @@ export async function uninstallManagedInstallation({ runtime = {} } = {}) {
     throw new Error(`Managed namespace ownership differs (missing=${missing.join(',') || 'none'}, unexpected=${unexpected.join(',') || 'none'})`);
   }
   const persistentVolumes = operations.listManagedPersistentVolumes();
+  const hostCleanup = await operations.purgeBeszelHostState(installed);
+  await operations.purgeExternalConsoleRbac(installed);
   for (const namespace of MANAGED_NAMESPACES) operations.deleteManagedNamespace(namespace);
   for (const namespace of MANAGED_NAMESPACES) operations.waitForManagedNamespaceDeletion(namespace);
   for (const volume of persistentVolumes) operations.deleteManagedPersistentVolume(volume);
@@ -2307,6 +2312,7 @@ export async function uninstallManagedInstallation({ runtime = {} } = {}) {
   for (const resource of ownedClusterScoped.clusterRbac) operations.deleteManagedClusterRbac(resource);
   return {
     releaseDigest: installed.releaseDigest,
+    ...(hostCleanup ? {hostCleanup} : {}),
     namespaces: [...MANAGED_NAMESPACES],
     persistentVolumes,
     customResourceDefinitions: [...ownedClusterScoped.customResourceDefinitions],

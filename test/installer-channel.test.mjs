@@ -26,6 +26,9 @@ test('release publication binds version, channel pointer and prerelease class', 
   assert.match(workflow, /Package version has no supported Setup CLI channel/);
   assert.match(workflow, /prerelease flag must be/);
   assert.match(workflow, /candidate[/]stable Setup publication remains on HOLD/);
+  assert.match(workflow, /Release tag must match the source package version/);
+  assert.match(workflow, /Promote the pointer separately after digest verification/);
+  assert.doesNotMatch(workflow, /git push|gh api.*contents\/channels/);
 });
 
 test('Setup package selectors remain separate from Console release selection', () => {
