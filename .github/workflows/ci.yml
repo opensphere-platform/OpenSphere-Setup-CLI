@@ -66,6 +66,13 @@ jobs:
           persist-credentials: false
       - name: Verify governed Console checkout
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.CONSOLE_SOURCE_READ_TOKEN }}
+          GIT_CONFIG_COUNT: '2'
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: ''
+          GIT_CONFIG_KEY_1: credential.https://github.com.helper
+          GIT_CONFIG_VALUE_1: '!gh auth git-credential'
         run: |
           $arguments = @('--checkout', '_fixtures/OpenSphere-console')
           if ('${{ steps.previous_console_source.outputs.mode }}' -eq 'previous') {

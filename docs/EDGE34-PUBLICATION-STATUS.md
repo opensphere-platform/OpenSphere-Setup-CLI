@@ -5,7 +5,9 @@
 2026-09-23 preparation: private Console checkout now uses the dedicated
 `CONSOLE_SOURCE_READ_TOKEN` Secret with Contents read-only access and disables
 credential persistence. The user selected this method; Secret registration and
-successful public build still need verification. No broad host credential has
+private checkout were verified on 2026-09-23. Subsequent Git fetch uses a
+step-scoped credential helper without storing the token. Successful public build
+still needs verification. No broad host credential has
 been copied into Actions and no repository visibility was changed.
 
 Publication validates the exact source package version and prerelease class while

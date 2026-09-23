@@ -146,6 +146,9 @@ test('CI and public packaging use the governed Console revision instead of float
     assert.ok(checkoutIndex >= 0 && verifyIndex > checkoutIndex,
       `${path} must verify the Console checkout before consuming it`);
     assert.match(steps[verifyIndex], /verify-console-source-checkout[.]mjs/u);
+    assert.match(steps[verifyIndex], /GH_TOKEN: \$\{\{ secrets[.]CONSOLE_SOURCE_READ_TOKEN \}\}/u);
+    assert.match(steps[verifyIndex], /GIT_CONFIG_VALUE_1: '!gh auth git-credential'/u);
+    assert.match(checkout[0], /persist-credentials: false/u);
     assert.equal(steps.slice(verifyIndex + 1)
       .filter((step) => step.includes('_fixtures/OpenSphere-console')).length, 0,
     `${path} must not rewrite the verified Console fixture`);
