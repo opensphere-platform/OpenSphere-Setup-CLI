@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { kubectl, run } from './process.mjs';
+import { CLUSTER_SCOPED_MANAGED_CRDS, listManagedClusterResiduals, assertNoManagedClusterResiduals, assertManagedAdmissionParameters } from './installation-residuals.mjs';
 import {purgeBeszelHostState,purgeExternalConsoleRbac} from './uninstall-residuals.mjs';
 import { preflight } from './preflight.mjs';
 import { fetchWithRetry } from './http.mjs';
@@ -2213,8 +2214,9 @@ function listManagedPersistentVolumes() {
     .filter(Boolean);
 }
 
-export function listClusterWideCustomResourceInstances(crd) {
-  const definitionText = kubectl([
+export function listClusterWideCustomResourceInstances(crd, { run = kubectl } = {}) {
+  if (!MANAGED_CRDS.includes(crd)) throw new Error(`Unknown managed custom resource definition: ${crd}`);
+  const definitionText = run([
     'get', 'customresourcedefinition', crd, '--ignore-not-found', '-o', 'json'
   ], { capture: true }).trim();
   if (!definitionText) return [];
@@ -2225,14 +2227,15 @@ export function listClusterWideCustomResourceInstances(crd) {
   } catch {
     throw new Error(`Cannot verify custom resource definition before deletion: ${crd}`);
   }
-  if (definition.metadata?.name !== crd || definition.spec?.scope !== 'Namespaced') {
+  const expectedScope = CLUSTER_SCOPED_MANAGED_CRDS.includes(crd) ? 'Cluster' : 'Namespaced';
+  if (definition.metadata?.name !== crd || definition.spec?.scope !== expectedScope) {
     throw new Error(`Refusing to delete custom resource definition with an unexpected identity or scope: ${crd}`);
   }
 
   let inventory;
   try {
-    inventory = JSON.parse(kubectl([
-      'get', crd, '--all-namespaces', '-o', 'json'
+    inventory = JSON.parse(run([
+      'get', crd, ...(expectedScope === 'Namespaced' ? ['--all-namespaces'] : []), '-o', 'json'
     ], { capture: true }));
   } catch {
     throw new Error(`Cannot verify cluster-wide custom resource instances before deletion: ${crd}`);
@@ -2243,10 +2246,10 @@ export function listClusterWideCustomResourceInstances(crd) {
   return inventory.items.map((item) => {
     const namespace = String(item.metadata?.namespace ?? '');
     const name = String(item.metadata?.name ?? '');
-    if (!namespace || !name) {
+    if (!name || (expectedScope === 'Namespaced' ? !namespace : Boolean(namespace))) {
       throw new Error(`Custom resource inventory contains an unscoped item: ${crd}`);
     }
-    return `${namespace}/${name}`;
+    return expectedScope === 'Namespaced' ? `${namespace}/${name}` : name;
   }).sort();
 }
 
@@ -2259,6 +2262,7 @@ export async function uninstallManagedInstallation({ runtime = {}, onProgress = 
     existingOpenSphereNamespaces,
     existingManagedNamespaces,
     listManagedPersistentVolumes,
+    listManagedClusterResiduals,
     listManagedCrdInstances: listClusterWideCustomResourceInstances,
     deleteManagedNamespace: (namespace) =>
       kubectl(['delete', 'namespace', namespace, '--ignore-not-found', '--wait=false']),
@@ -2295,6 +2299,25 @@ export async function uninstallManagedInstallation({ runtime = {}, onProgress = 
     throw new Error(`Managed namespace ownership differs (missing=${missing.join(',') || 'none'}, unexpected=${unexpected.join(',') || 'none'})`);
   }
   const persistentVolumes = operations.listManagedPersistentVolumes();
+  const ownedClusterScoped = state.managedClusterScopedResources;
+  // Refuse shared data before any destructive action or loss of the ownership record.
+  for (const crd of ownedClusterScoped.customResourceDefinitions) {
+    const instances = operations.listManagedCrdInstances(crd);
+    if (!Array.isArray(instances)) throw new Error(`Custom resource deletion guard returned an invalid inventory: ${crd}`);
+    const foreign = instances.filter(reference => CLUSTER_SCOPED_MANAGED_CRDS.includes(crd)
+      || !MANAGED_NAMESPACES.includes(reference.split('/')[0]));
+    if (foreign.length) throw new Error(`Refusing to delete shared custom resource definition ${crd}; cluster-wide instances remain: ${foreign.join(', ')}`);
+  }
+  // Bindings must disappear while their parameters and ownership evidence still exist.
+  // This also lets cleanup Jobs run after an older interrupted uninstall lost params.
+  onProgress('[정책 정리] 소유권 확인된 Console 정책 binding 제거 및 잔여 확인');
+  const policyOrder = [
+    ...ownedClusterScoped.admissionPolicies.filter(r => r.startsWith('validatingadmissionpolicybinding/')),
+    ...ownedClusterScoped.admissionPolicies.filter(r => r.startsWith('validatingadmissionpolicy/'))
+  ];
+  for (const resource of policyOrder) operations.deleteManagedClusterRbac(resource);
+  const policyResiduals = operations.listManagedClusterResiduals().filter(r => ownedClusterScoped.admissionPolicies.includes(r));
+  if (policyResiduals.length) throw new Error(`Console admission resources remain: ${policyResiduals.join(', ')}`);
   onProgress('[삭제 2/6] Beszel 노드 데이터 확인·정리');
   const hostCleanup = await operations.purgeBeszelHostState(installed, {onProgress});
   onProgress('[삭제 3/6] 공유 namespace의 Console 전용 RBAC 정리');
@@ -2308,7 +2331,6 @@ export async function uninstallManagedInstallation({ runtime = {}, onProgress = 
   onProgress(`[삭제 5/6] Console 전용 PV ${persistentVolumes.length}개 잔여 확인·정리`);
   for (const volume of persistentVolumes) operations.deleteManagedPersistentVolume(volume);
   onProgress('[삭제 6/6] Console 전용 CRD·정책·클러스터 RBAC 정리');
-  const ownedClusterScoped = state.managedClusterScopedResources;
   for (const crd of ownedClusterScoped.customResourceDefinitions) {
     const instances = operations.listManagedCrdInstances(crd);
     if (!Array.isArray(instances)) {
@@ -2319,8 +2341,11 @@ export async function uninstallManagedInstallation({ runtime = {}, onProgress = 
     }
   }
   for (const crd of ownedClusterScoped.customResourceDefinitions) operations.deleteManagedCrd(crd);
-  for (const resource of ownedClusterScoped.admissionPolicies) operations.deleteManagedClusterRbac(resource);
   for (const resource of ownedClusterScoped.clusterRbac) operations.deleteManagedClusterRbac(resource);
+  const remaining = operations.listManagedClusterResiduals();
+  if (remaining.length) throw new Error(`Console cluster-scoped resources remain after uninstall: ${remaining.join(', ')}`);
+  const remainingVolumes = operations.listManagedPersistentVolumes();
+  if (remainingVolumes.length) throw new Error(`Console persistent volumes remain after uninstall: ${remainingVolumes.join(', ')}`);
   return {
     releaseDigest: installed.releaseDigest,
     ...(hostCleanup ? {hostCleanup} : {}),
@@ -2553,6 +2578,8 @@ export async function bootstrap(lock, {
   );
   const installed = readInstallationLock();
   const existingNamespaces = existingManagedNamespaces();
+  if (!installed) assertNoManagedClusterResiduals();
+  assertManagedAdmissionParameters();
   if (!installed && !lock.auxiliaryArtifacts?.cliArtifacts) {
     throw new Error('Fresh installation release lock lacks the digest-bound Console CLI artifact');
   }
