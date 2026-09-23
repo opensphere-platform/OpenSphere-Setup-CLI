@@ -2250,7 +2250,7 @@ export function listClusterWideCustomResourceInstances(crd) {
   }).sort();
 }
 
-export async function uninstallManagedInstallation({ runtime = {} } = {}) {
+export async function uninstallManagedInstallation({ runtime = {}, onProgress = () => {} } = {}) {
   const operations = {
     purgeBeszelHostState,
     purgeExternalConsoleRbac,
@@ -2276,6 +2276,7 @@ export async function uninstallManagedInstallation({ runtime = {} } = {}) {
     operations.existingManagedNamespaces = () =>
       existingManagedNamespaces(runtime.existingOpenSphereNamespaces());
   }
+  onProgress('[삭제 1/6] 설치 소유권·삭제 대상 확인');
   const installed = operations.readInstallationLock();
   const state = operations.readInstallationState();
   const namespaces = operations.existingManagedNamespaces();
@@ -2294,11 +2295,19 @@ export async function uninstallManagedInstallation({ runtime = {} } = {}) {
     throw new Error(`Managed namespace ownership differs (missing=${missing.join(',') || 'none'}, unexpected=${unexpected.join(',') || 'none'})`);
   }
   const persistentVolumes = operations.listManagedPersistentVolumes();
-  const hostCleanup = await operations.purgeBeszelHostState(installed);
-  await operations.purgeExternalConsoleRbac(installed);
+  onProgress('[삭제 2/6] Beszel 노드 데이터 확인·정리');
+  const hostCleanup = await operations.purgeBeszelHostState(installed, {onProgress});
+  onProgress('[삭제 3/6] 공유 namespace의 Console 전용 RBAC 정리');
+  await operations.purgeExternalConsoleRbac(installed, {onProgress});
+  onProgress('[삭제 4/6] Console namespace 삭제 요청');
   for (const namespace of MANAGED_NAMESPACES) operations.deleteManagedNamespace(namespace);
-  for (const namespace of MANAGED_NAMESPACES) operations.waitForManagedNamespaceDeletion(namespace);
+  for (const namespace of MANAGED_NAMESPACES) {
+    onProgress(`[namespace 대기] ${namespace}: 삭제 완료 확인 (대기 한도 600초)`);
+    operations.waitForManagedNamespaceDeletion(namespace);
+  }
+  onProgress(`[삭제 5/6] Console 전용 PV ${persistentVolumes.length}개 잔여 확인·정리`);
   for (const volume of persistentVolumes) operations.deleteManagedPersistentVolume(volume);
+  onProgress('[삭제 6/6] Console 전용 CRD·정책·클러스터 RBAC 정리');
   const ownedClusterScoped = state.managedClusterScopedResources;
   for (const crd of ownedClusterScoped.customResourceDefinitions) {
     const instances = operations.listManagedCrdInstances(crd);

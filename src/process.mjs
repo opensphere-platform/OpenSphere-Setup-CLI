@@ -10,7 +10,10 @@ export function run(command, args, options = {}) {
   const capture = Boolean(options.capture);
   const result = spawnSync(command, args, {
     encoding: 'utf8',
-    stdio: capture ? [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'] : 'inherit',
+    // Supplied manifests need a pipe even when stdout/stderr stream to the user.
+    // Inheriting stdin here makes `kubectl create -f -` wait on the terminal.
+    stdio: [options.input === undefined ? (capture ? 'ignore' : 'inherit') : 'pipe',
+      capture ? 'pipe' : 'inherit', capture ? 'pipe' : 'inherit'],
     input: options.input,
     windowsHide: true,
     maxBuffer: MAX_BUFFER_BYTES,

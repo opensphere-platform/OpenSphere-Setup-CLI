@@ -40,7 +40,7 @@ export function beszelInspectionJob(node,image,releaseDigest) {
   return job;
 }
 
-function verifyUnstartedBeszelIsEmpty(lock,{run}) {
+function verifyUnstartedBeszelIsEmpty(lock,{run,onProgress}) {
   const assertNoWriter=()=>{
     if(read(['-n',namespace,'get','daemonset','beszel-agent'],run))throw Error('Beszel agent appeared during empty-state inspection');
     const pods=JSON.parse(run(['get','pods','--all-namespaces','-o','json'],{capture:true}));
@@ -56,7 +56,8 @@ function verifyUnstartedBeszelIsEmpty(lock,{run}) {
   };
   assertNoWriter();
   const nodes=inventory();
-  for(const node of nodes){
+  for(const [index,node] of nodes.entries()){
+    onProgress(`[노드 확인 ${index+1}/${nodes.length}] ${node.name}: Beszel 잔여 데이터 읽기 전용 검사 (대기 한도 210초)`);
     const job=beszelInspectionJob(node.name,lock.components?.beszelBootstrap?.image,lock.releaseDigest);
     const created=JSON.parse(run(['create','-f','-','-o','json'],{capture:true,input:JSON.stringify(job)}));
     if(!/^console-inspect-beszel-[a-z0-9-]+$/.test(created.metadata?.name??''))throw Error('Invalid inspection Job identity');
@@ -66,6 +67,7 @@ function verifyUnstartedBeszelIsEmpty(lock,{run}) {
       throw Error(`Beszel host data is not verified empty on ${node.name}; inspect Job ${created.metadata.name}. No host data or namespaces were deleted`);
     }
     run(['-n',namespace,'delete','job',created.metadata.name,'--wait=true']);
+    onProgress(`[노드 확인 완료 ${index+1}/${nodes.length}] ${node.name}: 비어 있음`);
   }
   assertNoWriter();
   if(JSON.stringify(inventory())!==JSON.stringify(nodes))throw Error('Node identities changed during empty-state inspection');
@@ -74,20 +76,21 @@ function verifyUnstartedBeszelIsEmpty(lock,{run}) {
 
 // Run before namespace deletion so pull credentials and retry evidence remain.
 // Stop the agent first; never infer cleanup from a deleted or offline workload.
-export function purgeBeszelHostState(lock,{run=kubectl}={}) {
+export function purgeBeszelHostState(lock,{run=kubectl,onProgress=()=>{}}={}) {
   const image=lock.components?.beszelBootstrap?.image;
   const checkpoint=read(['-n',namespace,'get','configmap',planName],run);
   let plan=checkpoint?JSON.parse(checkpoint.data?.['plan.json']??'null'):null;
   const daemon=read(['-n',namespace,'get','daemonset','beszel-agent'],run);
   if(!plan){
-    if(!daemon)return verifyUnstartedBeszelIsEmpty(lock,{run});
+    if(!daemon)return verifyUnstartedBeszelIsEmpty(lock,{run,onProgress});
     if(!daemon.spec?.template?.spec?.volumes?.some(v=>v.hostPath?.path===dataPath))throw Error('Beszel host path differs; refusing cleanup');
     const inventory=JSON.parse(run(['get','nodes','-o','json'],{capture:true}));
     const nodes=inventory.items.map(n=>({name:n.metadata.name,uid:n.metadata.uid}));
     if(!nodes.length||nodes.some(n=>!n.uid))throw Error('Cleanup requires an exact node inventory');
     for(const n of nodes)beszelCleanupJob(n.name,image,lock.releaseDigest);
     plan={releaseDigest:lock.releaseDigest,daemonUid:daemon.metadata.uid,nodes};
-    run(['create','-f','-'],{input:JSON.stringify({apiVersion:'v1',kind:'ConfigMap',metadata:{name:planName,namespace},data:{'plan.json':JSON.stringify(plan)}})});
+    onProgress('[Beszel] 소유권 확인된 노드 삭제 계획 기록');
+    run(['create','-f','-','--request-timeout=30s'],{input:JSON.stringify({apiVersion:'v1',kind:'ConfigMap',metadata:{name:planName,namespace},data:{'plan.json':JSON.stringify(plan)}}),spawn:{timeout:45000}});
   }
   if(plan.releaseDigest!==lock.releaseDigest||!Array.isArray(plan.nodes)||!plan.nodes.length||!plan.daemonUid)throw Error('Cleanup checkpoint differs from the installation');
   if(daemon && daemon.metadata.uid!==plan.daemonUid)throw Error('Beszel agent was replaced during purge');
@@ -97,16 +100,18 @@ export function purgeBeszelHostState(lock,{run=kubectl}={}) {
     if(live?.metadata.uid!==node.uid||!live.status?.conditions?.some(c=>c.type==='Ready'&&c.status==='True'))throw Error(`Cleanup node is missing, replaced or not Ready: ${node.name}`);
   }
   if(daemon)run(['-n',namespace,'delete','daemonset','beszel-agent','--cascade=foreground','--wait=true','--timeout=180s']);
-  for(const node of plan.nodes){
+  for(const [index,node] of plan.nodes.entries()){
+    onProgress(`[노드 정리 ${index+1}/${plan.nodes.length}] ${node.name}: Beszel 전용 데이터 삭제 (대기 한도 210초)`);
     const created=JSON.parse(run(['create','-f','-','-o','json'],{capture:true,input:JSON.stringify(beszelCleanupJob(node.name,image,lock.releaseDigest))}));
     if(!/^console-purge-beszel-[a-z0-9-]+$/.test(created.metadata?.name??''))throw Error('Invalid cleanup Job identity');
     run(['-n',namespace,'wait','--for=condition=complete','job/'+created.metadata.name,'--timeout=210s'],{capture:true});
     run(['-n',namespace,'delete','job',created.metadata.name,'--wait=true']);
+    onProgress(`[노드 정리 완료 ${index+1}/${plan.nodes.length}] ${node.name}`);
   }
   return {nodes:plan.nodes.map(n=>n.name),status:'Purged'};
 }
 
-export function purgeExternalConsoleRbac(lock,{run=kubectl}={}) {
+export function purgeExternalConsoleRbac(lock,{run=kubectl,onProgress=()=>{}}={}) {
   const checkpointName='opensphere-console-rbac-purge-plan';
   const checkpoint=read(['-n','opensphere-console','get','configmap',checkpointName],run);
   let plan=checkpoint?JSON.parse(checkpoint.data?.['plan.json']??'null'):null;
@@ -125,7 +130,8 @@ export function purgeExternalConsoleRbac(lock,{run=kubectl}={}) {
       }
     }
     plan={releaseDigest:lock.releaseDigest,resources};
-    run(['create','-f','-'],{input:JSON.stringify({apiVersion:'v1',kind:'ConfigMap',metadata:{name:checkpointName,namespace:'opensphere-console'},data:{'plan.json':JSON.stringify(plan)}})});
+    onProgress(`[RBAC] Console 전용 리소스 ${resources.length}개 삭제 계획 기록 (요청 한도 30초)`);
+    run(['create','-f','-','--request-timeout=30s'],{input:JSON.stringify({apiVersion:'v1',kind:'ConfigMap',metadata:{name:checkpointName,namespace:'opensphere-console'},data:{'plan.json':JSON.stringify(plan)}}),spawn:{timeout:45000}});
   }
   if(plan?.releaseDigest!==lock.releaseDigest||!Array.isArray(plan.resources))throw Error('RBAC cleanup checkpoint differs');
   for(const resource of plan.resources){
