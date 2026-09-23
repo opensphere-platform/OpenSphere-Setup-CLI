@@ -70,3 +70,20 @@ export function renderRegistryKubernetesEgress(source, rules) {
   if ([...source.matchAll(pattern)].length !== 1) fail();
   return source.replace(pattern, (_, indent) => rules.map(rule => `${indent}- ${JSON.stringify(rule)}`).join('\n'));
 }
+
+export function discoverConsoleApiCiliumPolicy(rules,kubectl) {
+  const text=kubectl(['get','customresourcedefinition','ciliumnetworkpolicies.cilium.io','--ignore-not-found','-o','json'],{capture:true});
+  if(!text.trim())return '';
+  const definition=JSON.parse(text);
+  if(definition.metadata?.name!=='ciliumnetworkpolicies.cilium.io'
+    ||definition.spec?.group!=='cilium.io'||definition.spec?.names?.kind!=='CiliumNetworkPolicy')throw Error('Unexpected Cilium policy API definition');
+  // Reuse the same exact HTTPS target validation as standard NetworkPolicy.
+  renderRegistryKubernetesEgress(`  - ${KUBERNETES_EGRESS_SLOT}`,rules);
+  const ports=[...new Set(rules.map(rule=>rule.ports[0].port))].sort((a,b)=>a-b)
+    .map(port=>({port:String(port),protocol:'TCP'}));
+  return '\n---\n'+JSON.stringify({apiVersion:'cilium.io/v2',kind:'CiliumNetworkPolicy',
+    metadata:{name:'opensphere-console-api-kubernetes-egress',namespace:'opensphere-console',
+      labels:{'app.kubernetes.io/part-of':'opensphere-console','app.kubernetes.io/managed-by':'opensphere-setup'}},
+    spec:{endpointSelector:{matchLabels:{'app.kubernetes.io/name':'opensphere-console-api'}},
+      egress:[{toEntities:['kube-apiserver'],toPorts:[{ports}]}]}})+'\n';
+}

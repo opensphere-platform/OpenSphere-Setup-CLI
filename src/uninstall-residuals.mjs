@@ -28,6 +28,50 @@ export function beszelCleanupJob(node,image,releaseDigest) {
       volumes:[{name:'state',hostPath:{path:dataPath,type:'DirectoryOrCreate'}}]}}}};
 }
 
+export function beszelInspectionJob(node,image,releaseDigest) {
+  const job=beszelCleanupJob(node,image,releaseDigest);
+  job.metadata.generateName='console-inspect-beszel-';
+  const container=job.spec.template.spec.containers[0];
+  container.name='inspect';
+  container.command=['/bin/sh','-ec','test -d /state; entries="$(ls -A /state)"; test -z "$entries"'];
+  container.volumeMounts[0].readOnly=true;
+  // DirectoryOrCreate may leave an empty mount directory on a clean node;
+  // the inspecting container has no writable host mount and deletes no data.
+  return job;
+}
+
+function verifyUnstartedBeszelIsEmpty(lock,{run}) {
+  const assertNoWriter=()=>{
+    if(read(['-n',namespace,'get','daemonset','beszel-agent'],run))throw Error('Beszel agent appeared during empty-state inspection');
+    const pods=JSON.parse(run(['get','pods','--all-namespaces','-o','json'],{capture:true}));
+    if(!Array.isArray(pods.items))throw Error('Cannot inspect Beszel host path users');
+    if(pods.items.some(p=>!['Succeeded','Failed'].includes(p.status?.phase)
+      && p.spec?.volumes?.some(v=>v.hostPath?.path===dataPath)))throw Error('A live Pod still uses the Beszel host path');
+  };
+  const inventory=()=>{
+    const nodes=JSON.parse(run(['get','nodes','-o','json'],{capture:true})).items;
+    if(!Array.isArray(nodes)||!nodes.length||nodes.some(n=>!n.metadata?.uid
+      ||!n.status?.conditions?.some(c=>c.type==='Ready'&&c.status==='True')))throw Error('Empty-state inspection requires every exact node to be Ready');
+    return nodes.map(n=>({name:n.metadata.name,uid:n.metadata.uid})).sort((a,b)=>a.name.localeCompare(b.name));
+  };
+  assertNoWriter();
+  const nodes=inventory();
+  for(const node of nodes){
+    const job=beszelInspectionJob(node.name,lock.components?.beszelBootstrap?.image,lock.releaseDigest);
+    const created=JSON.parse(run(['create','-f','-','-o','json'],{capture:true,input:JSON.stringify(job)}));
+    if(!/^console-inspect-beszel-[a-z0-9-]+$/.test(created.metadata?.name??''))throw Error('Invalid inspection Job identity');
+    try {
+      run(['-n',namespace,'wait','--for=condition=complete','job/'+created.metadata.name,'--timeout=210s'],{capture:true});
+    } catch {
+      throw Error(`Beszel host data is not verified empty on ${node.name}; inspect Job ${created.metadata.name}. No host data or namespaces were deleted`);
+    }
+    run(['-n',namespace,'delete','job',created.metadata.name,'--wait=true']);
+  }
+  assertNoWriter();
+  if(JSON.stringify(inventory())!==JSON.stringify(nodes))throw Error('Node identities changed during empty-state inspection');
+  return {nodes:nodes.map(n=>n.name),status:'VerifiedEmpty'};
+}
+
 // Run before namespace deletion so pull credentials and retry evidence remain.
 // Stop the agent first; never infer cleanup from a deleted or offline workload.
 export function purgeBeszelHostState(lock,{run=kubectl}={}) {
@@ -36,7 +80,7 @@ export function purgeBeszelHostState(lock,{run=kubectl}={}) {
   let plan=checkpoint?JSON.parse(checkpoint.data?.['plan.json']??'null'):null;
   const daemon=read(['-n',namespace,'get','daemonset','beszel-agent'],run);
   if(!plan){
-    if(!daemon)throw Error('Beszel agent and cleanup checkpoint are both missing; host-state ownership requires operator inspection before purge');
+    if(!daemon)return verifyUnstartedBeszelIsEmpty(lock,{run});
     if(!daemon.spec?.template?.spec?.volumes?.some(v=>v.hostPath?.path===dataPath))throw Error('Beszel host path differs; refusing cleanup');
     const inventory=JSON.parse(run(['get','nodes','-o','json'],{capture:true}));
     const nodes=inventory.items.map(n=>({name:n.metadata.name,uid:n.metadata.uid}));

@@ -1,4 +1,19 @@
-# OpenSphere Setup CLI 0.5.0-edge.34
+# OpenSphere Setup CLI 0.5.0-edge.35
+
+This release publishes only the Linux amd64 portable archive and SHA256SUMS for
+the current RKE2 installation.
+
+Uninstall now handles an installation that stopped before Beszel was created.
+When both the agent and its cleanup checkpoint are absent, read-only Jobs must
+verify the exact Beszel directory is empty on every Ready, unchanged node and no
+live Pod uses that path. Nonempty/unreadable data, an unavailable node, or an
+appearing agent stops deletion. No ownership checkpoint is invented and this
+branch deletes no host data. Existing installed-agent cleanup retains its checks.
+
+When the Cilium policy API is present, fresh installation materializes a namespaced
+Console API policy for the kube-apiserver entity on the discovered HTTPS ports.
+It keeps standard NetworkPolicy rules and does not change global Cilium settings.
+The accompanying Console release fixes both PostgreSQL PGDATA paths and nginx DNS.
 
 Fresh bootstrap asks the administrator for the Console HTTPS URL and an available
 StorageClass in the terminal, and confirms them before authentication or cluster
