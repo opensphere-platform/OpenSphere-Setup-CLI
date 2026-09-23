@@ -27,13 +27,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: windows-2025
-            platform: windows
-            architecture: amd64
-            pwsh_asset: PowerShell-7.6.4-win-x64.zip
-            kubectl_os: windows
-            kubectl_arch: amd64
-            archive: opensphere-setup-windows-amd64.zip
+          # Publish only the runtime used by the current RKE2 installation.
+          # Add another target only when an actual installation needs it.
           - runner: ubuntu-24.04
             platform: linux
             architecture: amd64
@@ -41,27 +36,6 @@ jobs:
             kubectl_os: linux
             kubectl_arch: amd64
             archive: opensphere-setup-linux-amd64.tar.gz
-          - runner: ubuntu-24.04-arm
-            platform: linux
-            architecture: arm64
-            pwsh_asset: powershell-7.6.4-linux-arm64.tar.gz
-            kubectl_os: linux
-            kubectl_arch: arm64
-            archive: opensphere-setup-linux-arm64.tar.gz
-          - runner: macos-15-intel
-            platform: darwin
-            architecture: amd64
-            pwsh_asset: powershell-7.6.4-osx-x64.tar.gz
-            kubectl_os: darwin
-            kubectl_arch: amd64
-            archive: opensphere-setup-darwin-amd64.tar.gz
-          - runner: macos-14
-            platform: darwin
-            architecture: arm64
-            pwsh_asset: powershell-7.6.4-osx-arm64.tar.gz
-            kubectl_os: darwin
-            kubectl_arch: arm64
-            archive: opensphere-setup-darwin-arm64.tar.gz
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
@@ -375,9 +349,9 @@ jobs:
           expected="setup-v$version"
           test "$RELEASE_TAG" = "$expected"
           cd dist
-          sha256sum opensphere-setup-* opensphere-setup.exe > SHA256SUMS
-          test "$(find . -maxdepth 1 -type f -name 'opensphere-setup-*' | wc -l)" -eq 5
-          test -s opensphere-setup.exe
+          test -s opensphere-setup-linux-amd64.tar.gz
+          test "$(find . -maxdepth 1 -type f | wc -l)" -eq 1
+          sha256sum opensphere-setup-linux-amd64.tar.gz > SHA256SUMS
 
       - name: Publish public GitHub Release
         shell: bash
@@ -385,8 +359,7 @@ jobs:
           set -euo pipefail
           args=(
             "$RELEASE_TAG"
-            dist/opensphere-setup-*
-            dist/opensphere-setup.exe
+            dist/opensphere-setup-linux-amd64.tar.gz
             dist/SHA256SUMS
             --repo "$GITHUB_REPOSITORY"
             --target "$GITHUB_SHA"
@@ -404,7 +377,8 @@ jobs:
             -H 'X-GitHub-Api-Version: 2026-03-10' \
             "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG")"
           test "$(jq -r '.immutable' <<<"$release")" = "true"
-          for file in dist/opensphere-setup-* dist/opensphere-setup.exe dist/SHA256SUMS; do
+          test "$(jq '.assets | length' <<<"$release")" -eq 2
+          for file in dist/opensphere-setup-linux-amd64.tar.gz dist/SHA256SUMS; do
             name="$(basename "$file")"
             local_digest="sha256:$(sha256sum "$file" | awk '{print $1}')"
             remote_digest="$(jq -r --arg name "$name" '.assets[] | select(.name == $name) | .digest' <<<"$release")"

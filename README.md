@@ -50,6 +50,10 @@ Setup은 최초 Console bootstrap에서 실행 프로필만 준비합니다. Roo
 
 ### 압축형 포터블 패키지 — Windows/Linux/macOS
 
+이후 Release Assets는 실제 설치에 사용하는 플랫폼만 발행한다. 현재 RKE2 대상은
+Linux amd64이며, 기본 발행 파일은 해당 아카이브와 `SHA256SUMS` 두 개다.
+이미 발행한 edge.34의 다른 플랫폼 자산은 해당 버전에 한해 사용할 수 있다.
+
 해당 OS·CPU 아카이브를 검증해 원하는 폴더에 풀고 그 자리에서 실행한다. Windows는 `.\opensphere-setup.exe`, Linux/macOS는 `./opensphere-setup`을 사용하며 `runtime` 폴더를 함께 보존한다. 호스트에 Node.js, PowerShell, kubectl을 별도 설치할 필요는 없다.
 
 이후 `opensphere-setup` 예제는 위 실행 파일의 경로로 대체한다. 전역 PATH 등록을 전제하지 않는다.
