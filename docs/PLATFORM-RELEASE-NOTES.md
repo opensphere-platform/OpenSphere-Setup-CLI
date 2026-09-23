@@ -1,4 +1,20 @@
-# OpenSphere Setup CLI 0.5.0-edge.37
+# OpenSphere Setup CLI 0.5.0-edge.38
+
+Uninstall now inventories Foundation/catalog CRDs using their actual Cluster or
+Namespaced scope. It refuses shared custom data before deleting anything, removes
+all owned admission bindings before deleting parameter namespaces or starting
+cleanup Jobs, and verifies cluster resources and PVs are gone before success.
+Previously a Namespaced-only guard stopped after namespace deletion and left a
+Ceph binding whose missing parameter rejected the next Beszel bootstrap Job.
+
+Fresh bootstrap checks for orphaned Console cluster resources before writing
+namespaces/credentials. Resume diagnoses missing managed admission parameters.
+Neither path changes Deny to Allow or disables another owner's policy. The local
+clean-install harness now calls production uninstall instead of maintaining a
+separate, outdated deletion implementation. The isolated Kubernetes admission
+regression is distinct from full Console installation acceptance.
+
+## Earlier edge.37 correction retained
 
 Fresh installation now renders the Console LoadBalancer port from the exact
 administrator-selected origin: HTTPS defaults to443, explicit ports are retained,

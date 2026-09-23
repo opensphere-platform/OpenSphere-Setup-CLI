@@ -16,47 +16,8 @@ if (-not $EvidenceDirectory.StartsWith($RepoRoot, [System.StringComparison]::Ord
 [System.IO.Directory]::CreateDirectory($EvidenceDirectory) | Out-Null
 
 
-$Namespaces = @(
-  'opensphere-console-data',
-  'opensphere-console-change',
-  'opensphere-monitoring',
-  'opensphere-console',
-  'opensphere-osaa-credentials',
-  'opensphere-shell-sessions',
-  'opensphere-system'
-)
-$Crds = @(
-  'uipluginpackages.plugins.opensphere.io',
-  'uipluginregistrations.plugins.opensphere.io'
-)
-$ClusterRoles = @(
-  'opensphere-extension-controller-cli-downloads',
-  'opensphere-registry',
-  'opensphere-console-osaa-gateway-environment-reader',
-  'opensphere-shell-runtime-token-reviewer',
-  'opensphere-cluster-manager-runtime',
-  'opensphere-extension-installation-profile-reader'
-)
-$ClusterRoleBindings = @(
-  'opensphere-extension-controller-cli-downloads',
-  'opensphere-registry',
-  'opensphere-console-osaa-gateway-environment-reader',
-  'opensphere-shell-runtime-token-reviewer',
-  'opensphere-cluster-manager-runtime',
-  'opensphere-extension-installation-profile-reader'
-)
-$AdmissionPolicies = @(
-  'opensphere-console-manual-ui-contract',
-  'opensphere-console-image-integrity-workload',
-  'opensphere-console-image-integrity-cronjob',
-  'opensphere-shell-runtime-template-v1'
-)
-$AdmissionPolicyBindings = @(
-  'opensphere-console-manual-ui-contract',
-  'opensphere-console-image-integrity-workload',
-  'opensphere-console-image-integrity-cronjob',
-  'opensphere-shell-runtime-template-v1'
-)
+$Namespaces = @(& node (Join-Path $RepoRoot 'scripts/e2e-managed-cleanup.mjs') --inventory | ConvertFrom-Json)
+if ($LASTEXITCODE -ne 0 -or $Namespaces.Count -eq 0) { throw 'Canonical namespace inventory unavailable' }
 $ManagedSecrets = @(
   'opensphere-console-data/opensphere-supabase-secrets',
   'opensphere-console-change/opensphere-gitea-runtime',
@@ -109,58 +70,11 @@ function Assert-OtherProductNamespacesPreserved([object[]]$Before) {
   }
 }
 
-function Assert-NoCustomResourceInstances {
-  foreach ($crd in $Crds) {
-    $definitionJson = & kubectl --context $Context get customresourcedefinition $crd --ignore-not-found -o json
-    if ($LASTEXITCODE -ne 0) { throw "CRD identity check failed before scoped cleanup: $crd" }
-    if ([string]::IsNullOrWhiteSpace(($definitionJson -join ''))) { continue }
-    $definition = $definitionJson | ConvertFrom-Json
-    if ($null -eq $definition -or $definition.metadata.name -ne $crd -or $definition.spec.scope -ne 'Namespaced') {
-      throw "Refusing to delete CRD with unexpected identity or scope: $crd"
-    }
-
-    $inventoryJson = & kubectl --context $Context get $crd --all-namespaces -o json
-    if ($LASTEXITCODE -ne 0) { throw "Cluster-wide CR inventory failed before scoped cleanup: $crd" }
-    $inventory = $inventoryJson | ConvertFrom-Json
-    if ($null -eq $inventory -or $null -eq $inventory.items) {
-      throw "Cluster-wide CR inventory was not an exact Kubernetes List: $crd"
-    }
-    $items = @($inventory.items)
-    if ($items.Count) {
-      $references = @($items | ForEach-Object { "$([string]$_.metadata.namespace)/$([string]$_.metadata.name)" })
-      throw "Refusing to delete shared CRD ${crd}; cluster-wide instances remain: $($references -join ', ')"
-    }
-  }
-}
-
 function Remove-OpenSphere {
   $otherProductNamespaces = Get-OtherProductNamespaceIdentity
-  Invoke-Kubectl delete namespace @Namespaces --ignore-not-found --wait=false | Out-Null
-  $deadline = [DateTimeOffset]::UtcNow.AddMinutes(5)
-  do {
-    $remaining = @($Namespaces | Where-Object {
-      (& kubectl --context $Context get namespace $_ --ignore-not-found -o name 2>$null)
-    })
-    if ($remaining.Count -eq 0) { break }
-    Start-Sleep -Seconds 2
-  } while ([DateTimeOffset]::UtcNow -lt $deadline)
-  if ($remaining.Count) { throw "Namespaces did not terminate: $($remaining -join ', ')" }
-
-  Assert-NoCustomResourceInstances
-  Invoke-Kubectl delete customresourcedefinition @Crds --ignore-not-found --wait=true | Out-Null
-  Invoke-Kubectl delete clusterrole @ClusterRoles --ignore-not-found --wait=true | Out-Null
-  Invoke-Kubectl delete clusterrolebinding @ClusterRoleBindings --ignore-not-found --wait=true | Out-Null
-  Invoke-Kubectl delete validatingadmissionpolicybinding @AdmissionPolicyBindings --ignore-not-found --wait=true | Out-Null
-  Invoke-Kubectl delete validatingadmissionpolicy @AdmissionPolicies --ignore-not-found --wait=true | Out-Null
-
+  & node (Join-Path $RepoRoot 'scripts/e2e-managed-cleanup.mjs') --context $Context
+  if ($LASTEXITCODE -ne 0) { throw 'Managed uninstall did not complete; refusing the next bootstrap' }
   Assert-OtherProductNamespacesPreserved $otherProductNamespaces
-
-  $pvs = & kubectl --context $Context get pv -o json | ConvertFrom-Json
-  $pvItems = if ($null -eq $pvs -or $null -eq $pvs.items) { @() } else { @($pvs.items) }
-  $leftovers = @($pvItems | Where-Object { $_.spec.claimRef.namespace -in $Namespaces })
-  if ($leftovers.Count) {
-    throw "OpenSphere persistent volumes remain after cleanup: $($leftovers.metadata.name -join ', ')"
-  }
 }
 
 function Reset-TestEnvironment {
