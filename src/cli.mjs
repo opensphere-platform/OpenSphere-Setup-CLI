@@ -124,6 +124,16 @@ async function readLock(lockPath) {
   return validateLock(JSON.parse(await readFile(lockPath, 'utf8')));
 }
 
+// The Console URL recorded by the installation in the current context, or undefined.
+function installedConsoleUrl() {
+  try {
+    const record = JSON.parse(kubectl(['-n', 'opensphere-console', 'get', 'configmap', 'opensphere-installation-lock', '-o', 'json'], { capture: true }));
+    return JSON.parse(record.data?.['config.json'] ?? 'null')?.consoleUrl;
+  } catch {
+    return undefined;
+  }
+}
+
 function help() {
   console.log(`OpenSphere Setup CLI ${setupPackage.version}
 
@@ -139,7 +149,7 @@ Usage:
       [--registry-username <github-login> --registry-token-stdin]
   opensphere-setup bootstrap --release <channel> [--lock <verified-lock-file>]
   opensphere-setup bootstrap -r <channel> [--lock <verified-lock-file>]
-  opensphere-setup prepare-ceph --context docker-desktop --channel edge [--apply]
+  opensphere-setup prepare-ceph [--context <kube-context>] [--console-url <https-origin>] [--apply]
       [--context <kube-context>] [--admin-username <name>]
        [--admin-display-name <name>] [--admin-email <email>]
        [--storage-class <name>] [--console <https-origin|loopback-http-origin>]
@@ -231,7 +241,12 @@ async function main() {
   if (command === 'help' || command === '--help' || command === '-h') return help();
   if (command === 'version' || command === '--version') return console.log(`opensphere-setup ${setupPackage.version}`);
   if (command === 'prepare-ceph') {
-    const result=prepareCephExecutionProfile({context:context||'docker-desktop',channel:option('--channel','edge'),consoleUrl:option('--console-url','https://localhost:1114')},{apply:hasOption('--apply')});
+    // No default cluster or Console (2026-09-23): prepare where the operator points, for the Console
+    // actually installed there. Until then this silently meant docker-desktop / https://localhost:1114.
+    const target={context:context||kubectl(['config','current-context'],{capture:true}),channel:option('--channel','edge'),
+      consoleUrl:hasOption('--console-url')?option('--console-url',''):installedConsoleUrl()};
+    if(!target.consoleUrl)throw new Error(`No installed Console is recorded in context ${target.context}; pass --console-url`);
+    const result=prepareCephExecutionProfile(target,{apply:hasOption('--apply')});
     console.log(JSON.stringify(result,null,2));return;
   }
   if (['--registry-auth','--github-client-id'].some(hasOption) && !['resolve','doctor','bootstrap','upgrade'].includes(command)) {

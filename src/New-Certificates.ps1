@@ -1,6 +1,8 @@
 param(
   [Parameter(Mandatory = $true)][string]$OutputDirectory,
-  [string[]]$DnsNames = @()
+  [string[]]$DnsNames = @(),
+  # A Console reached by address needs an iPAddress SAN; browsers ignore an IP written as a DNS name.
+  [string[]]$IpAddresses = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -50,6 +52,11 @@ $san = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuil
   if ($_ -and $_ -notmatch '[\s/]') { $san.AddDnsName($_) }
 }
 $san.AddIpAddress([System.Net.IPAddress]::Loopback)
+foreach ($address in $IpAddresses | Sort-Object -Unique) {
+  $parsed = $null
+  if (-not [System.Net.IPAddress]::TryParse($address, [ref]$parsed)) { throw "Not an IP address: $address" }
+  if (-not $parsed.Equals([System.Net.IPAddress]::Loopback)) { $san.AddIpAddress($parsed) }
+}
 $request.CertificateExtensions.Add($san.Build())
 $request.CertificateExtensions.Add(
   [System.Security.Cryptography.X509Certificates.X509BasicConstraintsExtension]::new($false, $false, 0, $true)

@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import { run } from './process.mjs';
+import { installTarget } from './install-target.mjs';
 
-// Approved 2026-09-07 for docker-desktop / HTTPS localhost / edge.
+// Approved 2026-09-07 (first exercised on docker-desktop / HTTPS localhost / edge). Since
+// 2026-09-23 the profile bytes stay pinned but the target cluster is not (install-target.mjs).
 // Setup prepares authority; actual chart operations remain 22 -> OS Shell -> owner.
 // No caller-supplied URL, chart, source path or arbitrary manifest is accepted.
 export const HISS_EXECUTION_PROFILE = Object.freeze({
@@ -37,13 +39,11 @@ export function verifyHissValidationArtifact(raw) {
 
 export function prepareHissValidation(raw, scope, {runner=run}={}) {
   // Reuse the same target boundary; validate before any API call.
-  let url; try { url=new URL(scope.consoleUrl); } catch { throw fail('INVALID_SCOPE','Invalid Console URL'); }
-  if(scope.context!=='docker-desktop'||scope.channel!=='edge'||url.origin!=='https://localhost:1114'
-    ||url.pathname!=='/'||url.search||url.hash||url.username||url.password) throw fail('INVALID_SCOPE','HISS validation is restricted to HTTPS localhost:1114, edge and docker-desktop');
+  const target = installTarget(scope);
   verifyHissValidationArtifact(raw);
   // Server-side apply makes the default ServiceAccount upsert atomic with the
   // namespace controller. Never force conflicts or modify unrelated fields.
-  runner('kubectl',['--context','docker-desktop','apply','--server-side','--field-manager=opensphere-setup-hiss','-f','-','--request-timeout=20s'],
+  runner('kubectl',['--context',target.context,'apply','--server-side','--field-manager=opensphere-setup-hiss','-f','-','--request-timeout=20s'],
     {capture:true,input:raw});
   return {applied:true,resourceCount:7,installationComplete:false};
 }
@@ -67,9 +67,7 @@ function observationIndex(returned, requested) {
 }
 
 export function verifyHissExecutionProfile(raw,scope) {
-  let url;try{url=new URL(scope.consoleUrl);}catch{throw fail('INVALID_SCOPE','Invalid Console URL');}
-  if(scope.context!=='docker-desktop'||scope.channel!=='edge'||url.protocol!=='https:'||url.hostname!=='localhost'
-    ||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw fail('INVALID_SCOPE','HISS candidate preparation is restricted to HTTPS localhost, edge and docker-desktop');
+  installTarget(scope);
   if(typeof raw!=='string'||Buffer.byteLength(raw)>1024*1024||digest(raw)!==HISS_EXECUTION_PROFILE.sha256)throw fail('UNTRUSTED_PROFILE','HISS prerequisite bytes differ from the captured contract');
   const profile=JSON.parse(raw);
   if(profile.schemaVersion!==1||profile.status!=='proposed-not-applied'||profile.resources.length!==54)throw fail('UNTRUSTED_PROFILE','HISS prerequisite envelope differs');
@@ -180,8 +178,8 @@ export async function prepareHissPrerequisites(raw,scope,{client,apply=false,onP
 // Explicit context is immutable for this adapter. It never follows a later
 // kubectl current-context or OPENSPHERE_KUBE_CONTEXT environment change.
 export function createHissPrerequisiteClient(scope,runner=run) {
-  if(scope.context!=='docker-desktop')throw fail('INVALID_SCOPE','Unexpected Kubernetes context');
-  const execute=(args,input)=>JSON.parse(runner('kubectl',['--context','docker-desktop',...args,'--request-timeout=10s','-o','json'],
+  const {context}=installTarget(scope);
+  const execute=(args,input)=>JSON.parse(runner('kubectl',['--context',context,...args,'--request-timeout=10s','-o','json'],
     {capture:true,input:JSON.stringify(input),spawn:{maxBuffer:8*1024*1024,timeout:60000}})||'null');
   return {
     read:async resources=>{

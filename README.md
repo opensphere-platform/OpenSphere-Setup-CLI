@@ -9,14 +9,26 @@ Setup CLI는 Windows에 설치해 상시 사용하는 프로그램이 아니다.
 
 현재 소스 버전은 `0.5.0-edge.33`입니다. 기존 OAuth·포터블 실행 계약을 유지하며 **Ceph 연결 준비를 22 → OS Shell → Cluster Manager로 실행하기 위한 고정 Job 프로필**을 포함합니다. [이번 변경과 경계](docs/CEPH-REPRESENTATIVE-EDGE33.md)를 참고하십시오.
 
-Setup은 최초 Console bootstrap에서 실행 프로필만 준비합니다. Rook·CSI의 실제 설치는 Console의 22 또는 같은 OS Shell 명령으로 요청합니다. 기존 localhost edge Console에는 아래 명령으로 프로필을 보완할 수 있습니다.
+Setup은 최초 Console bootstrap에서 실행 프로필만 준비합니다. Rook·CSI의 실제 설치는 Console의 22 또는 같은 OS Shell 명령으로 요청합니다. **어느 Ceph에 연결할지는 OS가 기동한 뒤 Console 설정으로 정하며, Setup과 프로필에는 특정 Ceph가 없습니다.** 이미 설치된 edge Console에는 아래 명령으로 프로필을 보완할 수 있습니다.
 
 ```powershell
-.\opensphere-setup.exe --channel edge prepare-ceph --context docker-desktop
-.\opensphere-setup.exe --channel edge prepare-ceph --context docker-desktop --apply
+.\opensphere-setup.exe --channel edge prepare-ceph --context <kube-context>
+.\opensphere-setup.exe --channel edge prepare-ceph --context <kube-context> --apply
 ```
 
-첫 명령은 서버 dry-run이며 두 번째만 적용합니다. 이 명령이 성공해도 Rook 설치나 외부 Ceph 연결 완료를 뜻하지 않습니다. Console source lock은 기존 `baeac27377a5e843d8ffe82992894bee53864e34`를 유지합니다.
+`--context`를 생략하면 현재 kubectl 문맥을, `--console-url`을 생략하면 그 클러스터의 설치 기록에 적힌 Console 주소를 쓴다. 첫 명령은 서버 dry-run이며 두 번째만 적용합니다. 이 명령이 성공해도 Rook 설치나 외부 Ceph 연결 완료를 뜻하지 않습니다. Console source lock은 기존 `baeac27377a5e843d8ffe82992894bee53864e34`를 유지합니다.
+
+### 설치 대상은 코드에 박혀 있지 않다 (2026-09-23)
+
+이전까지 설치 뒤 준비 셋(플랫폼 핵심·HISS·Ceph 실행 프로필)은 `docker-desktop / https://localhost:1114 / edge`에서만 동작했고, `bootstrap`은 그 밖의 설치에서 **알리지 않고 건너뛰었다.** 다른 클러스터는 "설치 성공"으로 끝나면서 22 → OS Shell이 기대는 준비가 빠졌다. 이제는 다음과 같다.
+
+- 준비 셋은 **실행한 kubectl 문맥**과 **그 설치의 Console 주소**를 대상으로 삼는다. 각 어댑터는 시작할 때 문맥을 한 번 고정하고 이후 current-context가 바뀌어도 따라가지 않는다.
+- 준비 파일의 바이트는 여전히 SHA-256으로 고정한다. 이미 게시된 파일 안의 `docker-desktop` 표기는 처음 승인한 곳의 기록일 뿐 대상 제한으로 쓰지 않는다.
+- 채널 제한(edge)과 Console 주소 형식(경로·자격증명 없는 HTTPS origin) 검사는 유지한다.
+- `--console https://<IP>:1114`처럼 IP로 설치하면 인증서의 **IP SAN**에 넣는다. 이전에는 IP를 DNS SAN에 넣어 브라우저가 일치로 보지 않았다.
+- `--trust-local-ca`는 localhost가 아닌 Console에도 쓸 수 있다. 설치 CA의 개인키는 발급 뒤 파일로 남지 않아, 신뢰해도 다른 이름의 인증서에 쓰일 수 없다.
+
+아직 남은 것: 설치 잠금 복구와 전진 복구(`--repair-plan`·`--forward-repair`)는 서명한 계획서에 `docker-desktop`과 `hostpath`가 들어 있어 여전히 그 환경 전용이다.
 
 ### Windows amd64 — 한 번 다운로드하고 재사용하는 포터블 실행 파일
 
@@ -44,7 +56,7 @@ Setup은 최초 Console bootstrap에서 실행 프로필만 준비합니다. Roo
 
 실행·체크섬 절차는 [`docs/PLATFORM-INSTALL.md`](docs/PLATFORM-INSTALL.md), 제품 기준은 [`docs/PORTABLE-EXECUTION-CONTRACT.md`](docs/PORTABLE-EXECUTION-CONTRACT.md)를 따른다. 이전 `Install-OpenSphereSetup.exe` 설치기는 사용하지 않는다. candidate/stable은 서명·공증 전까지 HOLD다.
 
-`bootstrap`과 `upgrade`는 호스트 `os` CLI를 자동 설치하지 않는다. 필요하면 `install-cli`를 별도로 실행한다. Windows 개발 CA 신뢰 등록도 `bootstrap --trust-local-ca`를 명시한 경우에만 수행한다.
+`bootstrap`과 `upgrade`는 호스트 `os` CLI를 자동 설치하지 않는다. 필요하면 `install-cli`를 별도로 실행한다. Windows 설치 CA 신뢰 등록도 `bootstrap --trust-local-ca`를 명시한 경우에만 수행한다(Console 주소가 localhost가 아니어도 된다).
 
 대화형 터미널에서 `bootstrap`, `doctor`, `upgrade` 같은 운영 명령을 시작하면 ANSI Shadow
 OpenSphere 배너를 표시한다. 파이프·CI 및 `version` 같은 기계 판독 출력에는 표시하지

@@ -1,9 +1,7 @@
 {
   "schema": "opensphere.ceph-preparation-profile/v1",
   "scope": {
-    "context": "docker-desktop",
-    "channel": "edge",
-    "consoleUrl": "https://localhost:1114"
+    "channel": "edge"
   },
   "bundleDigest": "sha256:2d54e4a4adb8436aaad8a5660b9a6482bfb6eefafe92437f6b2b4533ce4949e6",
   "image": "ghcr.io/opensphere-platform/opensphere-shell-cluster-manager@sha256:575f393441b073cb0bea4c5cf6481b89738fe72ced3797bdf99485403473efb1",

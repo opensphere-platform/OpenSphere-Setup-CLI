@@ -3,6 +3,7 @@ import {setTimeout as registryDelay} from 'node:timers/promises';
 import {REGISTRY_AUTH_SECRET,REGISTRY_AUTH_CONTRACT,REGISTRY_NAMESPACES,initialRegistryState,registryStateSecret,parseRegistryState,requiredImages,pullSecretData,GENERATION_ANNOTATION,validateCredential} from './registry-lifecycle-contract.mjs';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { isIP } from 'node:net';
 import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -55,6 +56,7 @@ import { assertForwardRepair } from './forward-repair.mjs';
 import {HISS_EXECUTION_PROFILE,HISS_VALIDATION_ARTIFACT,verifyHissExecutionProfile,verifyHissValidationArtifact,prepareHissPrerequisites,prepareHissValidation,createHissPrerequisiteClient} from './hiss-prerequisites.mjs';
 import {prepareCephExecutionProfile} from './ceph-prerequisites.mjs';
 import {PLATFORM_CORE_ARTIFACT,verifyPlatformCoreProfile,preparePlatformCorePrerequisites} from './platform-core-prerequisites.mjs';
+import {installTarget} from './install-target.mjs';
 import {
   CANONICAL_AGENT_NAMESPACE,
   hasLegacyInstalledAgentIdentity,
@@ -1219,8 +1221,11 @@ async function materializeFoundationInstallers(
     knowledgeDirectory = join(root, 'verified-knowledge');
     await materializeKnowledgeDirectory(lock.knowledge, knowledgeDirectory, { registryCredentials });
   }
-  const prepareHiss = target && lock.channel === 'edge' && consoleUrl === 'https://localhost:1114';
-  const hissScope = prepareHiss ? {context:currentKubeContext(),channel:lock.channel,consoleUrl} : null;
+  // Until 2026-09-23 this also required consoleUrl === 'https://localhost:1114', so any other
+  // cluster installed "successfully" without the preparation 22 -> OS Shell depends on, and said
+  // nothing. The target is now wherever this install actually goes (install-target.mjs).
+  const prepareHiss = target && lock.channel === 'edge';
+  const hissScope = prepareHiss ? installTarget({context:currentKubeContext(),channel:lock.channel,consoleUrl}) : null;
   if (prepareHiss) {
     verifyHissExecutionProfile(artifacts.find(a=>a.path===HISS_EXECUTION_PROFILE.consoleArtifactPath)?.contents,hissScope);
     verifyHissValidationArtifact(artifacts.find(a=>a.path===HISS_VALIDATION_ARTIFACT)?.contents);
@@ -2656,11 +2661,14 @@ export async function bootstrap(lock, {
     installationStateRecorded = true;
 
     const certificateGenerator = await materializeRuntimeAsset('New-Certificates.ps1', HERE);
+    // An address goes in the iPAddress SAN. Until 2026-09-23 it went in as a DNS name, which
+    // browsers never match — only a localhost Console ever got a usable certificate.
+    const consoleHost = new URL(effectiveConsoleUrl).hostname.replace(/^\[|\]$/g, '');
     try {
       run('pwsh', [
         '-NoProfile', '-NonInteractive', '-File', certificateGenerator.path,
         '-OutputDirectory', work,
-        '-DnsNames', new URL(effectiveConsoleUrl).hostname
+        ...(isIP(consoleHost) ? ['-IpAddresses', consoleHost] : ['-DnsNames', consoleHost])
       ]);
     } finally {
       await certificateGenerator.cleanup();
@@ -2671,11 +2679,13 @@ export async function bootstrap(lock, {
     if (externalShellTls) ensureExternalShellTlsSecret(effectiveShellTls, externalShellTls);
     else ensureTlsSecret('opensphere-console', 'shell-tls', certificate, key, ca);
 
+    // Until 2026-09-23 this was also limited to a loopback Console. The limit protected nothing:
+    // New-Certificates.ps1 writes only ca.crt and discards the CA private key, so the trusted CA
+    // can never sign another name. The explicit flag and the remaining conditions still gate it.
     const hostname = new URL(effectiveConsoleUrl).hostname;
     if (
       trustLocalCa
       && !externalShellTls
-      && ['localhost', '127.0.0.1', '[::1]'].includes(hostname)
       && lock.channel === 'edge'
       && effectiveAuthEnvironment === 'development'
       && process.platform === 'win32'
@@ -2691,7 +2701,7 @@ export async function bootstrap(lock, {
       } finally {
         await caInstaller.cleanup();
       }
-      progress?.item('신뢰', 'localhost 개발 CA를 현재 Windows 사용자 인증서 저장소에 등록');
+      progress?.item('신뢰', `${hostname} 설치 CA를 현재 Windows 사용자 인증서 저장소에 등록`);
     }
     progress?.done(externalShellTls ? shellTlsSecretRefText(effectiveShellTls) : 'managed shell-tls');
 

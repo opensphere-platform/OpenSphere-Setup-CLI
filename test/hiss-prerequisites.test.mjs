@@ -58,11 +58,11 @@ function memoryClient(present = []) {
 const prepare = (client, options = {}) => prepareHissPrerequisites(raw, scope, { client, ...options });
 const prepareApply = (client, options = {}) => prepare(client, { apply: true, ...options });
 
-test('HISS preparation rejects changed profile bytes and out-of-scope targets before I/O', async () => {
+test('HISS preparation rejects changed profile bytes and invalid targets before I/O', async () => {
   const client = memoryClient();
   await assert.rejects(prepareHissPrerequisites(`${raw}\n`, scope, { client, apply: true }), { code: 'UNTRUSTED_PROFILE' });
   for (const changes of [
-    { context: 'production' }, { channel: 'stable' }, { consoleUrl: 'https://example.test' },
+    { context: '' }, { context: '-x' }, { context: 'two words' }, { channel: 'stable' }, { extra: true },
     { consoleUrl: 'http://localhost:1114' }, { consoleUrl: 'https://localhost:1114/path' },
     { consoleUrl: 'https://user:password@localhost:1114' }, { consoleUrl: 'https://localhost:1114/?scope=edge' },
   ]) {
@@ -284,6 +284,26 @@ test('progress callback failures cannot reverse confirmed writes or change the c
   assert.equal(result.status, 'Prepared');
   assert.equal(result.context, 'docker-desktop');
   assert.equal(result.created.length, 54);
+});
+
+// Until 2026-09-23 the adapter could only ever name docker-desktop. The target is now the
+// cluster the install was invoked against, and it is still captured once and never followed.
+test('any invoked cluster is accepted, prepared, and pinned for the adapter lifetime', async () => {
+  const other = { context: 'rke2', channel: 'edge', consoleUrl: 'https://console.opensphere.test:1114' };
+  const result = await prepareHissPrerequisites(raw, other, { client: memoryClient(), apply: true });
+  assert.equal(result.status, 'Prepared');
+  assert.equal(result.created.length, 54);
+
+  const calls = [];
+  const mutable = { ...other };
+  const client = createHissPrerequisiteClient(mutable, (command, args, options) => {
+    calls.push(args);
+    return JSON.stringify(args.includes('get') ? { apiVersion: 'v1', kind: 'List', items: [] } : JSON.parse(options.input));
+  });
+  mutable.context = 'docker-desktop';
+  await client.read(profile.resources);
+  await client.create(profile.resources[0]);
+  for (const args of calls) assert.deepEqual(args.slice(0, 2), ['--context', 'rke2']);
 });
 
 test('kubectl adapter pins context and only exposes bounded get/create', async () => {

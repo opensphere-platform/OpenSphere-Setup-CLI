@@ -1,14 +1,17 @@
 import profile from './ceph-preparation-profile.json' with {type:'json'};
 import {run} from './process.mjs';
+import {installTarget,profileChannel} from './install-target.mjs';
 
 // This resource set is delivered inside the verified Setup release. There is
 // deliberately no argument for a manifest, image, path, account, key or URL.
+// It prepares the *execution* profile only; which Ceph to connect is chosen later
+// through Console settings. No Ceph cluster is named here or in the profile.
 export const CEPH_EXECUTION_PROFILE = profile;
 const identity=r=>`${r.apiVersion}/${r.kind}/${r.metadata.namespace||''}/${r.metadata.name}`;
 export function prepareCephExecutionProfile(scope,{apply=false,runner=run}={}){
- if(scope.context!=='docker-desktop'||scope.channel!=='edge'||scope.consoleUrl!=='https://localhost:1114')throw Error('Ceph preparation profile is restricted to docker-desktop / edge / https://localhost:1114');
- if(profile.schema!=='opensphere.ceph-preparation-profile/v1'||profile.resources.length!==14||!/^ghcr\.io\/opensphere-platform\/opensphere-shell-cluster-manager@sha256:[a-f0-9]{64}$/.test(profile.image))throw Error('Invalid bundled Ceph profile');
- const args=['--context','docker-desktop'],fieldManager='opensphere-setup-ceph';
+ const target=installTarget(scope);
+ if(profile.schema!=='opensphere.ceph-preparation-profile/v1'||profileChannel(profile.scope)!=='edge'||profile.resources.length!==14||!/^ghcr\.io\/opensphere-platform\/opensphere-shell-cluster-manager@sha256:[a-f0-9]{64}$/.test(profile.image))throw Error('Invalid bundled Ceph profile');
+ const args=['--context',target.context],fieldManager='opensphere-setup-ceph';
  const resources=structuredClone(profile.resources);
  // Never reset an operation or its request identity during Setup repair/replay.
  const record=runner('kubectl',[...args,'get','configmap','opensphere-ceph-preparation','-n','opensphere-console','--ignore-not-found','-o','json','--request-timeout=20s'],{capture:true});

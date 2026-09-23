@@ -1,17 +1,18 @@
 import {createHash} from 'node:crypto';
+import {installTarget,profileChannel} from './install-target.mjs';
 // Explicitly approved 2026-09-07. Setup prepares fixed authority only;
 // actual Core workload installation remains 22 -> OS Shell -> existing owner.
+// The bytes stay pinned; since 2026-09-23 the target cluster is not (install-target.mjs).
 export const PLATFORM_CORE_ARTIFACT='deploy/installation-profiles/platform-core.json';
 export const PLATFORM_CORE_SHA256='91f1797854df91116ea8f9f77f8c406d741291f1472ea8e8a0d65087554ce099';
-const scopeContract={context:'docker-desktop',channel:'edge',consoleUrl:'https://localhost:1114'};
 const canonical=v=>JSON.stringify(order(v));
 function order(v){return Array.isArray(v)?v.map(order):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,order(v[k])])):v;}
 const id=r=>`${r.apiVersion}/${r.kind}/${r.metadata.namespace||''}/${r.metadata.name}`;
 const fail=(code,message,evidence)=>Object.assign(Error(message),{code,...(evidence?{evidence}:{})});
 export function verifyPlatformCoreProfile(raw,scope){
- if(canonical(scope)!==canonical(scopeContract))throw fail('INVALID_SCOPE','Core preparation requires exactly docker-desktop / HTTPS localhost:1114 / edge');
+ installTarget(scope);
  if(typeof raw!=='string'||Buffer.byteLength(raw)>4*1024*1024||createHash('sha256').update(raw).digest('hex')!==PLATFORM_CORE_SHA256)throw fail('UNTRUSTED_PROFILE','Core preparation bytes differ from the explicitly approved artifact');
- const p=JSON.parse(raw);if(p.schema!=='opensphere.platform-core-preparation/v1'||canonical(p.scope)!==canonical(scopeContract)||p.resources.length!==53)throw fail('UNTRUSTED_PROFILE','Unexpected Core envelope');return p;
+ const p=JSON.parse(raw);if(p.schema!=='opensphere.platform-core-preparation/v1'||profileChannel(p.scope)!=='edge'||p.resources.length!==53)throw fail('UNTRUSTED_PROFILE','Unexpected Core envelope');return p;
 }
 const ref=(kind,name,namespace)=>({apiVersion:['Namespace','ServiceAccount'].includes(kind)?'v1':'rbac.authorization.k8s.io/v1',kind,metadata:{name,...(namespace?{namespace}:{})}});
 function references(items){const all=new Set(items.map(id)),refs=new Map();const add=r=>{if(!all.has(id(r)))refs.set(id(r),r);};for(const r of items){
