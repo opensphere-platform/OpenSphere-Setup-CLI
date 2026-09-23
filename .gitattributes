@@ -1,2 +1,4 @@
 # Exact-byte prerequisite contract: do not rewrite it when checking out on Windows.
 test/fixtures/hiss-execution-profile.v1.proposed.json -text
+# Provider fixtures are exact upstream bytes checked against a SHA-256 manifest.
+test/fixtures/console-contract-v66/** -text

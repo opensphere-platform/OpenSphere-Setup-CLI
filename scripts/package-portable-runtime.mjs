@@ -38,6 +38,7 @@ const libatomic = optionalOption('--libatomic');
 const nodeExecutable = optionalOption('--node-executable');
 const bundle = optionalOption('--bundle');
 const runtimeAssets = optionalOption('--runtime-assets');
+if (!nodeExecutable) throw new Error('--node-executable is required for Console installer subprocesses');
 if (!['windows', 'linux', 'darwin'].includes(platform)) throw new Error('invalid platform');
 if (!['amd64', 'arm64'].includes(architecture)) throw new Error('invalid architecture');
 if (platform === 'linux' && !libatomic) throw new Error('--libatomic is required for Linux packages');
@@ -55,6 +56,7 @@ try {
   await mkdir(join(runtime, 'bin'), { recursive: true });
   await cp(pwsh, join(runtime, 'pwsh'), { recursive: true });
   await cp(kubectl, join(runtime, 'bin', platform === 'windows' ? 'kubectl.exe' : 'kubectl'));
+  await cp(resolve(nodeExecutable), join(runtime, 'bin', platform === 'windows' ? 'node.exe' : 'node'));
 
   if (platform === 'windows') {
     await cp(sea, packagedSetup);
@@ -92,6 +94,7 @@ exec "$root/runtime/bin/node" "$root/runtime/setup/index.mjs" "$@"
     if (platform === 'linux') await chmod(join(packageRoot, 'bin', 'opensphere-setup.bin'), 0o755);
     await chmod(join(runtime, 'pwsh', 'pwsh'), 0o755);
     await chmod(join(runtime, 'bin', 'kubectl'), 0o755);
+    await chmod(join(runtime, 'bin', 'node'), 0o755);
   }
   if (usesMacIntelRuntime) {
     const packagedNode = join(runtime, 'bin', 'node');

@@ -29,11 +29,12 @@ test('public release publisher fails closed for a non-public repository', () => 
   assert.equal(pkg.private, true, 'npm publication remains deliberately disabled');
 });
 
-test('public publisher checks out the governed public Console source without a stored secret', () => {
+test('public publisher reads the governed private source with its dedicated read credential', () => {
   assert.match(workflow, /Checkout canonical Console manifests/);
   assert.match(workflow, /persist-credentials: false/);
   assert.doesNotMatch(workflow, /OPENSPHERE_CONSOLE_SOURCE_TOKEN/);
-  assert.doesNotMatch(workflow, /token:\s*[$][{][{]\s*(?:github[.]token|secrets[.])/);
+  assert.match(workflow, /token:\s*[$][{][{]\s*secrets[.]CONSOLE_SOURCE_READ_TOKEN\s*}}/);
+  assert.doesNotMatch(workflow, /token:\s*[$][{][{]\s*github[.]token/);
 });
 
 test('Linux release is a self-contained SEA with embedded certificate assets', () => {
@@ -68,5 +69,7 @@ test('public platform installation is unauthenticated and checksum verified', ()
   assert.match(documentation, /SHA256SUMS/);
   assert.match(documentation, /libatomic[.]so[.]1/);
   assert.match(documentation, /Node[.]js.*npm.*PowerShell.*kubectl.*libatomic.*별도로 설치할 필요가 없다/s);
-  assert.doesNotMatch(documentation, /gh auth login|Contents:\s*read/i);
+  assert.match(documentation, /Contents:\s*read/i);
+  assert.match(documentation, /OPENSPHERE_CONSOLE_SOURCE_TOKEN/);
+  assert.match(documentation, /공개 Setup 다운로드는 인증 없이 가능/);
 });

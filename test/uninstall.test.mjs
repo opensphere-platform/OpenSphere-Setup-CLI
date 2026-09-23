@@ -35,6 +35,12 @@ test('uninstall refuses to reach Kubernetes without the explicit destructive con
 
 test('managed cluster RBAC owns every cluster authority installed by Console bootstrap', () => {
   assert.deepEqual(MANAGED_CLUSTER_RBAC, [
+    'clusterrole/opensphere-cluster-manager-read',
+    'clusterrolebinding/opensphere-cluster-manager-read',
+    'clusterrole/opensphere-platform-support-core-observer',
+    'clusterrolebinding/opensphere-platform-support-core-observer',
+    'clusterrole/opensphere-platform-support-runtime',
+    'clusterrolebinding/opensphere-platform-support-runtime',
     'clusterrolebinding/opensphere-ceph-preparation-worker',
     'clusterrolebinding/opensphere-ceph-preparation-inspect',
     'clusterrole/opensphere-ceph-preparation-worker',
@@ -84,6 +90,8 @@ test('managed uninstall deletes namespaces, retained PVs, then only OpenSphere C
   const events = [];
   const result = await uninstallManagedInstallation({
     runtime: {
+      purgeBeszelHostState: () => {},
+      purgeExternalConsoleRbac: () => {},
       readInstallationLock: () => ({ releaseDigest: 'sha256:managed' }),
       readInstallationState: () => ownedInstallationState(),
       existingOpenSphereNamespaces: () => [...MANAGED_NAMESPACES, 'opensphere-developer', 'opensphere-www'],
@@ -121,6 +129,8 @@ test('managed uninstall preserves shared CRDs when any cluster-wide instance rem
   await assert.rejects(
     uninstallManagedInstallation({
       runtime: {
+      purgeBeszelHostState: () => {},
+      purgeExternalConsoleRbac: () => {},
         readInstallationLock: () => ({ releaseDigest: 'sha256:managed' }),
         readInstallationState: () => ownedInstallationState(),
         existingOpenSphereNamespaces: () => [...MANAGED_NAMESPACES, 'opensphere-developer'],
@@ -149,6 +159,8 @@ test('managed uninstall refuses an installation lock that does not own every nam
   await assert.rejects(
     uninstallManagedInstallation({
       runtime: {
+      purgeBeszelHostState: () => {},
+      purgeExternalConsoleRbac: () => {},
         readInstallationLock: () => ({ releaseDigest: 'sha256:managed' }),
         readInstallationState: () => ownedInstallationState(),
         existingOpenSphereNamespaces: () => ['opensphere-console']
@@ -162,6 +174,8 @@ test('managed uninstall never purges a namespace without an installation lock', 
   await assert.rejects(
     uninstallManagedInstallation({
       runtime: {
+      purgeBeszelHostState: () => {},
+      purgeExternalConsoleRbac: () => {},
         readInstallationLock: () => null,
         existingOpenSphereNamespaces: () => ['opensphere-console']
       }

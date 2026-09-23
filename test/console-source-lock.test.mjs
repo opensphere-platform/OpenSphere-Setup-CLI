@@ -16,7 +16,7 @@ const expected = {
   contract: 'opensphere-setup-console-source/v1',
   githubRepository: 'opensphere-platform/OpenSphere-console',
   canonicalUrl: 'https://github.com/opensphere-platform/OpenSphere-console.git',
-  revision: 'b6400fdc1b9c39ea4e4af6896c9c655e2efbaab2',
+  revision: '1866248e79ebe78f7f3e33ce00dc959a305a4382',
 };
 
 test('Console source lock is a closed canonical commit authority', () => {
@@ -146,6 +146,9 @@ test('CI and public packaging use the governed Console revision instead of float
     assert.ok(checkoutIndex >= 0 && verifyIndex > checkoutIndex,
       `${path} must verify the Console checkout before consuming it`);
     assert.match(steps[verifyIndex], /verify-console-source-checkout[.]mjs/u);
+    assert.match(steps[verifyIndex], /GH_TOKEN: \$\{\{ secrets[.]CONSOLE_SOURCE_READ_TOKEN \}\}/u);
+    assert.match(steps[verifyIndex], /GIT_CONFIG_VALUE_1: '!gh auth git-credential'/u);
+    assert.match(checkout[0], /persist-credentials: false/u);
     assert.equal(steps.slice(verifyIndex + 1)
       .filter((step) => step.includes('_fixtures/OpenSphere-console')).length, 0,
     `${path} must not rewrite the verified Console fixture`);

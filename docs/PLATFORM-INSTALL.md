@@ -18,14 +18,14 @@ Setup은 필요할 때 실행하는 독립형 관리 도구다. Windows에 Setup
 
 **내부 런타임 용량은 아직 줄어들지 않았다.** 처음 사용하는 버전은 약 174MB ZIP을 내려받고 약 440MiB를 푼다. 무결성 검증을 위한 원본 ZIP까지 보관하므로 버전당 약 610MiB를 사용한다. 새 버전 준비 시 1GiB 이상 여유 공간을 확보한다. 내부 Node SEA는 여전히 약 99MiB다. 이번 변경은 반복 다운로드 제거이며 네이티브 재작성 완료를 뜻하지 않는다.
 
-**현재 검증 범위:** edge.21 당시 GHCR 404 관측은 이력이며 이후 실제 doctor에서 이미지 접근이 통과했다. edge.30은 Console native core(OSAA·OSDST·OS Shell)의 전용 database login, TLS, session registry credential과 release activation gate를 fresh bootstrap에 추가한다. 실제 발행 및 실행 검증 결과는 설치 기록과 [edge.30 변경 사항](CONSOLE-NATIVE-RUNTIME-EDGE30.md)에 구분해 기록한다. 이미지 기동 검증만으로 Kubernetes bootstrap 성공을 주장하지 않는다.
+**현재 준비 버전:** edge.34의 발행 여부는 [발행 상태](EDGE34-PUBLICATION-STATUS.md)를 확인한다. 새 bootstrap은 터미널에서 관리자가 HTTPS 도메인과 StorageClass를 선택하고 확인한다. Console 이미지 버전은 Setup 버전과 별도로 검증된 release lock에 고정된다. 이미지 기동 검증만으로 Kubernetes bootstrap 성공을 주장하지 않는다.
 
 ## Windows 단일 EXE
 
-`setup-v0.5.0-edge.20`부터 같은 버전의 런타임을 재사용한다. edge.19 EXE는 자동으로 이 동작으로 바뀌지 않으므로 아래 새 EXE로 한 번 교체한다. 기존 `Install-OpenSphereSetup.exe`, `Install-OpenSphereSetup.ps1`, `install-opensphere-setup.sh`는 설치형 배포물이므로 새 릴리스에서 제외한다. 이전 릴리스 18개는 사용자 요청으로 삭제했다. 현재 소스 버전은 edge.30이다. OAuth 도입 이력은 [edge.21 기록](OAUTH-EDGE21-PUBLICATION-STATUS.md), 현재 변경은 [edge.30 기록](CONSOLE-NATIVE-RUNTIME-EDGE30.md)을 확인한다.
+`setup-v0.5.0-edge.20`부터 같은 버전의 런타임을 재사용한다. 기존 설치형 스크립트 대신 포터블 실행기를 사용한다. 아래 명령은 edge.34의 공개 자산 발행을 확인한 뒤 실행한다. [edge.34 변경 사항](INSTALL-PREPARATION-20260923.md)을 먼저 확인한다.
 
 ```powershell
-$release = 'setup-v0.5.0-edge.30'
+$release = 'setup-v0.5.0-edge.34'
 $base = "https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/$release"
 Invoke-WebRequest -UseBasicParsing "$base/opensphere-setup.exe" -OutFile .\opensphere-setup.exe
 Invoke-WebRequest -UseBasicParsing "$base/SHA256SUMS" -OutFile .\SHA256SUMS
@@ -35,7 +35,7 @@ if (-not $expected -or $actual -ne $expected) { throw 'Launcher checksum mismatc
 
 .\opensphere-setup.exe version
 .\opensphere-setup.exe --channel edge doctor --release edge --context docker-desktop --storage-class standard --registry-auth oauth
-.\opensphere-setup.exe --version 0.5.0-edge.30 bootstrap --release edge --context docker-desktop --storage-class standard --registry-auth oauth
+.\opensphere-setup.exe --version 0.5.0-edge.34 bootstrap --release edge --context docker-desktop --registry-auth oauth
 ```
 
 파일 위치에서 실행한다. 권한 상승, LocalAppData 설치, command shim, PATH 등록은 없다. `help`와 기본 `version`은 런타임 다운로드 없이 실행된다. 나머지 명령은 채널·immutable Release 메타데이터를 온라인으로 확인한다. 처음 쓰는 버전만 ZIP을 GitHub asset digest와 SHA256SUMS로 검증해 푼다. 재사용 시 보관 ZIP·체크섬의 digest와 모든 런타임 파일의 SHA-256을 원본 ZIP과 대조하고 추가 파일·링크·누락·변조를 거부한다. 자식 CLI의 stdin·stdout·stderr, 종료 코드와 호출자의 cwd를 유지한다.
@@ -57,8 +57,8 @@ if (-not $expected -or $actual -ne $expected) { throw 'Launcher checksum mismatc
 ```text
 opensphere-setup.exe
 opensphere-setup-runtime/
-  setup-v0.5.0-edge.30.lock
-  setup-v0.5.0-edge.30/
+  setup-v0.5.0-edge.34.lock
+  setup-v0.5.0-edge.34/
     runtime.zip
     SHA256SUMS
     expanded/opensphere-setup-windows-amd64/...
@@ -78,7 +78,7 @@ Windows는 ZIP을 원하는 폴더에 풀고 그 안에서 `.\opensphere-setup.e
 Linux/macOS는 해당 OS·CPU 아카이브와 SHA256SUMS를 검증하고 압축을 푼다.
 
 ```bash
-release=setup-v0.5.0-edge.30
+release=setup-v0.5.0-edge.34
 asset=opensphere-setup-linux-amd64.tar.gz
 base="https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/$release"
 curl --fail --location --proto '=https' --tlsv1.2 "$base/$asset" --output "$asset"
@@ -103,6 +103,7 @@ macOS는 `darwin-amd64` 또는 `darwin-arm64`, Linux arm64는 `linux-arm64`로 �
 - Windows 개발 CA 신뢰는 `bootstrap --trust-local-ca`를 명시한 경우에만 현재 사용자 인증서 저장소를 변경한다. 생략 시 자동 신뢰 등록을 하지 않으며 TLS 검증 우회로 대체하지 않는다.
 - Kubernetes 자원, 작업 디렉터리의 release lock, 요청한 복구 산출물은 작업 결과다. 프로그램 설치 파일과 구분하며 임의 삭제하지 않는다.
 - 공개 Setup 다운로드는 인증 없이 가능하다. private Console GHCR package는 `--registry-auth oauth`로 승인하거나 read-only credential을 stdin으로 전달한다. candidate/stable OCI attestation에는 별도 `gh`가 필요하다.
+- 비공개 Console 저장소의 설치 파일에는 별도의 `Contents: read` 인증이 필요하다. 해당 저장소만 읽을 수 있는 토큰을 `OPENSPHERE_CONSOLE_SOURCE_TOKEN` 환경 변수에 비공개로 입력한다. GHCR의 `read:packages` 승인과 별개이며, Setup 빌드용 Actions Secret이 설치 호스트로 전달되지는 않는다. 토큰을 명령줄 인자, 파일, 채팅에 쓰지 않는다.
 - edge Windows EXE는 아직 Authenticode 서명 전이다. SmartScreen/조직 정책을 우회하지 않는다. macOS ad-hoc 서명은 Developer ID notarization을 대체하지 않는다. 서명·공증 전 candidate/stable 발행은 차단한다.
 
 ## OAuth로 GHCR 접근 확인

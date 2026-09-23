@@ -52,6 +52,7 @@ test('platform packager emits the bundled Windows and Linux runtime layout', asy
           'opensphere-setup-windows-amd64/opensphere-setup.exe',
           'opensphere-setup-windows-amd64/runtime/pwsh/pwsh.exe',
           'opensphere-setup-windows-amd64/runtime/bin/kubectl.exe'
+          ,'opensphere-setup-windows-amd64/runtime/bin/node.exe'
         ],
         extra: []
       },
@@ -63,6 +64,7 @@ test('platform packager emits the bundled Windows and Linux runtime layout', asy
           'opensphere-setup-linux-amd64/bin/opensphere-setup.bin',
           'opensphere-setup-linux-amd64/runtime/pwsh/pwsh',
           'opensphere-setup-linux-amd64/runtime/bin/kubectl',
+          'opensphere-setup-linux-amd64/runtime/bin/node',
           'opensphere-setup-linux-amd64/runtime/lib/libatomic.so.1'
         ],
         extra: ['--libatomic', libatomic]
@@ -73,6 +75,7 @@ test('platform packager emits the bundled Windows and Linux runtime layout', asy
       const packaged = spawnSync(process.execPath, [
         PACKAGER,
         '--sea', sea,
+        '--node-executable', process.execPath,
         '--pwsh-directory', pwsh,
         '--kubectl', kubectl,
         '--platform', item.platform,

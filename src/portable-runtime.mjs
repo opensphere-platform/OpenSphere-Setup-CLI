@@ -22,6 +22,9 @@ export function activatePortableRuntime({
   if (!expected.every(existsSync)) return { active: false, root };
   environment.PATH = [pwsh, bin, environment.PATH ?? ''].filter(Boolean).join(delimiter);
   environment.OPENSPHERE_BUNDLED_RUNTIME = '1';
+  // PowerShell is used for installation scripts, not locale-aware application
+  // formatting. Minimal Linux hosts may not have a compatible system ICU.
+  if(platform === 'linux') environment.DOTNET_SYSTEM_GLOBALIZATION_INVARIANT ??= '1';
   return { active: true, root, pwsh: expected[0], kubectl: expected[1] };
 }
 

@@ -119,10 +119,18 @@ jobs:
           ref: ${{ steps.console_source.outputs.revision }}
           fetch-depth: 0
           path: _fixtures/OpenSphere-console
+          token: ${{ secrets.CONSOLE_SOURCE_READ_TOKEN }}
           persist-credentials: false
 
       - name: Verify governed Console checkout
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.CONSOLE_SOURCE_READ_TOKEN }}
+          GIT_CONFIG_COUNT: '2'
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: ''
+          GIT_CONFIG_KEY_1: credential.https://github.com.helper
+          GIT_CONFIG_VALUE_1: '!gh auth git-credential'
         run: |
           node scripts/verify-console-source-checkout.mjs `
             --checkout '_fixtures/OpenSphere-console' `
@@ -154,9 +162,15 @@ jobs:
             throw "Package version has no supported Setup CLI channel: $version"
           }
           $pointer = (Get-Content -LiteralPath "channels/$channel" -Raw).Trim()
-          if ($pointer -ne $env:RELEASE_TAG) {
-            throw "Setup CLI channel $channel points to $pointer, expected $env:RELEASE_TAG"
+          if ($env:RELEASE_TAG -ne "setup-v$version") {
+            throw "Release tag must match the source package version: setup-v$version"
           }
+          # Keep the last published channel usable while new immutable assets
+          # are built. Promote the pointer separately after digest verification.
+          if ($channel -eq 'edge' -and $pointer -notmatch '^setup-v[0-9]+[.][0-9]+[.][0-9]+-edge[.][0-9]+$') {
+            throw 'The existing published edge pointer is malformed'
+          }
+          Write-Host "Existing published channel: $pointer; candidate: $env:RELEASE_TAG"
           $expectedPrerelease = $channel -ne 'stable'
           if ([bool]::Parse($env:IS_PRERELEASE) -ne $expectedPrerelease) {
             throw "Setup CLI channel $channel prerelease flag must be $expectedPrerelease"

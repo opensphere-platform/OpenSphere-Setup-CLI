@@ -32,6 +32,7 @@ import { preflightPromotion } from './promotion-preflight.mjs';
 import { resetInitialAdministrator } from './reset-initial-admin.mjs';
 import { createProgressReporter, reportReleaseProgress } from './progress.mjs';
 import { createSetupJournal } from './setup-journal.mjs';
+import { collectBootstrapInput, saveBootstrapInput } from './bootstrap-input.mjs';
 import {
   DOCTOR_PERSISTENT_VOLUME_REQUEST_GIB,
   assertFreshConsolePortAvailable,
@@ -157,6 +158,7 @@ Usage:
        [--shell-tls-secret <namespace/name>]
        [--registry-username <github-login> --registry-token-stdin]
        [--no-open-browser] [--trust-local-ca]
+       [--non-interactive --yes --console <origin> --storage-class <name>]
   opensphere-setup upgrade --release <edge|candidate|stable> [--lock <verified-lock-file>]
       [--context <kube-context>] [--storage-class <name>] [--console <https-origin>]
       [--registry-username <github-login> --registry-token-stdin]
@@ -188,7 +190,7 @@ Forward repair requires --lock, docker-desktop and an incomplete localhost edge
 installation. --repair-plan verifies the target without changing Kubernetes.
 Repair never automatically restores an unverified old release or deletes resources.
 Registry authentication: --registry-auth auto|oauth|pat|anonymous; OAuth uses the bundled OpenSphere App; --github-client-id overrides its public Client ID. OAuth credentials stay in memory until bootstrap handoff. PAT tokens require read:packages only; broad gh login tokens are rejected.
-Canonical Console source artifacts are public; OPENSPHERE_CONSOLE_SOURCE_TOKEN is optional authenticated Contents API access and remains separate from GHCR credentials.`);
+Private Console source artifacts require OPENSPHERE_CONSOLE_SOURCE_TOKEN with Contents read access. This credential stays separate from GHCR credentials and is removed from the environment when read.`);
 }
 
 function readSecret(reference) {
@@ -422,7 +424,13 @@ async function main() {
       displayName: option('--admin-display-name', 'OpenSphere Administrator'),
       email: option('--admin-email', 'admin@opensphere.local')
     });
-    // Validate all pure bootstrap inputs before initiating authentication.
+    // The installing administrator confirms the endpoint and storage before
+    // authentication, installation-lock migration or any cluster write.
+    assertKubectl();
+    const bootstrapInput = await collectBootstrapInput({channel, consoleUrl:suppliedConsoleUrl,
+      storageClass:option('--storage-class',undefined),
+      nonInteractive:hasOption('--non-interactive'),yes:hasOption('--yes')});
+    progress.item('관리자 입력', await saveBootstrapInput(bootstrapInput));
     const registryCredentials = await registryCredentialsOption();
     progress.done(`auth=${selectedAuthEnvironment}, registry=${registryCredentials ? 'explicit' : 'automatic'}`);
     progress.step('로컬 실행 환경 fail-fast 검증');
@@ -457,8 +465,7 @@ async function main() {
       if (unmanaged.length) {
         throw new Error(`Setup-managed namespaces exist without an installation lock: ${unmanaged.join(', ')}`);
       }
-      const freshConsoleUrl = suppliedConsoleUrl
-        ?? defaultConsoleUrl(channel, selectedAuthEnvironment);
+      const freshConsoleUrl = bootstrapInput.consoleUrl;
       const port = await assertFreshConsolePortAvailable(freshConsoleUrl);
       if (port.checked) progress.item('포트', `${port.host}:${port.port} 사용 가능`);
       if (explicitLock) {
@@ -487,8 +494,8 @@ async function main() {
     const bootstrapResult = await bootstrap(lock, {
       initialAdmin,
       requireZeroRestarts: hasOption('--require-zero-restarts') || (!installed && !hasOption('--allow-restarts')),
-      storageClass: option('--storage-class', undefined),
-      consoleUrl: suppliedConsoleUrl ?? defaultConsoleUrl(channel, selectedAuthEnvironment),
+      storageClass: bootstrapInput.storageClass,
+      consoleUrl: bootstrapInput.consoleUrl,
       authEnvironment: selectedAuthEnvironment,
       shellTlsSecret: requestedShellTlsSecret,
       openOnboarding: !hasOption('--no-open-browser'),
@@ -610,6 +617,7 @@ async function main() {
     assertKubectl();
     const result = await uninstallManagedInstallation();
     console.log(`[완료] OpenSphere ${result.releaseDigest} 제거: ${result.namespaces.length} namespaces, ${result.persistentVolumes.length} retained PVs, ${result.customResourceDefinitions.length} CRDs`);
+    if(result.hostCleanup)console.log(`[완료] Beszel 노드 데이터: ${result.hostCleanup.status}, ${result.hostCleanup.nodes.length} nodes; 공유 namespace의 Console 전용 RBAC 정리`);
     console.log('[주의] 외부 CA·S3 백업 Secret은 사용자가 소유한 namespace에 남겨 두었습니다.');
     return;
   }
