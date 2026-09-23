@@ -11,11 +11,13 @@ const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url
 test('public release publisher fails closed for a non-public repository', () => {
   assert.match(workflow, /visibility.*public/i);
   assert.match(workflow, /Refusing non-public Setup distribution/i);
-  assert.match(workflow, /opensphere-setup-windows-amd64/);
   assert.match(workflow, /opensphere-setup-linux-amd64/);
-  assert.match(workflow, /opensphere-setup-linux-arm64/);
-  assert.match(workflow, /opensphere-setup-darwin-amd64/);
-  assert.match(workflow, /opensphere-setup-darwin-arm64/);
+  const matrix = workflow.slice(workflow.indexOf('      matrix:'), workflow.indexOf('    runs-on:'));
+  assert.equal((matrix.match(/- runner:/g) || []).length, 1);
+  assert.match(matrix, /platform: linux\s+architecture: amd64/);
+  const publication = workflow.slice(workflow.indexOf('  publish:'));
+  assert.doesNotMatch(publication, /opensphere-setup\.exe|windows-amd64|linux-arm64|darwin-/);
+  assert.match(publication, /\.assets \| length/);
   assert.match(workflow, /codesign --force --sign -/);
   assert.match(workflow, /Smoke-test packaged runtime/);
   assert.match(workflow, /Bundled PowerShell smoke test failed/);
