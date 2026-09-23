@@ -69,5 +69,7 @@ test('public platform installation is unauthenticated and checksum verified', ()
   assert.match(documentation, /SHA256SUMS/);
   assert.match(documentation, /libatomic[.]so[.]1/);
   assert.match(documentation, /Node[.]js.*npm.*PowerShell.*kubectl.*libatomic.*별도로 설치할 필요가 없다/s);
-  assert.doesNotMatch(documentation, /gh auth login|Contents:\s*read/i);
+  assert.match(documentation, /Contents:\s*read/i);
+  assert.match(documentation, /OPENSPHERE_CONSOLE_SOURCE_TOKEN/);
+  assert.match(documentation, /공개 Setup 다운로드는 인증 없이 가능/);
 });
