@@ -20,6 +20,8 @@ state from the exact Console host path, using the installed digest-pinned
 bootstrap utility. It records node identities, requires Ready nodes, stops the
 agent before cleanup, and waits for each cleanup Job. Failure retains the
 checkpoint for retry. The path may remain as an empty mount directory.
+If both the agent workload and the ownership checkpoint are missing, purge stops
+for operator inspection rather than inferring that its host data was removed.
 
 The user explicitly approved this deletion extension on 2026-09-23. Console's
 named Role/RoleBinding pairs in default, argocd and crossplane-system are removed

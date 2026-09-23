@@ -36,7 +36,7 @@ export function purgeBeszelHostState(lock,{run=kubectl}={}) {
   let plan=checkpoint?JSON.parse(checkpoint.data?.['plan.json']??'null'):null;
   const daemon=read(['-n',namespace,'get','daemonset','beszel-agent'],run);
   if(!plan){
-    if(!daemon)return {nodes:[],status:'NotInstalled'};
+    if(!daemon)throw Error('Beszel agent and cleanup checkpoint are both missing; host-state ownership requires operator inspection before purge');
     if(!daemon.spec?.template?.spec?.volumes?.some(v=>v.hostPath?.path===dataPath))throw Error('Beszel host path differs; refusing cleanup');
     const inventory=JSON.parse(run(['get','nodes','-o','json'],{capture:true}));
     const nodes=inventory.items.map(n=>({name:n.metadata.name,uid:n.metadata.uid}));

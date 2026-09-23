@@ -51,6 +51,11 @@ test('failed cleanup remains resumable after agent deletion',()=>{
   state.failWait=false;
   assert.equal(purgeBeszelHostState(lock,{run}).status,'Purged');
 });
+test('missing agent without an earlier ownership checkpoint cannot claim completed cleanup',()=>{
+  const {state,run}=hostRuntime();state.daemon=null;
+  assert.throws(()=>purgeBeszelHostState(lock,{run}),/ownership requires operator inspection/);
+  assert.ok(!state.events.some(e=>e.startsWith('create')||e.includes('delete')));
+});
 test('shared namespaces are never deleted and foreign RBAC subjects prevent deletion',()=>{
   for(const foreign of [false,true]){
     const calls=[],name='opensphere-extension-controller-kubernetes-egress-discovery';
