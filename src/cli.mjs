@@ -615,7 +615,10 @@ async function main() {
       throw new Error('uninstall requires --confirm DELETE-OPENSPHERE');
     }
     assertKubectl();
-    const result = await uninstallManagedInstallation();
+    const startedAt=Date.now();
+    const result = await uninstallManagedInstallation({
+      onProgress: message => console.log(`${message} · 경과 ${((Date.now()-startedAt)/1000).toFixed(1)}초`)
+    });
     console.log(`[완료] OpenSphere ${result.releaseDigest} 제거: ${result.namespaces.length} namespaces, ${result.persistentVolumes.length} retained PVs, ${result.customResourceDefinitions.length} CRDs`);
     if(result.hostCleanup)console.log(`[완료] Beszel 노드 데이터: ${result.hostCleanup.status}, ${result.hostCleanup.nodes.length} nodes; 공유 namespace의 Console 전용 RBAC 정리`);
     console.log('[주의] 외부 CA·S3 백업 Secret은 사용자가 소유한 namespace에 남겨 두었습니다.');

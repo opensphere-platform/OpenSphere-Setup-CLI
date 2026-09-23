@@ -1,4 +1,15 @@
-# OpenSphere Setup CLI 0.5.0-edge.35
+# OpenSphere Setup CLI 0.5.0-edge.36
+
+Fix an uninstall hang after the Beszel node inspections: internal ConfigMap input
+now reaches kubectl through stdin even when command output is streamed to the
+terminal. Previously `kubectl create -f -` inherited the terminal and waited for
+administrator input. Real child-process regression tests cover supplied/empty
+input, interactive inheritance, captured output and exit failures. Cleanup plan
+creation has a 30-second request limit and a 45-second process limit.
+
+Uninstall now reports its current stage, each Beszel node and namespace wait,
+and elapsed time. This release changes Setup only; Console 202609232230 remains
+the installation image set. No deletion ownership or scope is widened.
 
 This release publishes only the Linux amd64 portable archive and SHA256SUMS for
 the current RKE2 installation.
