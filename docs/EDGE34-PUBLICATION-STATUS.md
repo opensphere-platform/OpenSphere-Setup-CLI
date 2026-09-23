@@ -1,18 +1,25 @@
 # Setup edge.34 publication status
 
-2026-09-12. Source version `0.5.0-edge.34` is a candidate. It is not a published portable release. The public `channels/edge` pointer remains `setup-v0.5.0-edge.33`, whose release and portable assets exist. Do not describe an unbuilt candidate as the current public installer.
+Published on 2026-09-23: `setup-v0.5.0-edge.34`, immutable GitHub prerelease.
+Canonical Setup source: `5fd63f005204cc2956c1927d8d706d5a3f3db8e9`.
+[Five-platform build and asset verification](https://github.com/opensphere-platform/OpenSphere-Setup-CLI/actions/runs/35861336944) passed.
+Windows amd64, Linux amd64/arm64, and macOS amd64/arm64 archives each passed packaged
+runtime smoke checks. GitHub asset digests and SHA256SUMS match all published files.
 
-2026-09-23 preparation: private Console checkout now uses the dedicated
-`CONSOLE_SOURCE_READ_TOKEN` Secret with Contents read-only access and disables
-credential persistence. The user selected this method; Secret registration and
-private checkout were verified on 2026-09-23. Subsequent Git fetch uses a
-step-scoped credential helper without storing the token. Successful public build
-still needs verification. No broad host credential has
-been copied into Actions and no repository visibility was changed.
+The public `channels/edge` pointer selects this verified release. Candidate and
+stable remain HOLD. This pointer promotion follows successful publication as a
+separate source change; the workflow does not push channel updates to main.
 
-Publication validates the exact source package version and prerelease class while
-retaining the previously published channel pointer during the build. Immutable
-assets and digests must pass verification before a separate reviewed pointer
-promotion. No automatic CI main push has been added. The public edge pointer
-still names edge.33; this document does not claim that edge.34 is published or
-that a target cluster installation has completed.
+Private Console source checkout and subsequent Git fetch use the dedicated
+`CONSOLE_SOURCE_READ_TOKEN` in isolated steps without credential persistence.
+No source credential is packaged. Administrators authenticate to private Console
+source and GHCR independently when installing.
+
+Validation: 431 Setup tests and 27 current-provider contract tests pass. Approved
+Beszel host-state cleanup was tested only in disposable storage. No target Console
+installation or uninstall is claimed by this publication.
+
+Linux amd64 archive SHA-256:
+`cdaaaa1cbca84de9a4cba676182a3a1faf57120a0bb88a6e9ba83ef7b024d695`.
+Windows portable launcher SHA-256:
+`4d2a2b11fc67d961bbf9525b2369b7d1b7b0b5ab580e2a5d73df1d370e94cbbb`.
