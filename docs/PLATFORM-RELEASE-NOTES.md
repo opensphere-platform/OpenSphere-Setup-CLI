@@ -1,4 +1,17 @@
-# OpenSphere Setup CLI 0.5.0-edge.36
+# OpenSphere Setup CLI 0.5.0-edge.37
+
+Fresh installation now renders the Console LoadBalancer port from the exact
+administrator-selected origin: HTTPS defaults to443, explicit ports are retained,
+and localhost:1114 remains1114. Only the governed Service document is edited.
+Malformed or ambiguous Service definitions fail before installation.
+
+Installation success now requires the recorded origin to match the actual Service
+and to return Console HTML, public API readiness and bootstrap status through its
+real hostname/port. TLS checks use normal chain/hostname/validity validation with
+the installation's public CA material. No tunnel, redirect, insecure TLS fallback,
+or Pod readiness result substitutes for this check. Failures cannot record Ready.
+Evidence describes verification from the Setup host; it does not assert that a
+separate administrator browser already trusts a private installation CA.
 
 Fix an uninstall hang after the Beszel node inspections: internal ConfigMap input
 now reaches kubectl through stdin even when command output is streamed to the

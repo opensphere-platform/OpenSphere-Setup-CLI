@@ -1,11 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {parseAllDocuments} from 'yaml';
+import {resolve,sep} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {
   configureShellServiceEndpoint,
   defaultConsoleUrl,
   isLegacyEdgeLoopbackHttpOrigin,
   normalizeConsoleUrl
 } from '../src/console-url.mjs';
+const CONSOLE_SOURCE=process.env.OPENSPHERE_CONSOLE_SOURCE
+  ?pathToFileURL(resolve(process.env.OPENSPHERE_CONSOLE_SOURCE)+sep)
+  :new URL('./fixtures/console-contract-v66/',import.meta.url);
+
+test('actual Console manifest uses the admin origin port and preserves other resources',()=>{
+  const source=readFileSync(new URL('deploy/opensphere-console.yaml',CONSOLE_SOURCE),'utf8');
+  const original=parseAllDocuments(source).map(doc=>doc.toJSON());
+  for(const [origin,port,targetPort,name] of [
+    ['https://console.example.test',443,8443,'https'],
+    ['https://console.example.test:9443',9443,8443,'https'],
+    ['https://localhost:1114',1114,8443,'https'],
+    ['http://localhost:8090',8090,8080,'http'],
+    ['http://localhost',80,8080,'http'],
+  ]){
+    const rendered=configureShellServiceEndpoint(source,origin);
+    const documents=parseAllDocuments(rendered).map(doc=>{assert.equal(doc.errors.length,0);return doc.toJSON();});
+    const service=documents.find(doc=>doc.kind==='Service'&&doc.metadata.name==='opensphere-console-ext');
+    assert.deepEqual(service.spec.ports,[{name,port,targetPort}]);
+    assert.deepEqual(documents.filter(doc=>doc!==service),original.filter(doc=>doc.kind!=='Service'||doc.metadata.name!=='opensphere-console-ext'));
+    assert.equal(configureShellServiceEndpoint(rendered,origin),rendered,'render is idempotent');
+  }
+});
+
+test('ambiguous and unexpected Console Service shapes fail instead of retaining a wrong port',()=>{
+  const source=readFileSync(new URL('deploy/opensphere-console.yaml',CONSOLE_SOURCE),'utf8');
+  const service=source.slice(source.lastIndexOf('---'));
+  assert.throws(()=>configureShellServiceEndpoint(source+'\n'+service,'https://console.example.test'),/exactly one/);
+  assert.throws(()=>configureShellServiceEndpoint(source.replace('targetPort: 8443','targetPort: 1234'),'https://console.example.test'),/governed/);
+  assert.throws(()=>configureShellServiceEndpoint(source.replace('port: 1114','port: 1114\n      protocol: UDP'),'https://console.example.test'),/governed/);
+});
 
 test('Console endpoint is one exact origin shared by browser, Supabase and CLI', () => {
   assert.equal(normalizeConsoleUrl('https://console.example.test/'), 'https://console.example.test');

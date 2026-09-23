@@ -2759,11 +2759,12 @@ export async function bootstrap(lock, {
       progress?.done('Console이 동일 credential generation과 5개 namespace 전파를 확인함');
     }
 
-    progress?.step('Pod·Service·runtime image·초기 관리자 상태 최종 검증');
+    progress?.step('실제 Console URL·HTTPS·API 및 설치 상태 최종 검증');
     const evidence = await verifyInstallation(lock, {
       requireZeroRestarts,
       consoleUrl: effectiveConsoleUrl,
-      requireRecoveryDrill: false
+      requireRecoveryDrill: false,
+      onProgress: message => progress?.item('외부 접속',message)
     });
     recordReleaseInventory(lock, releaseResourceInventory(prepared.all));
     recordInstallationState(

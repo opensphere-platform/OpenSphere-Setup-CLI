@@ -26,6 +26,7 @@ export const STAGES = Object.freeze({
   'Supabase·Gitea·Beszel·C_API·C_EXT·Registry·CLI·Main Shell rollout 대기': 'bootstrap-rollout',
   'Console registry credential 인계 및 Secret 전파 확인': 'bootstrap-registry-handoff',
   'Pod·Service·runtime image·초기 관리자 상태 최종 검증': 'bootstrap-verification',
+  '실제 Console URL·HTTPS·API 및 설치 상태 최종 검증': 'bootstrap-verification',
   '최초 관리자 onboarding 인계': 'bootstrap-onboarding',
 });
 const CHILDREN = Object.freeze({

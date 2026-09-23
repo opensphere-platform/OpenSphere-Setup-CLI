@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import net from 'node:net';
+import {verifyPublicConsoleEndpoint} from './console-endpoint-verification.mjs';
 import { kubectl } from './process.mjs';
 import { verifyKnowledgeDelivery } from './knowledge-delivery.mjs';
 import knowledgeInstallation from './knowledge-installation.cjs';
@@ -893,7 +894,8 @@ export async function verifyInstallation(lock, {
   requireRecoveryDrill = false,
   mode = 'strict',
   componentSelection = null,
-  bootstrapHistory = null
+  bootstrapHistory = null,
+  onProgress = () => {}
 } = {}) {
   if (!['strict', 'rollback'].includes(mode)) throw new Error(`Unsupported installation verification mode: ${mode}`);
   const allowLegacyComponentSet = mode === 'rollback';
@@ -902,6 +904,9 @@ export async function verifyInstallation(lock, {
     throw new Error('Supabase/Gitea off-backbone integrated recovery drill is not implemented; promotion verification fails closed');
   }
   const config = verifyInstallationLock(lock, { allowLegacyComponentSet });
+  if (consoleUrl && config.consoleUrl !== consoleUrl) {
+    throw new Error(`Verified Console URL differs from installation config (${consoleUrl} != ${config.consoleUrl})`);
+  }
   const recordedEvidence = config.installationState.phase === 'Ready'
     ? readRecordedInstallationEvidence()
     : null;
@@ -917,15 +922,13 @@ export async function verifyInstallation(lock, {
     installationState: config.installationState,
     historicalBootstrapVerified
   }));
+  const publicEndpoint = await verifyPublicConsoleEndpoint(config.consoleUrl,{onProgress});
   const postgresql = verifySupabaseDatabase(lock);
   const supabase = await verifySupabaseServices();
   const gitea = await verifyGitea();
   const beszel = await verifyBeszel(lock, config.installationState, recordedEvidence, historicalBootstrapVerified);
   const consoleApi = await verifyConsoleApi();
   const knowledgeDelivery = verifyKnowledgeDelivery(lock);
-  if (consoleUrl && config.consoleUrl !== consoleUrl) {
-    throw new Error(`Verified Console URL differs from installation config (${consoleUrl} != ${config.consoleUrl})`);
-  }
   const evidence = {
     channel: lock.channel,
     releaseDigest: lock.releaseDigest,
@@ -942,6 +945,7 @@ export async function verifyInstallation(lock, {
     gitea,
     beszel,
     consoleApi,
+    publicEndpoint,
     knowledgeDelivery
   };
   recordInstallationEvidence(evidence);

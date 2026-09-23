@@ -1,3 +1,5 @@
+import {parseAllDocuments} from 'yaml';
+
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 export const DEFAULT_CONSOLE_URL = 'https://localhost:1114';
 
@@ -20,6 +22,12 @@ export function defaultConsoleUrl(channel, authEnvironment) {
   return DEFAULT_CONSOLE_URL;
 }
 
+export function consoleServiceEndpoint(consoleUrl) {
+  const url=new URL(normalizeConsoleUrl(consoleUrl));
+  const https=url.protocol==='https:';
+  return {origin:url.origin,name:https?'https':'http',port:Number(url.port||(https?443:80)),targetPort:https?8443:8080};
+}
+
 // c8bde85 temporarily made loopback HTTP the edge/development default. A managed
 // installation carrying exactly that origin may be repaired in place when Setup's
 // canonical default returns to HTTPS. No other endpoint change is implicit.
@@ -36,13 +44,23 @@ export function isLegacyEdgeLoopbackHttpOrigin({ channel, authEnvironment, store
  * compatibility with already-signed manifests that predate endpoint tokens.
  */
 export function configureShellServiceEndpoint(yaml, consoleUrl) {
-  const normalized = normalizeConsoleUrl(consoleUrl);
-  if (new URL(normalized).protocol === 'https:') return yaml;
-
-  const service = /(name:\s*opensphere-console-ext[\s\S]{0,600}?ports:\s*\n\s*-\s*name:)\s*https([\s\S]{0,120}?targetPort:)\s*8443/;
-  const configured = yaml.replace(service, '$1 http$2 8080');
-  if (yaml.includes('name: opensphere-console-ext') && configured === yaml) {
-    throw new Error('Console manifest does not expose the governed shell service endpoint');
+  const endpoint=consoleServiceEndpoint(consoleUrl);
+  if(!yaml.includes('opensphere-console-ext'))return yaml;
+  const documents=parseAllDocuments(yaml,{prettyErrors:false});
+  if(documents.some(doc=>doc.errors.length))throw Error('Invalid Console Service manifest YAML');
+  const services=documents.filter(doc=>doc.get('kind')==='Service'&&doc.getIn(['metadata','name'])==='opensphere-console-ext');
+  if(services.length!==1)throw Error('Console manifest must expose exactly one governed shell service endpoint');
+  const service=services[0];
+  const ports=service.getIn(['spec','ports'])?.toJSON();
+  if(service.getIn(['metadata','namespace'])!=='opensphere-console'||!Array.isArray(ports)||ports.length!==1
+    ||!['https','http'].includes(ports[0].name)||(ports[0].protocol??'TCP')!=='TCP'
+    ||!Number.isInteger(ports[0].port)||![8443,8080].includes(ports[0].targetPort)) {
+    throw Error('Console manifest does not expose the governed shell service endpoint');
   }
-  return configured;
+  if(ports[0].name===endpoint.name&&ports[0].port===endpoint.port&&ports[0].targetPort===endpoint.targetPort)return yaml;
+  // Edit only the Service document; signed workload bytes and image references
+  // in the surrounding documents remain unchanged.
+  for(const key of ['name','port','targetPort'])service.setIn(['spec','ports',0,key],endpoint[key]);
+  const [start,,end]=service.range;
+  return yaml.slice(0,start)+service.toString({lineWidth:0})+yaml.slice(end);
 }
