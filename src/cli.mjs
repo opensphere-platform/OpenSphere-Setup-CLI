@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import setupPackage from '../package.json' with { type: 'json' };
+import {prepareInstalledHiss} from './prepare-installed-hiss.mjs';
 import {prepareCephExecutionProfile} from './ceph-prerequisites.mjs';
 import {createGitHubRegistryAuth} from './github-registry-auth.mjs';
 import {GITHUB_OAUTH_CLIENT_ID} from './github-oauth-app.mjs';
@@ -151,6 +152,7 @@ Usage:
   opensphere-setup bootstrap --release <channel> [--lock <verified-lock-file>]
   opensphere-setup bootstrap -r <channel> [--lock <verified-lock-file>]
   opensphere-setup prepare-ceph [--context <kube-context>] [--console-url <https-origin>] [--apply]
+  opensphere-setup prepare-hiss [--context <kube-context>] [--apply]
       [--context <kube-context>] [--admin-username <name>]
        [--admin-display-name <name>] [--admin-email <email>]
        [--storage-class <name>] [--console <https-origin|loopback-http-origin>]
@@ -242,6 +244,12 @@ async function main() {
 
   if (command === 'help' || command === '--help' || command === '-h') return help();
   if (command === 'version' || command === '--version') return console.log(`opensphere-setup ${setupPackage.version}`);
+  if (command === 'prepare-hiss') {
+    assertKubectl();
+    const result=await prepareInstalledHiss({context:context||kubectl(['config','current-context'],{capture:true}),apply:hasOption('--apply'),
+      onProgress:event=>console.error(`[HISS 준비] ${event.state}: ${event.identity}`)});
+    console.log(JSON.stringify(result,null,2));return;
+  }
   if (command === 'prepare-ceph') {
     // No default cluster or Console (2026-09-23): prepare where the operator points, for the Console
     // actually installed there. Until then this silently meant docker-desktop / https://localhost:1114.
