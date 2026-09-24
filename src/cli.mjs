@@ -140,7 +140,7 @@ function help() {
   console.log(`OpenSphere Setup CLI ${setupPackage.version}
 
 Usage:
-  opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
+  opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>] [--anchor local-<12 hex>]
       [--registry-username <github-login> --registry-token-stdin]
   opensphere-setup preflight --release <candidate|stable> --console <https-origin>
       --recovery-target-secret <namespace/name> --shell-tls-secret <namespace/name>
@@ -331,7 +331,10 @@ async function main() {
     const sourceArtifactCredential = takeSourceArtifactCredential();
     validateChannel(channel);
     const registryCredentials = await registryCredentialsOption();
-    const lock = await resolveInstallationRelease(channel, { sourceArtifactCredential, registryCredentials });
+    // --anchor local-<12 hex>: resolve a localhost edge build from its immutable tag.
+    const anchorReference = option('--anchor', undefined);
+    const lock = await resolveInstallationRelease(channel, { sourceArtifactCredential, registryCredentials,
+      ...(anchorReference ? { anchorReference } : {}) });
     await writeLock(lockPath, lock);
     console.log(`[완료] ${channel} 채널을 ${lock.releaseDigest}로 잠금`);
     console.log(`Lock: ${lockPath}`);

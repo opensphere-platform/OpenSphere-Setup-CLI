@@ -1578,17 +1578,26 @@ async function resolveSignedRelease(reference, channel, {
   });
 }
 
+// A localhost edge release may be resolved from its immutable per-revision tag
+// (local-<12 hex>) instead of the shared :edge tag, so a verification install
+// never needs the channel to move (Console decision 13). Signed releases and any
+// other channel always resolve through their channel anchor.
+export const LOCAL_EDGE_ANCHOR_TAG = /^local-[a-f0-9]{12}$/;
 export async function resolveChannel(channel, options = {}) {
   validateChannel(channel);
+  const anchorReference = options.anchorReference ?? channel;
+  if (anchorReference !== channel && (channel !== 'edge' || !LOCAL_EDGE_ANCHOR_TAG.test(anchorReference))) {
+    throw new Error('An explicit anchor is accepted only as a localhost edge immutable tag (local-<12 hex>)');
+  }
   const requiredPlatforms = options.requiredPlatforms
     ?? (channel === 'edge' ? defaultEdgePlatforms() : RELEASE_PLATFORMS);
   report(options.onProgress, {
     type: 'anchor-start',
     component: 'console',
     repository: COMPONENTS.console,
-    reference: channel
+    reference: anchorReference
   });
-  const anchor = await (options.resolveImageFn ?? resolveImage)(COMPONENTS.console, channel, {
+  const anchor = await (options.resolveImageFn ?? resolveImage)(COMPONENTS.console, anchorReference, {
     registryCredentials: options.registryCredentials,
     requiredPlatforms
   });
@@ -1596,8 +1605,11 @@ export async function resolveChannel(channel, options = {}) {
     type: 'anchor-complete',
     component: 'console',
     image: anchor.image,
-    reference: channel
+    reference: anchorReference
   });
+  if (anchorReference !== channel && anchor.labels?.['opensphere.io/build-authority'] !== 'localhost') {
+    throw new Error('An explicit immutable anchor must be a localhost edge build');
+  }
   if (channel === 'edge' && anchor.labels?.['opensphere.io/build-authority'] === 'localhost') {
     report(options.onProgress, { type: 'local-verification-start', image: anchor.image, channel });
     const lock = await resolveLocalEdgeRelease(channel, anchor, { ...options, requiredPlatforms });
