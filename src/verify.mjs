@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import net from 'node:net';
 import {verifyPublicConsoleEndpoint} from './console-endpoint-verification.mjs';
 import { kubectl } from './process.mjs';
+import { verifyOfficialSkills } from './official-skills-verification.mjs';
 import { verifyKnowledgeDelivery } from './knowledge-delivery.mjs';
 import knowledgeInstallation from './knowledge-installation.cjs';
 import {
@@ -936,6 +937,7 @@ export async function verifyInstallation(lock, {
   const beszel = await verifyBeszel(lock, config.installationState, recordedEvidence, historicalBootstrapVerified);
   const consoleApi = await verifyConsoleApi();
   const knowledgeDelivery = verifyKnowledgeDelivery(lock);
+  const officialSkills = await verifyOfficialSkills({ withService });
   const evidence = {
     channel: lock.channel,
     releaseDigest: lock.releaseDigest,
@@ -953,7 +955,8 @@ export async function verifyInstallation(lock, {
     beszel,
     consoleApi,
     publicEndpoint,
-    knowledgeDelivery
+    knowledgeDelivery,
+    officialSkills
   };
   recordInstallationEvidence(evidence);
   return evidence;

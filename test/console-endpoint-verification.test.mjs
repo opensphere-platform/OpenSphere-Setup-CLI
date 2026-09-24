@@ -119,7 +119,8 @@ test('installation verification never records success when the real public origi
       hasBeszelBootstrapHistory:()=>false,verifySecrets:()=>1,verifyRegistryPullPath:()=>({}),verifyPersistentStorage:()=>1,
       eventuallyReady:operation=>operation(),verifyServiceEndpoints:()=>['service'],verifyWorkloads:()=>({podCount:1}),
       verifySupabaseDatabase:()=>({}),verifySupabaseServices:async()=>({}),verifyGitea:async()=>({}),verifyBeszel:async()=>({}),
-      verifyConsoleApi:async()=>({}),verifyKnowledgeDelivery:()=>({}),recordInstallationEvidence:evidence=>records.push(evidence),
+      verifyConsoleApi:async()=>({}),verifyKnowledgeDelivery:()=>({}),verifyOfficialSkills:async()=>({state:'Verified'}),withService:null,
+      recordInstallationEvidence:evidence=>records.push(evidence),
       verifyPublicConsoleEndpoint:url=>verifyPublicConsoleEndpoint(url,{read,...options}),
     };
     const verify=vm.runInNewContext(functionText+'\nverifyInstallation;',context);
