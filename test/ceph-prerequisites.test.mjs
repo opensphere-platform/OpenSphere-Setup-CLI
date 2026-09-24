@@ -21,6 +21,16 @@ test('Ceph profile performs dry run only by default and never installs Rook work
  assert.equal(result.applied,false);assert.equal(result.installationComplete,false);assert.equal(calls.length,2);assert.ok(calls[1].args.includes('--dry-run=server'));
  const items=JSON.parse(calls[1].options.input).items;assert.ok(items.every(r=>!['Deployment','Job','DaemonSet','Namespace','CustomResourceDefinition'].includes(r.kind)));
 });
+
+test('execution profile pins both default and explicitly selected NBD variants without starting host workloads',()=>{
+ const p=JSON.parse(readFileSync(new URL('../src/ceph-preparation-profile.json',import.meta.url),'utf8'));
+ const policy=p.resources.find(r=>r.kind==='ConfigMap'&&r.metadata.name==='opensphere-ceph-preparation-policy');
+ assert.match(policy.data.bundleDigest,/^sha256:[a-f0-9]{64}$/);
+ assert.match(policy.data.nbdBundleDigest,/^sha256:[a-f0-9]{64}$/);
+ assert.notEqual(policy.data.bundleDigest,policy.data.nbdBundleDigest);
+ assert.equal(policy.data.image,p.image);
+ assert.equal(p.resources.some(r=>r.kind==='DaemonSet'),false);
+});
 test('profile repair preserves the durable operation and validates before applying',()=>{
  const calls=[];const result=prepareCephExecutionProfile(scope,{apply:true,runner:(command,args,options)=>{calls.push({args,options});return args.includes('get')?JSON.stringify({metadata:{labels:{'opensphere.io/ceph-preparation':'profile-v1'}},data:{operation:'existing operation'}}):'';}});
  assert.equal(result.preservedRecord,true);assert.equal(result.resourceCount,13);assert.ok(calls[1].args.includes('--dry-run=server'));assert.ok(!calls[2].args.includes('--dry-run=server'));
