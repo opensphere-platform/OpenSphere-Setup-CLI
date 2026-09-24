@@ -511,6 +511,97 @@ test('component release preparation selects only target-owned current manifests'
   assert.deepEqual(optionalSelected.base.map(({ path }) => path), ['apps/osaa-gateway/deploy.yaml']);
 });
 
+function preWorkerLock() {
+  const previous = lock('1'.repeat(40), 'a');
+  previous.trust = LOCAL_EDGE_TRUST;
+  delete previous.releaseBom;
+  delete previous.components.r2d2HermesWorker;
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, previous.trust, undefined, { auxiliaryArtifacts: previous.auxiliaryArtifacts });
+  return previous;
+}
+
+test('integrated upgrade adds the R2D2 Hermes worker to a pre-worker installation', async () => {
+  const previous = preWorkerLock();
+  const target = lock('2'.repeat(40), 'b');
+  target.trust = LOCAL_EDGE_TRUST;
+  delete target.releaseBom;
+  target.releaseDigest = calculateReleaseDigest('edge', target.components, target.trust, undefined, { auxiliaryArtifacts: target.auxiliaryArtifacts });
+  assert.equal(Object.hasOwn(target.components, 'r2d2HermesWorker'), true);
+  const events = [];
+  const result = await upgrade(previous, target, { runtime: runtime(previous, events) });
+  assert.equal(result.changed, true);
+  assert.equal(result.lock.components.r2d2HermesWorker.image, target.components.r2d2HermesWorker.image);
+  assert.ok(events.includes(`supply:${previous.sourceRevision}:true`));
+  assert.ok(events.includes(`supply:${target.sourceRevision}:false`));
+  assert.ok(events.includes(`install:업그레이드:${target.sourceRevision}`));
+  assert.ok(events.includes(`record:${target.sourceRevision}`));
+});
+
+test('a component-scope release cannot introduce the R2D2 Hermes worker', async () => {
+  const previous = preWorkerLock();
+  const target = structuredClone(previous);
+  target.releaseScope = RELEASE_SCOPE_COMPONENT;
+  target.baseReleaseDigest = previous.releaseDigest;
+  target.changedComponents = ['r2d2HermesWorker'];
+  target.sourceRevision = '2'.repeat(40);
+  target.components.r2d2HermesWorker = {
+    repository: COMPONENTS.r2d2HermesWorker,
+    image: `ghcr.io/opensphere-platform/${COMPONENTS.r2d2HermesWorker}@sha256:${'c'.repeat(64)}`,
+    sourceRevision: target.sourceRevision
+  };
+  target.releaseDigest = calculateReleaseDigest(target.channel, target.components, target.trust, undefined, {
+    releaseScope: target.releaseScope,
+    baseReleaseDigest: target.baseReleaseDigest,
+    changedComponents: target.changedComponents,
+    auxiliaryArtifacts: target.auxiliaryArtifacts
+  });
+  const events = [];
+  await assert.rejects(
+    upgrade(previous, target, { runtime: runtime(previous, events) }),
+    /cannot change the installed component set/u
+  );
+  assert.deepEqual(events, []);
+});
+
+test('worker and Gateway component releases apply the complete shared Gateway manifest', () => {
+  const previous = lock('1'.repeat(40), 'a');
+  previous.trust = LOCAL_EDGE_TRUST;
+  delete previous.releaseBom;
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, previous.trust, undefined, { auxiliaryArtifacts: previous.auxiliaryArtifacts });
+  for (const changed of [['r2d2HermesWorker'], ['osaaGateway'], ['osaaGateway', 'r2d2HermesWorker']]) {
+    const target = componentTarget(previous, '2'.repeat(40), changed);
+    const specs = componentReleaseManifestSpecs(target);
+    assert.deepEqual(specs.foundation, []);
+    assert.deepEqual(specs.base.map(({ path }) => path), ['apps/osaa-gateway/deploy.yaml']);
+    assert.equal(specs.base[0].artifactSourceRevision, target.sourceRevision);
+    const yaml = [
+      'apiVersion: v1',
+      'kind: ServiceAccount',
+      'metadata: { name: opensphere-console-osaa-gateway }',
+      '---',
+      'apiVersion: apps/v1',
+      'kind: Deployment',
+      'metadata: { name: opensphere-console-osaa-gateway }',
+      'spec:',
+      '  template:',
+      '    spec:',
+      '      containers:',
+      '        - name: gateway',
+      `          image: ${target.components.osaaGateway.image}`,
+      '        - name: hermes-worker',
+      `          image: ${target.components.r2d2HermesWorker.image}`,
+      ''
+    ].join('\n');
+    const selected = componentReleaseWorkloadManifests(target, {
+      foundation: { release: [] },
+      base: [{ path: 'apps/osaa-gateway/deploy.yaml', yaml }]
+    });
+    assert.equal(selected.length, 1);
+    assert.equal(selected[0].yaml, yaml);
+    assert.match(selected[0].yaml, /kind: ServiceAccount/u);
+  }
+});
+
 test('component rollout mapping covers bootstrap workloads and the activated OSAA Gateway', () => {
   assert.deepEqual(COMPONENT_ROLLOUTS.consoleApi, [
     ['opensphere-console', 'deployment/opensphere-console-api', '600s']
@@ -526,6 +617,9 @@ test('component rollout mapping covers bootstrap workloads and the activated OSA
   ]);
   assert.equal(Object.hasOwn(COMPONENT_ROLLOUTS, 'dupaController'), false);
   assert.deepEqual(COMPONENT_ROLLOUTS.osaaGateway, [
+    ['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']
+  ]);
+  assert.deepEqual(COMPONENT_ROLLOUTS.r2d2HermesWorker, [
     ['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']
   ]);
   assert.equal(Object.hasOwn(COMPONENT_ROLLOUTS, 'backend'), false);

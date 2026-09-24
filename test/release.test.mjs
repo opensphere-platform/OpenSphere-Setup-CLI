@@ -5,11 +5,14 @@ import {
   calculateReleaseBomDigest,
   calculateLegacyReleaseDigest,
   AUXILIARY_ARTIFACTS,
+  AVAILABLE_MODULE_COMPONENTS,
   BASE_RUNTIME_COMPONENTS,
+  BOOTSTRAP_CORE_COMPONENTS,
   COMPONENTS,
   HISTORICAL_COMPONENTS,
   LEGACY_BASE_RUNTIME_COMPONENTS,
   PRE_OSDST_BASE_RUNTIME_COMPONENTS,
+  PRE_R2D2_HERMES_WORKER_BASE_RUNTIME_COMPONENTS,
   LEGACY_RELEASE_TRUST,
   LOCAL_EDGE_TRUST,
   RETIRED_EDGE_ATTESTATION_TRUST,
@@ -217,6 +220,7 @@ test('canonical release set contains the full target Console distribution', () =
     'opensphere-extension-controller',
     'opensphere-registry',
     'opensphere-console-osaa-gateway',
+    'opensphere-console-r2d2-hermes-worker',
     'opensphere-osdst',
     'opensphere-osaa-governed-adapter',
     'opensphere-console-notification-dispatcher',
@@ -251,6 +255,97 @@ test('base release distribution includes bootstrap core and Console-activated mo
     LEGACY_BASE_RUNTIME_COMPONENTS,
     Object.keys(HISTORICAL_COMPONENTS).filter((name) => name !== 'osdst' && name !== 'recovery')
   );
+});
+
+test('R2D2 Hermes worker is a natively installed canonical Console component', () => {
+  assert.equal(COMPONENTS.r2d2HermesWorker, 'opensphere-console-r2d2-hermes-worker');
+  assert.equal(BASE_RUNTIME_COMPONENTS.includes('r2d2HermesWorker'), true);
+  assert.equal(BOOTSTRAP_CORE_COMPONENTS.includes('r2d2HermesWorker'), true);
+  assert.equal(AVAILABLE_MODULE_COMPONENTS.includes('r2d2HermesWorker'), false);
+  assert.equal(Object.hasOwn(AUXILIARY_ARTIFACTS, 'r2d2HermesWorker'), false);
+  assert.deepEqual(
+    PRE_R2D2_HERMES_WORKER_BASE_RUNTIME_COMPONENTS,
+    Object.keys(COMPONENTS).filter((name) => name !== 'r2d2HermesWorker')
+  );
+});
+
+function preWorkerLocalLock() {
+  const base = validLock('edge');
+  delete base.components.r2d2HermesWorker;
+  base.trust = LOCAL_EDGE_TRUST;
+  base.releaseDigest = calculateReleaseDigest(
+    'edge', base.components, LOCAL_EDGE_TRUST, undefined, { auxiliaryArtifacts: base.auxiliaryArtifacts }
+  );
+  return base;
+}
+
+test('installed pre-worker lock is accepted only as a historical baseline with its auxiliary set', () => {
+  const base = preWorkerLocalLock();
+  assert.throws(() => validateLock(base), /component set is not canonical/u);
+  assert.equal(validateLock(base, { allowLegacyComponentSet: true }), base);
+
+  const withoutAuxiliary = structuredClone(base);
+  delete withoutAuxiliary.auxiliaryArtifacts;
+  withoutAuxiliary.releaseDigest = calculateReleaseDigest('edge', withoutAuxiliary.components, LOCAL_EDGE_TRUST);
+  assert.throws(
+    () => validateLock(withoutAuxiliary, { allowLegacyComponentSet: true }),
+    /complete governed auxiliary artifact set/u
+  );
+
+  const wrongRepository = structuredClone(base);
+  wrongRepository.components.osaaGateway.repository = COMPONENTS.r2d2HermesWorker;
+  wrongRepository.releaseDigest = calculateReleaseDigest(
+    'edge', wrongRepository.components, LOCAL_EDGE_TRUST, undefined, { auxiliaryArtifacts: wrongRepository.auxiliaryArtifacts }
+  );
+  assert.throws(
+    () => validateLock(wrongRepository, { allowLegacyComponentSet: true }),
+    /repository is not canonical/u
+  );
+});
+
+test('the worker is added by an integrated release and never by a component-scope release', () => {
+  const base = preWorkerLocalLock();
+  const integrated = validLock('edge');
+  integrated.trust = LOCAL_EDGE_TRUST;
+  integrated.releaseDigest = calculateReleaseDigest(
+    'edge', integrated.components, LOCAL_EDGE_TRUST, undefined, { auxiliaryArtifacts: integrated.auxiliaryArtifacts }
+  );
+  assert.equal(validateReleaseTransition(base, integrated), integrated);
+
+  const componentAddition = structuredClone(base);
+  componentAddition.releaseScope = RELEASE_SCOPE_COMPONENT;
+  componentAddition.baseReleaseDigest = base.releaseDigest;
+  componentAddition.changedComponents = ['r2d2HermesWorker'];
+  componentAddition.sourceRevision = '2'.repeat(40);
+  componentAddition.components.r2d2HermesWorker = {
+    repository: COMPONENTS.r2d2HermesWorker,
+    image: `ghcr.io/opensphere-platform/${COMPONENTS.r2d2HermesWorker}@sha256:${'b'.repeat(64)}`,
+    sourceRevision: componentAddition.sourceRevision
+  };
+  componentAddition.releaseDigest = calculateReleaseDigest(
+    'edge',
+    componentAddition.components,
+    LOCAL_EDGE_TRUST,
+    undefined,
+    {
+      releaseScope: componentAddition.releaseScope,
+      baseReleaseDigest: componentAddition.baseReleaseDigest,
+      changedComponents: componentAddition.changedComponents,
+      auxiliaryArtifacts: componentAddition.auxiliaryArtifacts
+    }
+  );
+  assert.equal(validateLock(componentAddition), componentAddition);
+  assert.throws(
+    () => validateReleaseTransition(base, componentAddition),
+    /cannot change the installed component set/u
+  );
+});
+
+test('a post-worker component release may update the worker alone', () => {
+  const { base, target } = validComponentTransition(['r2d2HermesWorker']);
+  assert.equal(validateReleaseTransition(base, target), target);
+  assert.equal(target.components.osaaGateway.image, base.components.osaaGateway.image);
+  assert.notEqual(target.components.r2d2HermesWorker.image, base.components.r2d2HermesWorker.image);
 });
 
 test('installed pre-OSAA lock remains readable only through the explicit historical gate', () => {

@@ -23,7 +23,7 @@ const foundation={target:true,root:'/verified-release',migration:{evidence:{
   sha256:'sha256:'+'b'.repeat(64),setDigest:'sha256:'+'c'.repeat(64),latestGlobalId:'opensphere-console/20260903/0028',
 }}};
 function harness({failBeszel=false}={}) {
-  const state={reader:false,api:false,native:false,legacy:false,calls:[],progress:[]};
+  const state={reader:false,api:false,native:false,legacy:false,calls:[],progress:[],nativeArgs:null};
   const context={join,currentKubeContext:()=> 'docker-desktop',
     runLegacyFoundationInstallers:()=>{state.legacy=true;},
     run:(executable,args)=>{
@@ -49,6 +49,7 @@ function harness({failBeszel=false}={}) {
         assert.equal(args[args.indexOf('-OsShellRuntimeImage')+1],lock.auxiliaryArtifacts.osShellRuntime.image);
         assert.equal(args[args.indexOf('-ReleaseDigest')+1],lock.releaseDigest);
         assert.equal(args[args.indexOf('-ExpectedMigrationSetDigest')+1],foundation.migration.evidence.setDigest);
+        state.nativeArgs=[...args];
         state.native=true;
       }
     },
@@ -154,4 +155,18 @@ test('HISS authority preparation is awaited and a conflict prevents later Main S
   assert.ok(!coreFailure.state.applied.includes('deploy/opensphere-console.yaml'));
   const failed=preparedHarness({failHiss:true});await assert.rejects(failed.run(prepared),/HISS preparation conflict/);
   assert.equal(failed.state.validation,undefined);assert.ok(!failed.state.applied.includes('deploy/opensphere-console.yaml'));
+});
+test('native installer receives the R2D2 Hermes worker image only from a lock that governs it',()=>{
+  const preWorker=harness();
+  preWorker.run(lock,foundation,'standard','https://localhost:1114',preWorker.progress);
+  assert.equal(preWorker.state.nativeArgs.includes('-R2d2HermesWorkerImage'),false);
+
+  const workerImage=`ghcr.io/fixture/r2d2HermesWorker@sha256:${'f'.repeat(64)}`;
+  const current={...lock,components:{...lock.components,r2d2HermesWorker:{image:workerImage}}};
+  const h=harness();
+  h.run(current,foundation,'standard','https://localhost:1114',h.progress);
+  const args=h.state.nativeArgs;
+  assert.equal(args.filter(arg=>arg==='-R2d2HermesWorkerImage').length,1);
+  assert.equal(args[args.indexOf('-R2d2HermesWorkerImage')+1],workerImage);
+  assert.equal(args[args.indexOf('-OsaaGatewayImage')+1],current.components.osaaGateway.image);
 });

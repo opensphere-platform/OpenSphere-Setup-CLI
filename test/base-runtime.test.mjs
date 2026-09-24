@@ -328,6 +328,78 @@ test('OSAA runtime profile is rendered from the verified release and install inp
   assert.doesNotMatch(rendered, /__OPENSPHERE_(?:RELEASE_CHANNEL|AUTH_ENVIRONMENT|CONSOLE_URL)__/u);
 });
 
+// Minimal Gateway Deployment with the R2D2 Hermes worker sidecar slot. The
+// v66 contract fixture intentionally predates the worker.
+const GATEWAY_WITH_WORKER = [
+  'apiVersion: apps/v1',
+  'kind: Deployment',
+  'metadata: { name: opensphere-console-osaa-gateway, namespace: opensphere-console }',
+  'spec:',
+  '  template:',
+  '    spec:',
+  '      containers:',
+  '        - name: gateway',
+  '          image: __OPENSPHERE_OSAA_GATEWAY_IMAGE__',
+  '        - name: hermes-worker',
+  '          image: __OPENSPHERE_R2D2_HERMES_WORKER_IMAGE__',
+  '          env:',
+  '            - { name: R2D2_WORKER_IMAGE_ECHO, value: "__OPENSPHERE_R2D2_HERMES_WORKER_IMAGE__" }',
+  ''
+].join('\n');
+
+test('Gateway renderer pins the R2D2 Hermes worker sidecar when the source exposes its slot', () => {
+  const lock = localReleaseLock();
+  assert.deepEqual(OSAA_GATEWAY_MANIFEST.componentOwners, ['osaaGateway', 'r2d2HermesWorker']);
+  assert.deepEqual(OSAA_GATEWAY_MANIFEST.replacements, [['__OPENSPHERE_OSAA_GATEWAY_IMAGE__', 'osaaGateway']]);
+  const rendered = renderManifest(lock, OSAA_GATEWAY_MANIFEST, GATEWAY_WITH_WORKER, 'hostpath');
+  const worker = lock.components.r2d2HermesWorker.image;
+  assert.match(worker, /^ghcr\.io\/opensphere-platform\/opensphere-console-r2d2-hermes-worker@sha256:[a-f0-9]{64}$/u);
+  assert.equal(rendered.split(worker).length - 1, 2);
+  assert.equal(rendered.includes(`- name: gateway\n          image: ${lock.components.osaaGateway.image}\n`), true);
+  assert.equal(rendered.includes(`- name: hermes-worker\n          image: ${worker}\n`), true);
+  assert.doesNotMatch(rendered, /__OPENSPHERE_R2D2_HERMES_WORKER_IMAGE__/u);
+});
+
+test('Gateway renderer rejects a worker slot without a governed worker digest', () => {
+  const missing = localReleaseLock();
+  delete missing.components.r2d2HermesWorker;
+  assert.throws(
+    () => renderManifest(missing, OSAA_GATEWAY_MANIFEST, GATEWAY_WITH_WORKER, 'hostpath'),
+    /requires a digest-pinned r2d2HermesWorker component/u
+  );
+  for (const image of [
+    'ghcr.io/opensphere-platform/opensphere-console-r2d2-hermes-worker:edge',
+    `ghcr.io/opensphere-platform/opensphere-console-osaa-gateway@sha256:${'1'.repeat(64)}`,
+    `docker.io/library/opensphere-console-r2d2-hermes-worker@sha256:${'1'.repeat(64)}`
+  ]) {
+    const wrong = localReleaseLock();
+    wrong.components.r2d2HermesWorker.image = image;
+    assert.throws(
+      () => renderManifest(wrong, OSAA_GATEWAY_MANIFEST, GATEWAY_WITH_WORKER, 'hostpath'),
+      /requires a digest-pinned r2d2HermesWorker component/u
+    );
+  }
+});
+
+test('Gateway renderer keeps rendering a pre-worker Console source for rollback', async (t) => {
+  const source = await renderKnowledgeManifest(readFileSync(new URL(OSAA_GATEWAY_MANIFEST.path, CONSOLE_SOURCE), 'utf8'), {
+    readLock: p => readFileSync(new URL(p, CONSOLE_SOURCE), 'utf8'),
+    materialize: async () => ({ configMaps: [], sources: [{ configMap: { name: 'knowledge-fixture' } }] })
+  });
+  // An external OPENSPHERE_CONSOLE_SOURCE may already carry the worker slot.
+  if (source.includes('__OPENSPHERE_R2D2_HERMES_WORKER_IMAGE__')) {
+    t.skip('the supplied Console source already exposes the worker slot');
+    return;
+  }
+  const preWorker = localReleaseLock();
+  delete preWorker.components.r2d2HermesWorker;
+  for (const lock of [preWorker, localReleaseLock()]) {
+    const rendered = renderManifest(lock, OSAA_GATEWAY_MANIFEST, source, 'hostpath', 'https://localhost:1114', 'development');
+    assert.equal(rendered.includes(lock.components.osaaGateway.image), true);
+    assert.doesNotMatch(rendered, /hermes-worker/u);
+  }
+});
+
 test('component upgrades use the current global migration lineage and renderer', () => {
   const runtimeManifest = parseSupabaseMigrationManifest(
     readFileSync(new URL(SUPABASE_MIGRATION_MANIFEST, CONSOLE_SOURCE), 'utf8')

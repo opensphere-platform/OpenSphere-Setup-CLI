@@ -16,7 +16,7 @@ OpenSphere 설치 입력은 mutable tag 목록이 아니라 Console anchor diges
 
 component lock은 localhost `edge`의 **upgrade 전용** 계약이다. fresh bootstrap, `candidate`/`stable`, signed Release BOM 승격에는 사용할 수 없다. 실패하면 직전의 완전한 base lock과 사전 확보한 artifact로 rollback한 뒤 그 상태를 다시 검증한다.
 
-Canonical 18개:
+Canonical 19개:
 
 ```text
 console
@@ -24,6 +24,7 @@ consoleApi
 extensionController
 registry
 osaaGateway
+r2d2HermesWorker
 osdst
 osaaGovernedAdapter
 notificationDispatcher
@@ -38,6 +39,8 @@ beszelHub
 beszelAgent
 beszelBootstrap
 ```
+
+`r2d2HermesWorker`(`opensphere-console-r2d2-hermes-worker`)는 `opensphere-console-osaa-gateway` Deployment의 `hermes-worker` sidecar다. Setup은 Console 원본에 `__OPENSPHERE_R2D2_HERMES_WORKER_IMAGE__` 자리가 있을 때만 이 digest를 렌더링하고, native installer에는 lock에 이 구성요소가 있을 때만 `-R2d2HermesWorkerImage`를 넘긴다. 이 구성요소가 없는 기존 18개 lock은 설치된 upgrade/rollback 기준으로만 받는다. 기존 설치에는 integrated upgrade(`upgrade --release edge` 또는 명시 `--lock`)로 추가하며, component lock으로는 추가할 수 없다.
 
 Auxiliary 3개:
 

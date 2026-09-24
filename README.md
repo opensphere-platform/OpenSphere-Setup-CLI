@@ -105,7 +105,7 @@ Setup은 태그를 그대로 설치하지 않는다.
 
 ## 기본 런타임
 
-Release BOM의 canonical component는 18개다. 이 중 Setup이 fresh bootstrap에서 배포하는 core는 13개다.
+Release BOM의 canonical component는 19개다(OSAA Gateway의 `hermes-worker` sidecar인 `r2d2HermesWorker` 포함). 이 중 Setup이 fresh bootstrap에서 배포하는 core는 13개다.
 
 | bootstrap core | 역할 |
 |---|---|

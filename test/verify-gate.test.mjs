@@ -6,8 +6,10 @@ import {
   captureBeszelBootstrapHistory,
   hasBeszelBootstrapHistory,
   isBeszelBootstrapWorkload,
-  isRetryableInstallationReadinessError
+  isRetryableInstallationReadinessError,
+  releaseWorkloadSpecs
 } from '../src/verify.mjs';
+import { BOOTSTRAP_CORE_COMPONENTS } from '../src/release.mjs';
 
 test('only transient endpoint and pod readiness failures are retried', () => {
   assert.equal(isRetryableInstallationReadinessError(
@@ -98,4 +100,22 @@ test('expired Beszel bootstrap Job requires evidence bound to the exact installa
     lock,
     installationState
   ), false);
+});
+
+test('every bootstrap core component, including the R2D2 Hermes worker sidecar, has a verified workload container', () => {
+  const specs = releaseWorkloadSpecs();
+  for (const component of BOOTSTRAP_CORE_COMPONENTS) {
+    assert.ok(specs.some((spec) => spec.component === component), component);
+  }
+  const worker = specs.filter((spec) => spec.component === 'r2d2HermesWorker');
+  assert.deepEqual(worker, [{
+    component: 'r2d2HermesWorker',
+    namespace: 'opensphere-console',
+    kind: 'deployment',
+    name: 'opensphere-console-osaa-gateway',
+    container: 'hermes-worker'
+  }]);
+  const gateway = specs.find((spec) => spec.component === 'osaaGateway');
+  assert.equal(gateway.name, worker[0].name);
+  assert.equal(gateway.container, 'gateway');
 });

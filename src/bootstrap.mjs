@@ -459,8 +459,16 @@ export const BESZEL_MANIFEST = Object.freeze({
 // is present in the installed release lock, its own component release still
 // needs an authoritative manifest and rollout contract so Setup can update it
 // without rebuilding or reapplying the Console core.
+// The R2D2 Hermes worker is the `hermes-worker` sidecar of this Deployment.
+// Its image slot is not a strict replacement: Console sources that predate
+// the worker (an explicit rollback baseline) have no such placeholder, and
+// renderManifest resolves it only when the source exposes it.  Either owner's
+// component release applies the complete Gateway manifest.
+export const R2D2_HERMES_WORKER_IMAGE_PLACEHOLDER = '__OPENSPHERE_R2D2_HERMES_WORKER_IMAGE__';
 export const OSAA_GATEWAY_MANIFEST = Object.freeze({
   path: 'apps/osaa-gateway/deploy.yaml',
+  componentOwners: ['osaaGateway', 'r2d2HermesWorker'],
+  applyCompleteForComponentOwners: true,
   replacements: [['__OPENSPHERE_OSAA_GATEWAY_IMAGE__', 'osaaGateway']]
 });
 
@@ -730,6 +738,7 @@ export const COMPONENT_ROLLOUTS = Object.freeze({
   beszelAgent: [['opensphere-monitoring', 'daemonset/beszel-agent', '600s']],
   beszelBootstrap: [],
   osaaGateway: [['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']],
+  r2d2HermesWorker: [['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']],
   osdst: [['opensphere-console', 'deployment/opensphere-osdst', '600s']],
   osaaGovernedAdapter: [],
   notificationDispatcher: [],
@@ -1053,6 +1062,13 @@ export function renderManifest(
     }
     yaml = yaml.replaceAll('__OPENSPHERE_CONSOLE_INDEX_CONTENT_IMAGE__', image);
   }
+  if (yaml.includes(R2D2_HERMES_WORKER_IMAGE_PLACEHOLDER)) {
+    const image = lock.components?.r2d2HermesWorker?.image;
+    if (!/^ghcr\.io\/opensphere-platform\/opensphere-console-r2d2-hermes-worker@sha256:[a-f0-9]{64}$/.test(image ?? '')) {
+      throw new Error(`Manifest ${spec.path} requires a digest-pinned r2d2HermesWorker component`);
+    }
+    yaml = yaml.replaceAll(R2D2_HERMES_WORKER_IMAGE_PLACEHOLDER, image);
+  }
   yaml = yaml.replaceAll('__OPENSPHERE_SUPABASE_NAMESPACE__', 'opensphere-console-data');
   yaml = yaml.replaceAll('https://localhost:8090', normalizedConsoleUrl);
   yaml = yaml.replaceAll('https://localhost:1114', normalizedConsoleUrl);
@@ -1357,6 +1373,10 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
     join(foundation.root, 'scripts', 'Install-ConsoleNativeRuntime.ps1'),
     '-KnowledgePackageDirectory', foundation.knowledgeDirectory,
     '-OsaaGatewayImage', lock.components.osaaGateway.image,
+    // Older Console installers (rollback baselines) have no worker parameter.
+    ...(lock.components.r2d2HermesWorker
+      ? ['-R2d2HermesWorkerImage', lock.components.r2d2HermesWorker.image]
+      : []),
     '-OsdstImage', lock.components.osdst.image,
     '-OsShellControlImage', lock.auxiliaryArtifacts.osShellControl.image,
     '-OsShellRuntimeImage', lock.auxiliaryArtifacts.osShellRuntime.image,
@@ -1576,7 +1596,8 @@ export function componentReleaseWorkloadManifests(
         });
         continue;
       }
-      if (completeOwners.size === 1 && completeOwners.has(component)) {
+      if (completeOwners.has(component)
+          && (completeOwners.size === 1 || releaseSpec?.applyCompleteForComponentOwners === true)) {
         if (!imageLine.test(source.yaml)) continue;
         found = true;
         selected.set(`${source.path}#complete`, {

@@ -83,6 +83,7 @@ export const COMPONENTS = Object.freeze({
   extensionController: 'opensphere-extension-controller',
   registry: 'opensphere-registry',
   osaaGateway: 'opensphere-console-osaa-gateway',
+  r2d2HermesWorker: 'opensphere-console-r2d2-hermes-worker',
   osdst: 'opensphere-osdst',
   osaaGovernedAdapter: 'opensphere-osaa-governed-adapter',
   notificationDispatcher: 'opensphere-console-notification-dispatcher',
@@ -159,6 +160,7 @@ export const BOOTSTRAP_CORE_COMPONENTS = Object.freeze([
   'extensionController',
   'registry',
   'osaaGateway',
+  'r2d2HermesWorker',
   'osdst',
   'gitea',
   'giteaPostgres',
@@ -197,6 +199,14 @@ export function releaseResponsibilityProfile(components = COMPONENTS, auxiliaryA
 }
 
 const HISTORICAL_BASE_RUNTIME_COMPONENTS = Object.freeze(Object.keys(HISTORICAL_COMPONENTS));
+
+// The R2D2 Hermes worker is a Gateway sidecar introduced after the current
+// component set. An installed lock without it is accepted only as an
+// upgrade/rollback baseline; an integrated release adds the worker, while a
+// component-scope release may not change the installed component set.
+export const PRE_R2D2_HERMES_WORKER_BASE_RUNTIME_COMPONENTS = Object.freeze(
+  BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'r2d2HermesWorker')
+);
 
 // Installed releases from before OSDST became an independent CBSS service are
 // accepted only as upgrade baselines. Newly resolved releases remain strict.
@@ -577,6 +587,12 @@ function canonicalComponentProfile(components, { allowLegacyComponentSet = false
     return { names: current, repositories: COMPONENTS };
   }
   if (allowLegacyComponentSet) {
+    // A pre-worker lock still uses the current repositories and remains subject
+    // to the complete governed auxiliary artifact requirement.
+    const preWorker = PRE_R2D2_HERMES_WORKER_BASE_RUNTIME_COMPONENTS;
+    if (names.length === preWorker.length && preWorker.every((name) => names.includes(name))) {
+      return { names: preWorker, repositories: COMPONENTS };
+    }
     for (const historical of [
       HISTORICAL_BASE_RUNTIME_COMPONENTS,
       PRE_REGISTRY_BASE_RUNTIME_COMPONENTS,

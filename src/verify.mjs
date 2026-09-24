@@ -120,6 +120,7 @@ const WORKLOADS = Object.freeze([
   { component: 'consoleApi', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-api', container: 'api' },
   { component: 'extensionController', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-extension-controller', container: 'controller' },
   { component: 'osaaGateway', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-osaa-gateway', container: 'gateway' },
+  { component: 'r2d2HermesWorker', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-osaa-gateway', container: 'hermes-worker' },
   { component: 'osdst', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-osdst', container: 'osdst' },
   { artifact: 'osShellControl', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-shell-api', container: 'api' },
   { artifact: 'osShellControl', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-shell-gateway', container: 'gateway' },
@@ -139,6 +140,12 @@ const WORKLOADS = Object.freeze([
   { component: 'console', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console', container: 'shell' },
   { artifact: 'consoleIndexContent', ownerComponent: 'console', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console', container: 'console-index-content', initContainer: true }
 ]);
+
+// Read-only view of the runtime workload/container that represents each
+// governed release image in verifyWorkloads().
+export function releaseWorkloadSpecs() {
+  return WORKLOADS.map((spec) => ({ ...spec }));
+}
 
 function getJson(args) {
   return JSON.parse(kubectl([...args, '-o', 'json'], { capture: true }));
