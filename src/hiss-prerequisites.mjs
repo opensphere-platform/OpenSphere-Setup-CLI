@@ -9,12 +9,12 @@ import { installTarget } from './install-target.mjs';
 export const HISS_EXECUTION_PROFILE = Object.freeze({
   id: 'hiss-chart-execution-v1',
   sourceRepository: 'opensphere-platform/OpenSphere-shell-clusterManager',
-  sourceRevision: '43489ecf269d1630a1c912e68fd8da9f9fbff1b2',
+  sourceRevision: '44d4a7595ee3609ed1a199ce3294bd7f194d4b47',
   sourcePath: 'deploy/hiss-execution-profile.proposed.json',
   // Console delivery must use the release's Console revision, never the owner
   // revision above. This path is metadata only; no artifact is fetched here.
   consoleArtifactPath: 'deploy/installation-profiles/hiss-execution.json',
-  sha256: '2695b1a044d62c91946a74f05dc105190afb00cece0e4750cbeb8baec5be1f6b',
+  sha256: '9ddee9740e7ff194eb88a8093d8b631405a1da290209e748bf265bd17441118b',
 });
 const groups = {Namespace:['v1','namespaces'],ServiceAccount:['v1','serviceaccounts'],
   Role:['rbac.authorization.k8s.io/v1','roles'],RoleBinding:['rbac.authorization.k8s.io/v1','rolebindings'],
@@ -70,7 +70,7 @@ export function verifyHissExecutionProfile(raw,scope) {
   installTarget(scope);
   if(typeof raw!=='string'||Buffer.byteLength(raw)>1024*1024||digest(raw)!==HISS_EXECUTION_PROFILE.sha256)throw fail('UNTRUSTED_PROFILE','HISS prerequisite bytes differ from the captured contract');
   const profile=JSON.parse(raw);
-  if(profile.schemaVersion!==1||profile.status!=='proposed-not-applied'||profile.resources.length!==54)throw fail('UNTRUSTED_PROFILE','HISS prerequisite envelope differs');
+  if(profile.schemaVersion!==1||profile.status!=='proposed-not-applied'||profile.resources.length!==96)throw fail('UNTRUSTED_PROFILE','HISS prerequisite envelope differs');
   return profile;
 }
 function references(resources) {
@@ -181,11 +181,17 @@ export function createHissPrerequisiteClient(scope,runner=run) {
   const {context}=installTarget(scope);
   const execute=(args,input)=>JSON.parse(runner('kubectl',['--context',context,...args,'--request-timeout=10s','-o','json'],
     {capture:true,input:JSON.stringify(input),spawn:{maxBuffer:8*1024*1024,timeout:60000}})||'null');
+  const clusterIdentity=()=>execute(['get','namespace','kube-system'],null)?.metadata?.uid;
+  const clusterUid=clusterIdentity();
+  if(!clusterUid)throw fail('OBSERVATION_UNAVAILABLE','Cluster UID could not be verified');
   return {
     read:async resources=>{
       const result=execute(['get','--ignore-not-found','-f','-'],{apiVersion:'v1',kind:'List',items:resources});
       return result?result.kind==='List'?result.items:[result]:[];
     },
-    create:async resource=>execute(['create','-f','-'],resource),
+    create:async resource=>{
+      if(clusterIdentity()!==clusterUid)throw fail('PRECONDITION_FAILED','Kubernetes context now points at a different cluster');
+      return execute(['create','-f','-'],resource);
+    },
   };
 }

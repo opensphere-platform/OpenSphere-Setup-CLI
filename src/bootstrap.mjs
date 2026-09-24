@@ -505,6 +505,7 @@ export const FOUNDATION_ARTIFACT_PATHS = Object.freeze([
   'scripts/Prepare-FoundationPrerequisites.ps1',
   'apps/extension-controller/src/foundation-bootstrap.json',
   'scripts/Install-ConsoleNativeRuntime.ps1',
+  'scripts/Test-OsShellRuntimeAdmission.ps1',
   'scripts/render-knowledge-package.mjs',
   'packages/contracts/runtime/knowledge-package.cjs',
   KNOWLEDGE_LOCK_PATH,
@@ -2523,7 +2524,7 @@ async function installPreparedRelease(lock, prepared, storageClass, consoleUrl, 
   }
   runFoundationInstallers(lock, prepared.foundation, storageClass, consoleUrl, progress);
   if (prepared.foundation.hissScope) {
-    progress?.item('설치','HISS 실행·검증 준비물 61개 확인·준비 (기능 설치는 OS Shell에서 실행)');
+    progress?.item('설치','HISS 실행·검증 준비물 103개 확인·준비 (기능 설치는 OS Shell에서 실행)');
     const raw = readFileSync(join(prepared.foundation.root,HISS_EXECUTION_PROFILE.consoleArtifactPath),'utf8');
     const validation = readFileSync(join(prepared.foundation.root,HISS_VALIDATION_ARTIFACT),'utf8');
     verifyHissValidationArtifact(validation);

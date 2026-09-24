@@ -1,4 +1,21 @@
-# OpenSphere Setup CLI 0.5.0-edge.38
+# OpenSphere Setup CLI 0.5.0-edge.39
+
+Fresh bootstrap now prepares the fixed 96-resource HISS execution profile,
+including cert-manager controller authority and fixed service accounts. Existing
+installations can run `opensphere-setup prepare-hiss --context <context>` to
+review the same profile and add `--apply` to fill missing prerequisites. Existing
+conflicting objects are refused; every write remains bound to the observed
+cluster UID and installation UID, release digest, channel and Console origin.
+This prepares authority; it does not claim the cert-manager workload is installed.
+Use the Console HISS installation review to install and verify that capability.
+
+Console activation now includes canonical OS Shell Pod admission checks. A Ready
+control Pod cannot hide a rejected session Pod. Failed or timed-out sessions show
+an actionable error and a deliberate retry instead of an endless Pending state.
+
+Only the used Linux amd64 archive and SHA256SUMS are published.
+
+## Earlier edge.38 correction retained
 
 Uninstall now inventories Foundation/catalog CRDs using their actual Cluster or
 Namespaced scope. It refuses shared custom data before deleting anything, removes
