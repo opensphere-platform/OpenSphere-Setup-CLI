@@ -1404,3 +1404,32 @@ test('a historical source-revision resolver rejects a short-tag collision before
   );
   assert.equal(provenanceChecks, 0);
 });
+
+// Review R2: whether Skills are required comes from the Gateway image the release pins.
+test('the Gateway image declaration of its Skill manifest is kept in the lock and checked again on revalidation', async () => {
+  const SKILLS = 'sha256:' + 'e'.repeat(64);
+  const labelled = (repository, image) => inspectedArtifact(repository, image,
+    { overrides: repository === COMPONENTS.osaaGateway ? { 'io.opensphere.official-skills': SKILLS } : {} });
+  const resolved = await resolveChannel('edge', {
+    requiredPlatforms: ['linux/amd64'],
+    async resolveImageFn(repository) { return labelled(repository, `ghcr.io/opensphere-platform/${repository}@${DIGEST}`); },
+    verifyBom() { throw new Error('not signed'); }, verifyImage() { throw new Error('not signed'); }, verifySbom() { throw new Error('not signed'); }
+  });
+  assert.equal(resolved.components.osaaGateway.officialSkills, SKILLS);
+  assert.deepEqual(Object.entries(resolved.components).filter(([, c]) => c.officialSkills).map(([name]) => name), ['osaaGateway']);
+  assert.doesNotThrow(() => validateLock(resolved));
+  const again = await verifyReleaseLock(resolved, { requiredPlatforms: ['linux/amd64'], async inspectImageFn(repository, image) { return labelled(repository, image); } });
+  assert.equal(again.components.osaaGateway.officialSkills, SKILLS);
+  // An image that now declares another manifest, or none, is not the locked release.
+  await assert.rejects(verifyReleaseLock(resolved, { requiredPlatforms: ['linux/amd64'], async inspectImageFn(repository, image) { return inspectedArtifact(repository, image); } }),
+    /official Skill manifest differs from its image/);
+  // The declaration belongs to the Gateway only, in digest form.
+  for (const [name, value] of [['osaaGateway', 'sha256:short'], ['consoleApi', SKILLS]]) {
+    const bad = structuredClone(resolved); bad.components[name].officialSkills = value;
+    assert.throws(() => validateLock(bad), /official Skill manifest is invalid/);
+  }
+  await assert.rejects(resolveChannel('edge', { requiredPlatforms: ['linux/amd64'],
+    async resolveImageFn(repository) { return inspectedArtifact(repository, `ghcr.io/opensphere-platform/${repository}@${DIGEST}`, { overrides: { 'io.opensphere.official-skills': SKILLS } }); },
+    verifyBom() { throw new Error('not signed'); }, verifyImage() { throw new Error('not signed'); }, verifySbom() { throw new Error('not signed'); } }),
+  /declares an invalid official Skill manifest/);
+});

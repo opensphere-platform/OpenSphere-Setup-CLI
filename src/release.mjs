@@ -239,6 +239,7 @@ const RELEASE_METADATA_LABELS = Object.freeze([
   'org.opencontainers.image.version',
   'org.opencontainers.image.revision',
   'io.opensphere.console-index-content',
+  'io.opensphere.official-skills',
   'io.opensphere.channel',
   'io.opensphere.release-tag',
   'io.opensphere.source-revision',
@@ -906,6 +907,7 @@ async function verifyLocalEdgeLock(lock, {
     if (inspected.image !== component.image) {
       throw new Error(`Local edge image ${name} differs from the release lock`);
     }
+    assertOfficialSkillsLabel(inspected, component, name);
     const observed = assertLocalEdgeImage(inspected, {
       repository: component.repository,
       sourceRevision: component.sourceRevision,
@@ -1041,6 +1043,7 @@ export async function verifyReleaseLock(lock, {
     }
     const inspected = await inspectImageFn(actual.repository, actual.image, { registryCredentials, requiredPlatforms });
     if (inspected.image !== actual.image) throw new Error(`Release lock component ${name} differs from the registry`);
+    assertOfficialSkillsLabel(inspected, actual, name);
     assertReleaseArtifactMetadata(inspected, {
       repository: actual.repository, sourceRevision: actual.sourceRevision,
       releaseTag: bom.releaseTag, artifactScope: 'canonical'
@@ -1207,6 +1210,10 @@ export function validateLock(lock, {
     if (component.registryCredentialsRequired !== undefined && typeof component.registryCredentialsRequired !== 'boolean') {
       throw new Error(`Component ${name} registry credential requirement is invalid`);
     }
+    if (component.officialSkills !== undefined
+        && (name !== 'osaaGateway' || !/^sha256:[a-f0-9]{64}$/.test(component.officialSkills))) {
+      throw new Error(`Component ${name} official Skill manifest is invalid`);
+    }
   }
   if (lock.auxiliaryArtifacts !== undefined) {
     if (![LOCAL_EDGE_TRUST, RELEASE_TRUST].includes(trust)) {
@@ -1371,13 +1378,28 @@ export function validateReleaseTransition(baseLock, targetLock) {
   return target;
 }
 
+// Review R2: a Gateway image that ships official Skills declares their manifest digest; the lock
+// keeps it so verification knows the installed release requires exactly those Skills.
+const OFFICIAL_SKILLS_LABEL = 'io.opensphere.official-skills';
+// Revalidation: the image still declares exactly the Skill manifest the lock recorded (or none).
+function assertOfficialSkillsLabel(inspected, component, name) {
+  if (inspected.labels?.[OFFICIAL_SKILLS_LABEL] !== component.officialSkills) {
+    throw new Error(`Release lock component ${name} official Skill manifest differs from its image`);
+  }
+}
 function releaseComponent(repository, inspected) {
+  const officialSkills = inspected.labels?.[OFFICIAL_SKILLS_LABEL];
+  if (officialSkills !== undefined
+      && (repository !== COMPONENTS.osaaGateway || !/^sha256:[a-f0-9]{64}$/.test(officialSkills))) {
+    throw new Error(`Image ${repository} declares an invalid official Skill manifest`);
+  }
   return {
     repository,
     image: inspected.image,
     sourceRevision: inspected.sourceRevision,
     artifactVersion: assertArtifactIdentity(inspected),
-    registryCredentialsRequired: inspected.registryCredentialsRequired
+    registryCredentialsRequired: inspected.registryCredentialsRequired,
+    ...(officialSkills ? { officialSkills } : {})
   };
 }
 

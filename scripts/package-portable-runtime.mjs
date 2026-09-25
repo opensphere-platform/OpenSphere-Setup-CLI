@@ -5,6 +5,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
+import { archiver } from '../src/portable-runtime.mjs';
 
 function option(name) {
   const index = process.argv.indexOf(name);
@@ -120,9 +121,9 @@ exec "$root/runtime/bin/node" "$root/runtime/setup/index.mjs" "$@"
 
   await mkdir(dirname(output), { recursive: true });
   if (platform === 'windows') {
-    run('tar', ['-a', '-cf', output, '-C', temporary, basename(packageRoot)]);
+    run(archiver(), ['-a', '-cf', output, '-C', temporary, basename(packageRoot)]);
   } else {
-    run('tar', ['-czf', output, '-C', temporary, basename(packageRoot)]);
+    run(archiver(), ['-czf', output, '-C', temporary, basename(packageRoot)]);
   }
   console.log(`[완료] ${output}`);
 } finally {

@@ -5,6 +5,12 @@ import { dirname, delimiter, join, resolve } from 'node:path';
  * Portable release archives carry pwsh and kubectl beside the SEA executable.
  * Source/npm installs intentionally keep using the operator PATH.
  */
+// The Windows system bsdtar, not whichever tar a shell puts first on PATH (Git Bash's GNU tar
+// reads "C:" in a path as a remote host). Elsewhere the platform tar.
+export function archiver(platform = process.platform, env = process.env) {
+  return platform === 'win32' ? join(env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe') : 'tar';
+}
+
 export function activatePortableRuntime({
   executable = process.execPath,
   environment = process.env,

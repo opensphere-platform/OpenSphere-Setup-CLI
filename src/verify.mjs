@@ -937,7 +937,7 @@ export async function verifyInstallation(lock, {
   const beszel = await verifyBeszel(lock, config.installationState, recordedEvidence, historicalBootstrapVerified);
   const consoleApi = await verifyConsoleApi();
   const knowledgeDelivery = verifyKnowledgeDelivery(lock);
-  const officialSkills = await verifyOfficialSkills({ withService });
+  const officialSkills = await verifyOfficialSkills({ withService, expected: lock.components?.osaaGateway?.officialSkills });
   const evidence = {
     channel: lock.channel,
     releaseDigest: lock.releaseDigest,
