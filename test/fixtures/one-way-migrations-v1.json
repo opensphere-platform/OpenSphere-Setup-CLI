@@ -1,0 +1,14 @@
+{
+  "schema": "opensphere.one-way-migrations-fixture/v1",
+  "source": "migrations/manifest.json",
+  "migrations": [
+    {
+      "globalId": "opensphere-console/20260924/0080",
+      "semanticKey": "console.osdst.task_engine_cutover",
+      "predecessorGlobalId": "opensphere-console/20260924/0079",
+      "path": "migrations/versions/0080_osdst_task_engine_cutover.sql",
+      "sha256": "e4d02ae65e9c2c6b25d7e81d4239720fdbd329773494f789abf3ed42a739358a",
+      "reason": "R2D2 task engine cutover: LangGraph tasks move to Hermes and releases built before it refuse to create tasks on the database."
+    }
+  ]
+}

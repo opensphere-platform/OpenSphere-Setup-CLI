@@ -1278,3 +1278,28 @@ test('record ownership: lost before the kept target is recorded means no invento
   assert.equal(events.some((e) => e.startsWith('inventory:') || e.startsWith('prune:')), false);
   assert.deepEqual(earlierInstalls(events), []);
 });
+
+// Re-review N3: a Console Knowledge release holds the record until its own completion; Setup
+// neither upgrades, recovers nor completes over it.
+test('record ownership: Setup never acts over a Console Knowledge claim (N3)', async () => {
+  const previous = localEdge(lock('1'.repeat(40), 'a')), target = localEdge(lock('2'.repeat(40), 'b'));
+  const operationId = '22222222-2222-4222-8222-222222222222';
+  const knowledgeClaim = () => recordStore(previous, { phase: 'Installing',
+    knowledgeUpdate: { schema: 'opensphere.knowledge-installation-transition/v1', operationId },
+    transition: { runId: operationId, mode: 'knowledge', previousReleaseDigest: previous.releaseDigest, targetReleaseDigest: `sha256:${'e'.repeat(64)}` } });
+  const ordinary = [], store = knowledgeClaim();
+  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, ordinary, { ledger: [BEFORE, CUTOVER], store, previousChain: CHAIN }) }),
+    /Console Knowledge release \(operation 22222222-2222-4222-8222-222222222222\) holds the installation record/);
+  const recovery = [];
+  await assert.rejects(upgrade(previous, target, { oneWayRecoveryRecordDigest: installationRecordDigest(store.read()),
+    runtime: cutoverRuntime(previous, target, recovery, { ledger: [BEFORE, CUTOVER], store, previousChain: CHAIN }) }),
+  /Setup neither upgrades nor recovers over it/);
+  assert.deepEqual([...installs(ordinary), ...installs(recovery)], []); assert.equal(store.rv, 1);
+  const verified = [], claimed = knowledgeClaim();
+  await assert.rejects(completeInstallationVerification(previous, { runtime: {
+    readInstallationRecord: () => claimed.read(), readReleaseInventory: () => [{ name: 'complete-release' }],
+    recordInstallationState: () => { throw new Error('must not write'); },
+    verifyInstallation: async (release) => { verified.push(release); return {}; }, readMigrationLedger: () => [] } }),
+  /holds the installation record; let it complete in Console/);
+  assert.deepEqual(verified, []); assert.equal(claimed.rv, 1);
+});

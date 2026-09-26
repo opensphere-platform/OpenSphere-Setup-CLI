@@ -56,6 +56,7 @@ import { reportReleaseProgress } from './progress.mjs';
 import { publishSetupJournal } from './setup-journal.mjs';
 import { materializeRuntimeAsset } from './runtime-assets.mjs';
 import { assertForwardRepair, installationRecordDigest } from './forward-repair.mjs';
+import knowledgeInstallation from './knowledge-installation.cjs';
 import {HISS_EXECUTION_PROFILE,HISS_VALIDATION_ARTIFACT,verifyHissExecutionProfile,verifyHissValidationArtifact,prepareHissPrerequisites,prepareHissValidation,createHissPrerequisiteClient} from './hiss-prerequisites.mjs';
 import {prepareCephExecutionProfile} from './ceph-prerequisites.mjs';
 import {PLATFORM_CORE_ARTIFACT,verifyPlatformCoreProfile,preparePlatformCorePrerequisites} from './platform-core-prerequisites.mjs';
@@ -2173,6 +2174,8 @@ export async function completeInstallationVerification(lock, {consoleUrl, requir
     ||config.releaseDigest!==lock.releaseDigest||state.releaseDigest!==lock.releaseDigest
     ||!['Failed','Installing'].includes(state.phase)) throw Error('Verification completion requires the same incomplete installed release');
   if (!ops.readReleaseInventory()?.length) throw Error('Verification completion requires the recorded release inventory');
+  // Re-review N3: a Console Knowledge release holds this record until its own completion.
+  if (knowledgeInstallation.isKnowledgeClaim(state)) throw Error(`A Console Knowledge release (operation ${state.transition?.runId ?? state.knowledgeUpdate?.operationId ?? 'unknown'}) holds the installation record; let it complete in Console. Setup does not complete or clear it.`);
   // An upgrade to another release was interrupted while it could cross a one-way migration. The
   // recorded release may be completed only while the ledger shows none of them applied.
   const interrupted=state.transition&&state.transition.targetReleaseDigest!==lock.releaseDigest?state.transition.oneWay:null;
@@ -3050,6 +3053,9 @@ export async function upgrade(
     try { recorded = JSON.parse(startRecord.data?.['release.json'] ?? 'null'); startState = JSON.parse(startRecord.data?.['state.json'] ?? 'null'); } catch {}
     if (!startRecord?.metadata?.uid || !startRecord.metadata.resourceVersion || recorded?.releaseDigest !== previousLock.releaseDigest) {
       throw new Error('The installation record does not match the installed release lock');
+    }
+    if (knowledgeInstallation.isKnowledgeClaim(startState)) {
+      throw new Error(`A Console Knowledge release (operation ${startState.transition?.runId ?? startState.knowledgeUpdate?.operationId ?? 'unknown'}) holds the installation record; Setup neither upgrades nor recovers over it. Let it complete in Console.`);
     }
     if (recovery) {
       if (installationRecordDigest(startRecord) !== oneWayRecoveryRecordDigest) throw new Error('Installation record changed; review a fresh recovery plan');
