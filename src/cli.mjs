@@ -613,7 +613,8 @@ async function main() {
     if (!lock) throw new Error('No managed OpenSphere installation lock was found');
     const evidence = await (complete ? completeInstallationVerification : verifyInstallation)(lock, {
       requireZeroRestarts: hasOption('--require-zero-restarts'),
-      consoleUrl: suppliedConsoleUrl
+      consoleUrl: suppliedConsoleUrl,
+      ...(complete ? {} : { mode: 'installed' })
     });
     console.log(`[완료] ${evidence.channel} ${evidence.releaseDigest} 검증`);
     console.log(`${evidence.podCount} pods / ${evidence.serviceCount} services / runtime images locked`);

@@ -52,3 +52,26 @@ test('a concurrent same-UID configuration update cannot be adopted and overwritt
  await assert.rejects(completeInstallationVerification(lock,{runtime:f.runtime}),/changed during verification/);
  assert.deepEqual(f.phases,['Installing']);assert.equal(JSON.parse(f.record.data['config.json']).changedByAnotherWriter,true);
 });
+// 2026-09-27 localhost case 2c: the installed pre-worker record (18 components) could not be
+// completed or even verified; validateLock rejected it as a non-canonical component set.
+test('a pre-worker installed record completes, verified as the installed release',async()=>{
+ const {calculateReleaseDigest,validateLock}=await import('../src/release.mjs');
+ const pre=structuredClone(lock);delete pre.components.r2d2HermesWorker;
+ pre.releaseDigest=calculateReleaseDigest(pre.channel,pre.components,pre.trust,pre.releaseBom,pre);
+ assert.throws(()=>validateLock(pre),/not canonical/);
+ const state={phase:'Installing',releaseDigest:pre.releaseDigest};
+ const record={metadata:{uid:'original',resourceVersion:'1'},data:{'release.json':JSON.stringify(pre),
+  'config.json':JSON.stringify({releaseDigest:pre.releaseDigest,storageClass:'standard',consoleUrl:'https://localhost:1114',authEnvironment:'development'}),
+  'state.json':JSON.stringify(state)}};
+ const phases=[],modes=[];
+ const runtime={readInstallationRecord:()=>structuredClone(record),readReleaseInventory:()=>[{kind:'Deployment'}],
+  recordInstallationState:(_l,_sc,_a,_u,_e,_t,phase)=>{phases.push(phase);record.metadata.resourceVersion=String(+record.metadata.resourceVersion+1);
+   record.data['state.json']=JSON.stringify({...state,phase});return {state:JSON.parse(record.data['state.json']),config:JSON.parse(record.data['config.json'])};},
+  verifyInstallation:async(supplied,options)=>{modes.push(options.mode);return {releaseDigest:supplied.releaseDigest,verifiedAt:'2026-09-27T00:00:00Z'};}};
+ await completeInstallationVerification(pre,{runtime});
+ assert.deepEqual(phases,['Installing','Ready']);assert.deepEqual(modes,['installed']);
+});
+test('installation verification refuses an unknown mode before reading the cluster',async()=>{
+ const {verifyInstallation}=await import('../src/verify.mjs');
+ await assert.rejects(verifyInstallation(lock,{mode:'lenient'}),/Unsupported installation verification mode: lenient/);
+});

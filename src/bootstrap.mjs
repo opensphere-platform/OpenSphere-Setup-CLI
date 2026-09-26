@@ -2204,7 +2204,8 @@ export function readInstallationRecord() {
 // Resume only verification of the already installed canonical target. This
 // neither selects/applies images nor repeats registry authentication or migrations.
 export async function completeInstallationVerification(lock, {consoleUrl, requireZeroRestarts=false, runtime={}}={}) {
-  validateLock(lock);
+  // The recorded release, as readInstallationLock() admits it; it may predate the worker.
+  validateLock(lock, { allowLegacyComponentSet: true, allowInstalledAgentIdentityCutover: true });
   const ops={readInstallationRecord,readReleaseInventory,recordInstallationState,verifyInstallation,readMigrationLedger,...runtime};
   const original=ops.readInstallationRecord();
   const config=JSON.parse(original.data['config.json']),state=JSON.parse(original.data['state.json']);
@@ -2240,7 +2241,7 @@ export async function completeInstallationVerification(lock, {consoleUrl, requir
   };
   write('Installing');
   try {
-    const evidence=await ops.verifyInstallation(lock,{consoleUrl:config.consoleUrl,requireZeroRestarts});
+    const evidence=await ops.verifyInstallation(lock,{consoleUrl:config.consoleUrl,requireZeroRestarts,mode:'installed'});
     if(evidence.releaseDigest!==lock.releaseDigest||!evidence.verifiedAt) throw Error('Verification returned a different release');
     write('Ready',{verification:{evidenceConfigMap:'opensphere-installation-evidence',verifiedAt:evidence.verifiedAt}});
     return evidence;
@@ -3079,7 +3080,7 @@ export async function upgrade(
       changed: false,
       lock: previousLock,
       consoleUrl: effectiveConsoleUrl,
-      evidence: await operations.verifyInstallation(previousLock, { consoleUrl: effectiveConsoleUrl })
+      evidence: await operations.verifyInstallation(previousLock, { consoleUrl: effectiveConsoleUrl, mode: 'installed' })
     };
   }
   // Re-review F2: an ordinary upgrade starts only from a Ready installation of the previous release.

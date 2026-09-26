@@ -905,8 +905,12 @@ export async function verifyInstallation(lock, {
   bootstrapHistory = null,
   onProgress = () => {}
 } = {}) {
-  if (!['strict', 'rollback'].includes(mode)) throw new Error(`Unsupported installation verification mode: ${mode}`);
-  const allowLegacyComponentSet = mode === 'rollback';
+  if (!['strict', 'rollback', 'installed'].includes(mode)) throw new Error(`Unsupported installation verification mode: ${mode}`);
+  // 'installed' verifies the release the installation record already names, as recorded (verify,
+  // --complete-installation, a same-release upgrade). Like a rollback baseline it may predate a
+  // component this Setup governs now (2026-09-27: the pre-worker record could not be verified at
+  // all). A newly installed target stays 'strict'.
+  const allowLegacyComponentSet = mode === 'rollback' || mode === 'installed';
   validateLock(lock, { allowLegacyComponentSet });
   if (requireRecoveryDrill) {
     throw new Error('Supabase/Gitea off-backbone integrated recovery drill is not implemented; promotion verification fails closed');
