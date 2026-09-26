@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { isLocalEdgeLock } from './release.mjs';
+import knowledgeInstallation from './knowledge-installation.cjs';
 
 function canonical(value) {
   if (Array.isArray(value)) return value.map(canonical);
@@ -19,6 +20,13 @@ export function installationRecordDigest(record) {
 // exception: every target artifact must still pass normal strict verification.
 // The previous record is incident evidence, never a claimed rollback release.
 export function assertForwardRepair({ previous, target, record, expectedRecordDigest, context }) {
+  // Re-review 3, N3: a reviewed record digest shows the record was seen, not that a Console Knowledge
+  // release ended or handed it over. Repair never starts, continues or writes over a Knowledge claim.
+  let observedState = null;
+  try { observedState = JSON.parse(record?.data?.['state.json'] ?? 'null'); } catch {}
+  if (knowledgeInstallation.isKnowledgeClaim(observedState)) {
+    throw Error(`A Console Knowledge release (operation ${observedState.transition?.runId ?? observedState.knowledgeUpdate?.operationId ?? 'unknown'}) holds the installation record; forward repair neither plans nor writes over it. Let it complete in Console.`);
+  }
   if (!/^sha256:[a-f0-9]{64}$/.test(expectedRecordDigest ?? '')
     || installationRecordDigest(record) !== expectedRecordDigest) throw Error('Installation record changed; review a fresh repair plan');
   if (context !== 'docker-desktop' || !isLocalEdgeLock(target) || target.channel !== 'edge'

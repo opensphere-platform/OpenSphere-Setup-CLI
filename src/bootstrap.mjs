@@ -3256,6 +3256,10 @@ export async function upgrade(
         || JSON.parse(record.data['release.json']).releaseDigest !== targetLock.releaseDigest) {
         throw Error('Forward repair record ownership changed; refusing to overwrite another installation');
       }
+      // Re-review 3, N3: never write a repair state over a Console Knowledge claim.
+      if (knowledgeInstallation.isKnowledgeClaim(JSON.parse(record.data['state.json'] ?? 'null'))) {
+        throw Error('A Console Knowledge release holds the installation record; forward repair stops without writing');
+      }
       return {...extra, forwardRepair:repair,
         recordPrecondition:{uid:record.metadata.uid,resourceVersion:record.metadata.resourceVersion}};
     };
