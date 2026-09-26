@@ -11,6 +11,7 @@ import {
   terminalPodError,
   upgrade,
   completeInstallationVerification,
+  confirmRecordWrite,
   workloadReady
 } from '../src/bootstrap.mjs';
 import {
@@ -223,6 +224,8 @@ function recordStore(release, state = { phase: 'Ready', verification: { evidence
       ...(options.verification ? { verification: options.verification } : {}),
       ...(options.transition ? { transition: options.transition } : {}) };
     store.rv += 1;
+    // What a PATCH response reports: this write's own resulting version.
+    return { record: { uid: store.uid, resourceVersion: String(store.rv) } };
   };
   return store;
 }
@@ -304,8 +307,9 @@ function runtime(previous, events, {
     },
     deleteAgentIdentityNamespace: (namespace) => events.push(`delete-namespace:${namespace}`),
     recordInstallationState: (release, _storageClass, _admin, _url, _auth, _tls, phase, options) => {
-      store.write(release, phase, options);
+      const written = store.write(release, phase, options);
       events.push(`record:${release.sourceRevision}`);
+      return written;
     },
     waitForCoreRollouts: () => events.push('wait'),
     waitForComponentRollouts: (changed) => events.push(`wait-component:${changed.join(',')}`),
@@ -442,7 +446,7 @@ test('Knowledge-only upgrade and failure recovery retain all images and persist 
   operations.prepareComponentRelease=async(release,...args)=>{prepared.push(structuredClone(release));return prepare(release,...args);};
   const install=operations.installPreparedComponentRelease;
   operations.installPreparedComponentRelease=(release,...args)=>{installed.push(structuredClone(release));return install(release,...args);};
-  operations.recordInstallationState=(release,_sc,_admin,_url,_env,_tls,phase)=>records.push({release:structuredClone(release),phase});
+  operations.recordInstallationState=(release,_sc,_admin,_url,_env,_tls,phase,options)=>{records.push({release:structuredClone(release),phase});return operations.store.write(release,phase,options);};
   operations.verifyInstallation=async release=>{if(fail&&release.releaseDigest===target.releaseDigest)throw Error('data delivery unhealthy');return {verifiedAt:'2026-09-10T00:00:00Z'};};
   if(fail)await assert.rejects(upgrade(previous,target,{runtime:operations}),/previous release was restored/);
   else assert.equal((await upgrade(previous,target,{runtime:operations})).changed,true);
@@ -897,6 +901,7 @@ test('upgrade and rollback enter Installing before verification and Ready only w
       }
       current = { revision: release.sourceRevision, phase };
       phases.push(current);
+      return operations.store.write(release, phase, options);
     };
     operations.verifyInstallation = async (release) => {
       assert.equal(current.phase, 'Installing');
@@ -962,8 +967,10 @@ function cutoverRuntime(previous, target, events, {
     waitForCoreRollouts: () => { events.push('wait'); on.wait?.(); },
     recordInstallationState: (release, _storageClass, _admin, _url, _auth, _tls, phase = 'Preparing', options = {}) => {
       on.record?.(phase, options);
-      store.write(release, phase, options);
+      const written = store.write(release, phase, options);
       events.push(`record:${release.sourceRevision}:${phase}:${options.failureCode ?? ''}`);
+      on.afterRecord?.(phase, options);
+      return written;
     },
   };
 }
@@ -1155,7 +1162,7 @@ test('one-way cutover: an interrupted run cannot be papered over by completing t
 test('one-way cutover: another writer between the Ready check and the claim stops the run before any change', async () => {
   const { previous, target } = activation(), events = [], store = recordStore(previous);
   await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger: [BEFORE], store,
-    on: { prepare: () => { store.rv += 1; } } }) }), /installation record changed during this upgrade/);
+    on: { prepare: () => { store.rv += 1; } } }) }), /installation record changed before the Installing record write; another writer owns it now. Already done by this run: nothing beyond namespace and pull-secret checks/);
   assert.deepEqual(installs(events), []);
 });
 
@@ -1163,7 +1170,7 @@ test('one-way cutover: another writer during the run means no rollback and no re
   const { previous, target } = activation(), events = [], store = recordStore(previous);
   await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger: [BEFORE], store,
     on: { install: () => { store.rv += 1; throw new Error('Gitea bootstrap failed'); } } }) }),
-  /installation record changed meanwhile; no rollback or record change was made/);
+  /Upgrade failed \(Gitea bootstrap failed\); the installation record changed meanwhile; another writer owns it now\. Already done by this run: recorded .* Installing\. Not done: any further install, prune, inventory, rollback or record write/);
   assert.deepEqual(earlierInstalls(events), []);
 });
 
@@ -1184,4 +1191,90 @@ test('one-way cutover: a component release crossing it keeps the target componen
     ledger, store, failTarget: true, recordedInventory: [{ name: 'complete-release' }], on: { install: () => ledger.push(CUTOVER) } }) }),
   /one-way-migration-recovery-required/);
   assertTargetKept(events, store, target, 'one-way-migration-recovery-required');
+});
+
+// Re-review N1: a version is this run's only when its own write's response says so.
+test('record ownership: only the PATCH response of this write confirms the new version', () => {
+  const data = { 'release.json': '{"a":1}', 'state.json': '{"phase":"Installing"}' };
+  const ok = JSON.stringify({ metadata: { uid: 'u', resourceVersion: '8' }, data });
+  assert.deepEqual(confirmRecordWrite(ok, 'u', '7', data), { uid: 'u', resourceVersion: '8' });
+  for (const output of [
+    '', 'not json',
+    JSON.stringify({ metadata: { uid: 'other', resourceVersion: '8' }, data }),
+    JSON.stringify({ metadata: { uid: 'u', resourceVersion: '7' }, data }),
+    JSON.stringify({ metadata: { uid: 'u' }, data }),
+    JSON.stringify({ metadata: { uid: 'u', resourceVersion: '8' }, data: { ...data, 'state.json': '{"phase":"Ready"}' } }),
+  ]) assert.throws(() => confirmRecordWrite(output, 'u', '7', data), /not confirmed by its own response/);
+});
+
+test('record ownership: a writer between the claim write and the next read is never adopted (N1)', async () => {
+  const { previous, target } = activation(), events = [], store = recordStore(previous);
+  let foreign = false;
+  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger: [BEFORE], store,
+    on: { afterRecord: (phase) => {
+      if (phase !== 'Installing' || foreign) return;
+      foreign = true;
+      store.rv += 1; store.state = { ...store.state, transition: { ...store.state.transition, runId: '11111111-1111-4111-8111-111111111111' } };
+    } } }) }),
+  /changed before installing the target; another writer owns it now\. Already done by this run: recorded .* Installing\./);
+  assert.deepEqual(installs(events), [], 'nothing is installed after the foreign write');
+  assert.equal(store.state.transition.runId, '11111111-1111-4111-8111-111111111111', 'the other writer\'s record is not overwritten');
+});
+
+test('record ownership: a write whose response is lost or unconfirmed stops the run (N1)', async () => {
+  for (const [name, respond] of [
+    ['lost', () => { throw new Error('kubectl patch: connection reset after send'); }],
+    ['without a new version', (written) => ({ record: { uid: written.record.uid, resourceVersion: '1' } })],
+  ]) {
+    const { previous, target } = activation(), events = [], store = recordStore(previous);
+    const operations = cutoverRuntime(previous, target, events, { ledger: [BEFORE], store });
+    const record = operations.recordInstallationState;
+    operations.recordInstallationState = (...args) => respond(record(...args));
+    await assert.rejects(upgrade(previous, target, { runtime: operations }), name === 'lost' ? /connection reset after send/ : /no confirmed new version; ownership is unknown/);
+    assert.deepEqual(installs(events), [], name);
+    assert.equal(store.state.phase, 'Installing', `${name}: the claim may have landed; recovery is explicit`);
+  }
+});
+
+test('record ownership: lost during a successful verification means no prune, inventory or Ready (N2)', async () => {
+  const { previous, target } = activation(), events = [], store = recordStore(previous);
+  const operations = cutoverRuntime(previous, target, events, { ledger: [BEFORE], store, on: { install: () => {} } });
+  const verify = operations.verifyInstallation;
+  operations.verifyInstallation = async (release, options) => {
+    const result = await verify(release, options);
+    if (release.releaseDigest === target.releaseDigest) store.rv += 1;
+    return result;
+  };
+  await assert.rejects(upgrade(previous, target, { runtime: operations }),
+    (e) => /changed during target verification; another writer owns it now/.test(e.message)
+      && /applied the target workloads and migrations; recorded .* Installing; verified the target/.test(e.message)
+      && /Not done: any further install, prune, inventory, rollback or record write/.test(e.message));
+  assert.equal(events.some((e) => e.startsWith('prune:') || e.startsWith('inventory:')), false);
+  assert.equal(events.some((e) => e.includes(':Ready:')), false);
+  assert.deepEqual(earlierInstalls(events), []);
+});
+
+test('record ownership: lost during rollback verification means no prune, inventory or Ready (N2)', async () => {
+  const { previous, target } = activation(), events = [], store = recordStore(previous);
+  const operations = cutoverRuntime(previous, target, events, { ledger: [BEFORE], store, on: { install: () => { throw new Error('Gitea bootstrap failed'); } } });
+  const verify = operations.verifyInstallation;
+  operations.verifyInstallation = async (release, options) => {
+    const result = await verify(release, options);
+    if (options?.mode === 'rollback') store.rv += 1;
+    return result;
+  };
+  await assert.rejects(upgrade(previous, target, { runtime: operations }),
+    (e) => /rollback also failed/.test(e.message) && /changed during rollback verification/.test(e.message)
+      && /reinstalled the previous release; recorded .* Installing; verified the previous release/.test(e.message));
+  assert.equal(events.some((e) => e.startsWith('prune:') || e.startsWith('inventory:')), false);
+  assert.equal(events.some((e) => e.includes(':Ready:')), false);
+});
+
+test('record ownership: lost before the kept target is recorded means no inventory write (N2)', async () => {
+  const { previous, target } = activation(), events = [], store = recordStore(previous), ledger = [BEFORE];
+  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger, store,
+    on: { install: () => { ledger.push(CUTOVER); store.rv += 1; throw new Error('migration 0081 failed'); } } }) }),
+  /Upgrade failed \(migration 0081 failed\); the installation record changed meanwhile/);
+  assert.equal(events.some((e) => e.startsWith('inventory:') || e.startsWith('prune:')), false);
+  assert.deepEqual(earlierInstalls(events), []);
 });

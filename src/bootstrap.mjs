@@ -2076,6 +2076,18 @@ export function installationStateDocument(
   };
 }
 
+// Re-review N1: the object a precondition PATCH returned must be the same record, at a new version,
+// holding exactly the data this write sent. Only then is its version this run's.
+export function confirmRecordWrite(output, uid, previousVersion, data) {
+  let patched = null;
+  try { patched = JSON.parse(output); } catch {}
+  if (patched?.metadata?.uid !== uid || !patched.metadata.resourceVersion || patched.metadata.resourceVersion === previousVersion
+    || Object.keys(data).some((key) => patched.data?.[key] !== data[key])) {
+    throw Error('The installation record write was not confirmed by its own response');
+  }
+  return { uid, resourceVersion: patched.metadata.resourceVersion };
+}
+
 export function recordInstallationState(
   lock,
   storageClass,
@@ -2120,11 +2132,14 @@ export function recordInstallationState(
     // from being overwritten. Keep unrelated object metadata unchanged.
     const {uid, resourceVersion} = stateOptions.recordPrecondition;
     if (!uid || !resourceVersion) throw Error('Installation record precondition is incomplete');
-    kubectl(['-n','opensphere-console','patch','configmap','opensphere-installation-lock','--type=json','-p',JSON.stringify([
+    // Re-review N1: the version this write owns is the one its own PATCH response reports, with the
+    // data it wrote. A later GET may already show another writer's version and is never adopted.
+    const output = kubectl(['-n','opensphere-console','patch','configmap','opensphere-installation-lock','--type=json','-o','json','-p',JSON.stringify([
       {op:'test',path:'/metadata/uid',value:uid},
       {op:'test',path:'/metadata/resourceVersion',value:resourceVersion},
       {op:'replace',path:'/data',value:record.data},
     ])],{capture:true});
+    return { config, state, record: confirmRecordWrite(output, uid, resourceVersion, record.data) };
   } else applyYaml(`${JSON.stringify(record)}\n`);
   return { config, state };
 }
@@ -3195,13 +3210,26 @@ export async function upgrade(
       rollback: recovery ? 'never' : boundary?.pending.length ? 'decided-after-failure' : 'available',
       ...(boundary ? { oneWay: transitionOneWay(boundary) } : {})
     };
-    // Owned writes: the record must still be the one this run read or last wrote.
+    // Re-review N2: what this run has already done, for an exact account when it must stop.
+    const effects = [];
+    const lostOwnership = (stage) => new Error(`The installation record changed ${stage}; another writer owns it now. `
+      + `Already done by this run: ${effects.length ? effects.join('; ') : 'nothing beyond namespace and pull-secret checks'}. `
+      + 'Not done: any further install, prune, inventory, rollback or record write. The other writer\'s change is not known; review the record before resuming. '
+      + 'This check protects the installation record; it does not make other objects change atomically with it.');
+    const assertOwned = (stage) => { if (!ownsRecord()) throw lostOwnership(stage); };
+    // Owned writes: the record must still be the one this run read or last wrote, and the new
+    // version is taken only from this write's own response (re-review N1). A write whose response
+    // is lost leaves ownership unknown: the run stops and resumes only through explicit recovery.
     const ownedWrite = (lock, phase, extra = {}) => {
-      if (!ownsRecord()) throw new Error('The installation record changed during this upgrade; another writer owns it now');
-      operations.recordInstallationState(lock, config.storageClass, initialAdmin, effectiveConsoleUrl,
+      assertOwned(`before the ${phase} record write`);
+      const written = operations.recordInstallationState(lock, config.storageClass, initialAdmin, effectiveConsoleUrl,
         config.authEnvironment, config.shellTlsSecret, phase,
         { ...extra, recordPrecondition: { uid: owner.uid, resourceVersion: owner.resourceVersion } });
-      owner.resourceVersion = operations.readInstallationRecord().metadata.resourceVersion;
+      if (written?.record?.uid !== owner.uid || !written.record.resourceVersion || written.record.resourceVersion === owner.resourceVersion) {
+        throw new Error('The installation record write returned no confirmed new version; ownership is unknown, so this run stops. Review the record and resume with --one-way-recovery.');
+      }
+      owner.resourceVersion = written.record.resourceVersion;
+      effects.push(`recorded ${lock.releaseDigest.slice(0, 19)}… ${phase}`);
     };
     const writeState = (lock, phase, extra = {}) => repair
       ? operations.recordInstallationState(lock, config.storageClass, initialAdmin, effectiveConsoleUrl,
@@ -3209,7 +3237,10 @@ export async function upgrade(
       : ownedWrite(lock, phase, extra);
     // Claim before the first change: a crash or a concurrent run now finds a non-Ready record that
     // names this transition, so neither an ordinary upgrade nor another run proceeds silently.
-    if (!repair) ownedWrite(previousLock, 'Installing', { transition });
+    if (!repair) {
+      ownedWrite(previousLock, 'Installing', { transition });
+      assertOwned('before installing the target');
+    }
     let agentIdentityMigrationCommitted = false;
     let forwardRepairStarted = false;
     const repairStateOptions = (extra = {}) => {
@@ -3254,6 +3285,7 @@ export async function upgrade(
           targetLock, target, config.storageClass, effectiveConsoleUrl, '업그레이드'
         );
       }
+      if (!repair) effects.push('applied the target workloads and migrations');
       writeState(targetLock, 'Installing', transition ? { transition } : {});
       if (componentTransition) operations.waitForComponentRollouts(changedWorkloadComponents);
       else operations.waitForCoreRollouts(targetLock);
@@ -3263,6 +3295,7 @@ export async function upgrade(
         bootstrapHistory,
         componentSelection: componentTransition ? changedWorkloadComponents : null
       });
+      if (!repair) { effects.push('verified the target'); assertOwned('during target verification'); }
       let retainedKnowledge = [];
       if (agentIdentityCutover) {
         retainedKnowledge = operations.pruneReleaseResources(previousComponentInventory, targetComponentInventory) || [];
@@ -3275,7 +3308,9 @@ export async function upgrade(
       // Keep deferred objects in the persisted inventory so a later ordinary
       // upgrade retries safe retirement after the last old reader disappears.
       appendRetainedResources(targetInventory, retainedKnowledge);
+      if (!repair) { effects.push('pruned resources the target no longer declares'); assertOwned('after pruning'); }
       operations.recordReleaseInventory(targetLock, targetInventory);
+      if (!repair) effects.push('recorded the target inventory');
       writeState(targetLock, 'Ready', { verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: evidence.verifiedAt } });
       return {
         changed: true,
@@ -3300,7 +3335,7 @@ export async function upgrade(
       console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
       // Never act on an installation another writer changed meanwhile.
       if (!ownsRecord()) {
-        throw new Error(`Upgrade failed and the installation record changed meanwhile; no rollback or record change was made: ${upgradeError.message}`);
+        throw new Error(`Upgrade failed (${upgradeError.message}); ${lostOwnership('meanwhile').message.replace(/^The/, 'the')}`);
       }
       if (agentIdentityCutover) {
         if (agentIdentityMigrationCommitted) {
@@ -3337,7 +3372,9 @@ export async function upgrade(
             ? `it cannot be established whether ${describeOneWay(boundary.pending)} committed`
             : crossed.length ? `${describeOneWay(crossed)} committed` : 'this recovery does not roll back';
           try {
+            assertOwned('before recording the kept target');
             operations.recordReleaseInventory(targetLock, targetInventory);
+            effects.push('recorded the target inventory');
             ownedWrite(targetLock, 'Failed', { failureCode, transition: { ...transition, outcome: {
               failedAt: new Date().toISOString(),
               committed: committed === null ? null : crossed.map((e) => e.globalId),
@@ -3352,6 +3389,7 @@ export async function upgrade(
         // Confirmed not applied: the database still fits the previous release, so the rollback below is safe.
       }
       try {
+        assertOwned('before the rollback');
         if (componentTransition && rollbackChangedComponents.length > 0) {
           operations.installPreparedComponentRelease(
             previousLock,
@@ -3368,8 +3406,11 @@ export async function upgrade(
             previousLock, rollback, config.storageClass, effectiveConsoleUrl, '롤백'
           );
         }
+        effects.push('reinstalled the previous release');
+        assertOwned('after reinstalling the previous release');
         if (componentTransition) {
           appendRetainedResources(previousInventory, operations.pruneReleaseResources(targetComponentInventory, previousComponentInventory));
+          effects.push('pruned the target components');
         }
         writeState(previousLock, 'Installing');
         if (componentTransition && rollbackChangedComponents.length > 0) {
@@ -3385,10 +3426,15 @@ export async function upgrade(
             ? rollbackChangedComponents
             : null
         });
+        effects.push('verified the previous release');
+        assertOwned('during rollback verification');
         if (!componentTransition) {
           appendRetainedResources(previousInventory, operations.pruneReleaseResources(targetInventory, previousInventory));
+          effects.push('pruned resources the previous release does not declare');
         }
+        assertOwned('after the rollback prune');
         operations.recordReleaseInventory(previousLock, previousInventory);
+        effects.push('recorded the previous inventory');
         writeState(previousLock, 'Ready', { verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: rollbackEvidence.verifiedAt } });
       } catch (rollbackError) {
         throw new Error(`Upgrade failed (${upgradeError.message}); rollback also failed (${rollbackError.message})`);
