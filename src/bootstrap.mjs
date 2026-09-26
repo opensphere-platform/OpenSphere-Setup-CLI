@@ -1,3 +1,4 @@
+import { pendingOneWayMigrations, committedOneWayMigrations, describeOneWay } from './one-way-migrations.mjs';
 import {KUBERNETES_EGRESS_SLOT,discoverRegistryKubernetesEgress,renderRegistryKubernetesEgress,discoverConsoleApiCiliumPolicy} from './registry-runtime-access.mjs';
 import {setTimeout as registryDelay} from 'node:timers/promises';
 import {REGISTRY_AUTH_SECRET,REGISTRY_AUTH_CONTRACT,REGISTRY_NAMESPACES,initialRegistryState,registryStateSecret,parseRegistryState,requiredImages,pullSecretData,GENERATION_ANNOTATION,validateCredential} from './registry-lifecycle-contract.mjs';
@@ -1425,20 +1426,36 @@ function runComponentMigrationSql(pod, sql, { transaction = false } = {}) {
   ], { capture: true, input: sql });
 }
 
-function runComponentMigrations(foundation, progress) {
-  if (!foundation.migration || foundation.target) return;
-  const manifest = foundation.migration.manifest;
-  if (manifest.schemaVersion !== 1) {
-    throw new Error('Component release requires the current global migration manifest');
-  }
+function readySupabasePostgresPod(purpose) {
   const pods = JSON.parse(kubectl([
     '-n', 'opensphere-console-data', 'get', 'pods',
     '-l', 'app=opensphere-supabase-postgres', '-o', 'json'
   ], { capture: true }));
   const ready = (pods.items ?? []).filter((pod) => pod.status?.phase === 'Running'
     && (pod.status?.conditions ?? []).some((condition) => condition.type === 'Ready' && condition.status === 'True'));
-  if (ready.length !== 1) throw new Error('Component migration requires exactly one Ready Supabase PostgreSQL pod');
-  const pod = ready[0].metadata.name;
+  if (ready.length !== 1) throw new Error(`${purpose} requires exactly one Ready Supabase PostgreSQL pod`);
+  return ready[0].metadata.name;
+}
+
+// The applied Console migrations, oldest first, as [globalId, semanticKey, ...] rows.
+export function readMigrationLedger() {
+  const pod = readySupabasePostgresPod('Reading the migration ledger');
+  if (runComponentMigrationSql(pod,
+    "SELECT CASE WHEN to_regclass('console_migration.applied_migration') IS NULL THEN 'absent' ELSE 'present' END;") !== 'present') {
+    throw new Error('The global migration ledger is absent');
+  }
+  const output = runComponentMigrationSql(pod,
+    "SELECT global_id || '|' || semantic_key FROM console_migration.applied_migration ORDER BY applied_sequence;");
+  return output ? output.split(/\r?\n/u).map((row) => row.split('|')) : [];
+}
+
+function runComponentMigrations(foundation, progress) {
+  if (!foundation.migration || foundation.target) return;
+  const manifest = foundation.migration.manifest;
+  if (manifest.schemaVersion !== 1) {
+    throw new Error('Component release requires the current global migration manifest');
+  }
+  const pod = readySupabasePostgresPod('Component migration');
   const ledgerExists = runComponentMigrationSql(
     pod,
     "SELECT CASE WHEN to_regclass('console_migration.applied_migration') IS NULL THEN 'absent' ELSE 'present' END;"
@@ -2906,6 +2923,7 @@ export async function upgrade(
     installPreparedRelease,
     installPreparedComponentRelease,
     runComponentMigrations,
+    readMigrationLedger,
     waitForCoreRollouts,
     waitForComponentRollouts,
     verifyInstallation,
@@ -3071,6 +3089,9 @@ export async function upgrade(
     // Only the fixed Beszel bootstrap Job with unchanged images can reuse it;
     // all live services, credentials, databases and workloads are checked anew.
     const bootstrapHistory = repair ? null : operations.readBeszelBootstrapHistory(previousLock);
+    // Review R1: a one-way migration this upgrade would apply (the R2D2 task engine cutover). Once it
+    // commits, or when that cannot be established, the previous release is never reinstalled.
+    const oneWay = repair ? [] : pendingOneWayMigrations(target.foundation?.migration?.manifest, () => operations.readMigrationLedger());
     let agentIdentityMigrationCommitted = false;
     let forwardRepairStarted = false;
     const repairStateOptions = (extra = {}) => {
@@ -3197,6 +3218,26 @@ export async function upgrade(
         operations.deleteAgentIdentityNamespace(CANONICAL_AGENT_NAMESPACE);
         operations.recordReleaseInventory(previousLock, previousInventory);
         throw new Error(`OSAA identity cutover failed before migration; previous installation retained: ${upgradeError.message}`);
+      }
+      if (oneWay.length) {
+        const committed = committedOneWayMigrations(oneWay, () => operations.readMigrationLedger());
+        if (committed === null || committed.length) {
+          // Keep the target lock, its inventory and every resource (the worker included) for a forward
+          // recovery; install no previous binaries, restore no old lock, prune nothing.
+          const failureCode = committed === null ? 'one-way-migration-state-unknown' : 'one-way-migration-recovery-required';
+          const what = committed === null
+            ? `it cannot be established whether ${describeOneWay(oneWay)} committed`
+            : `${describeOneWay(committed)} committed`;
+          try {
+            operations.recordReleaseInventory(targetLock, targetInventory);
+            operations.recordInstallationState(targetLock, config.storageClass, initialAdmin, effectiveConsoleUrl,
+              config.authEnvironment, config.shellTlsSecret, 'Failed', { failureCode });
+          } catch (recordError) {
+            throw new Error(`Upgrade failed and ${what}; the previous release was not reinstalled, and the installation record could not be updated (${recordError.message}): ${upgradeError.message}`);
+          }
+          throw new Error(`${failureCode}: upgrade failed and ${what}; the previous release was not reinstalled and the target release was kept for a forward recovery: ${upgradeError.message}`);
+        }
+        // Confirmed not applied: the database still fits the previous release, so the rollback below is safe.
       }
       try {
         if (componentTransition && rollbackChangedComponents.length > 0) {

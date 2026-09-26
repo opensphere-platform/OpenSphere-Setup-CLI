@@ -16,6 +16,8 @@ OpenSphere 설치 입력은 mutable tag 목록이 아니라 Console anchor diges
 
 component lock은 localhost `edge`의 **upgrade 전용** 계약이다. fresh bootstrap, `candidate`/`stable`, signed Release BOM 승격에는 사용할 수 없다. 실패하면 직전의 완전한 base lock과 사전 확보한 artifact로 rollback한 뒤 그 상태를 다시 검증한다.
 
+**되돌릴 수 없는 migration(2026-09-26, 검토 R1):** 대상 release의 검증된 migration manifest에 R2D2 task engine 전환(`console.osdst.task_engine_cutover`)처럼 한 방향 migration이 있고 원장에 아직 없으면, Setup은 갱신 전에 원장을 읽는다(못 읽으면 아무것도 바꾸지 않고 멈춘다). 통합·component 갱신이 실패한 뒤 원장에 그 migration이 있거나 원장을 읽을 수 없으면 이전 release를 설치하지 않는다. 대상 lock과 inventory, worker를 포함한 자원을 그대로 두고 설치 기록을 `Failed`(`one-way-migration-recovery-required` 또는 `one-way-migration-state-unknown`)로 남긴다. 회복은 고친 새 release로 앞으로 가는 것이다. 원장에 없음이 확인된 실패만 기존처럼 rollback한다.
+
 Canonical 19개:
 
 ```text
