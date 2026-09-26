@@ -34,6 +34,36 @@ export function ledgerPosition(manifest, rows) {
   return rows.length;
 }
 
+// Re-review 5, F5-1: what installing a release whose installers receive `chain` would do to a
+// database with these ledger rows. `fits`: the chain equals the ledger, so it applies nothing.
+// `would-apply`: the ledger is a shorter prefix; the installers would apply the rest. `database-ahead`:
+// the chain is a shorter prefix of the ledger; that release cannot take the database. `diverged`: a
+// row differs. A malformed chain or ledger answer throws: that is not knowing, not a verdict.
+export function chainVerdict(chain, rows) {
+  const entries = chain?.migrations;
+  if (!Array.isArray(entries)) throw new Error('the release migration chain is unavailable or malformed');
+  if (!Array.isArray(rows) || rows.some((row) => !Array.isArray(row) || row.length !== 7 || row.some((v) => typeof v !== 'string'))) {
+    throw new Error('the ledger answer is malformed');
+  }
+  const shared = Math.min(rows.length, entries.length);
+  for (let index = 0; index < shared; index += 1) {
+    if (JSON.stringify(rows[index]) !== JSON.stringify(expectedRow(entries[index]))) {
+      return Object.freeze({ kind: 'diverged', at: index + 1, databaseRows: rows.length, chainLength: entries.length });
+    }
+  }
+  const kind = rows.length === entries.length ? 'fits' : rows.length < entries.length ? 'would-apply' : 'database-ahead';
+  return Object.freeze({ kind, databaseRows: rows.length, chainLength: entries.length });
+}
+
+export function describeChainVerdict(verdict) {
+  switch (verdict.kind) {
+    case 'fits': return 'the previous release applies no migration to this database';
+    case 'would-apply': return `the previous release's installers would apply ${verdict.chainLength - verdict.databaseRows} migration(s) the database lacks`;
+    case 'database-ahead': return `the database has ${verdict.databaseRows - verdict.chainLength} migration(s) beyond the previous release's chain, so that release cannot take it back`;
+    default: return `the database differs from the previous release's chain at migration ${verdict.at}`;
+  }
+}
+
 export function oneWayEntries(manifest) {
   return (manifest?.migrations ?? []).map((entry, index) => ({ entry, index }))
     .filter(({ entry }) => Object.hasOwn(ONE_WAY_MIGRATIONS, entry.semanticKey))

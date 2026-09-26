@@ -1,4 +1,4 @@
-import { LedgerMismatch, ledgerPosition, oneWayBoundary, progressAfterFailure, releaseIncludes, describeOneWay, transitionOneWay } from './one-way-migrations.mjs';
+import { LedgerMismatch, chainVerdict, describeChainVerdict, oneWayBoundary, progressAfterFailure, releaseIncludes, describeOneWay, transitionOneWay } from './one-way-migrations.mjs';
 import {KUBERNETES_EGRESS_SLOT,discoverRegistryKubernetesEgress,renderRegistryKubernetesEgress,discoverConsoleApiCiliumPolicy} from './registry-runtime-access.mjs';
 import {setTimeout as registryDelay} from 'node:timers/promises';
 import {REGISTRY_AUTH_SECRET,REGISTRY_AUTH_CONTRACT,REGISTRY_NAMESPACES,initialRegistryState,registryStateSecret,parseRegistryState,requiredImages,pullSecretData,GENERATION_ANNOTATION,validateCredential} from './registry-lifecycle-contract.mjs';
@@ -1140,14 +1140,9 @@ async function writeReleaseArtifact(root, path, contents) {
   return target;
 }
 
-export async function materializeSupabaseMigrationSet(
-  lock,
-  root,
-  sourceRevision = lock.sourceRevision,
-  signedEvidence = lock.releaseBom?.migrationManifest,
-  manifestPath = migrationManifestPath(lock),
-  { sourceArtifactCredential = null } = {}
-) {
+// The migration manifest a release's installers receive, fetched and checked against the signed
+// evidence exactly as the installation materializes it.
+async function readVerifiedMigrationManifest(lock, sourceRevision, signedEvidence, manifestPath, { sourceArtifactCredential = null } = {}) {
   const rawManifest = await fetchReleaseArtifact(lock, manifestPath, {
     sourceRevision,
     sourceArtifactCredential
@@ -1175,6 +1170,26 @@ export async function materializeSupabaseMigrationSet(
   )) {
     throw new Error('Console migration manifest differs from release evidence');
   }
+  return { rawManifest, manifest, observedEvidence };
+}
+
+// Re-review 5, F5-1: the chain a rollback to this release would hand its installers. Same source and
+// checks as the rollback preparation below; nothing is written.
+export async function readRollbackMigrationChain(lock, { sourceArtifactCredential = null } = {}) {
+  return (await readVerifiedMigrationManifest(lock, lock.sourceRevision, lock.releaseBom?.migrationManifest,
+    migrationManifestPath(lock), { sourceArtifactCredential })).manifest;
+}
+
+export async function materializeSupabaseMigrationSet(
+  lock,
+  root,
+  sourceRevision = lock.sourceRevision,
+  signedEvidence = lock.releaseBom?.migrationManifest,
+  manifestPath = migrationManifestPath(lock),
+  { sourceArtifactCredential = null } = {}
+) {
+  const { rawManifest, manifest, observedEvidence } = await readVerifiedMigrationManifest(
+    lock, sourceRevision, signedEvidence, manifestPath, { sourceArtifactCredential });
   const artifacts = await Promise.all(manifest.migrations.map(async (entry) => {
     const contents = await fetchReleaseArtifact(lock, entry.path, {
       sourceRevision,
@@ -2980,6 +2995,7 @@ export async function upgrade(
     runComponentMigrations,
     readMigrationLedger,
     readReleaseMigrationManifests,
+    readRollbackMigrationChain,
     waitForCoreRollouts,
     waitForComponentRollouts,
     verifyInstallation,
@@ -3203,40 +3219,50 @@ export async function upgrade(
         throw new Error(`The database already passed ${describeOneWay(boundary.committed)}, but the installed release ${previousLock.releaseDigest} predates it or that cannot be established; an automatic rollback would install binaries that do not fit the data. Stopped before any workload, migration or installation record change. Review the installation record and run upgrade --one-way-recovery <record-sha256>.`);
       }
     }
-    // The previous release's own chain equals the live ledger: its installers would apply nothing.
-    const previousChainIsLedger = async () => {
-      try {
-        const rows = operations.readMigrationLedger();
-        const manifests = await operations.readReleaseMigrationManifests(previousLock, { sourceArtifactCredential });
-        return manifests.length > 0 && manifests.every((manifest) => ledgerPosition(manifest, rows) === manifest.migrations.length);
-      } catch { return false; }
-    };
-    if (recovery && startState?.phase === 'Ready' && previousFits) {
-      // A Ready installation recovers forward only when an ordinary upgrade cannot start safely:
-      // target migrations before a pending one-way one are already applied (below).
-      const ordinaryWouldStop = boundary?.pending.length && !componentTransition && !(await previousChainIsLedger());
-      if (!ordinaryWouldStop) throw new Error('The installation is Ready and its release fits the database; use an ordinary upgrade');
-    }
     // Acceptance preparation after re-review 4 (2026-09-26): an integrated rollback runs the previous
     // release's installers, and they apply every migration of the chain they are given. Given the
     // target's chain, a rollback before a pending one-way migration would apply it. The only safe
-    // rollback there is the previous release with its own chain, which must already hold the whole
-    // ledger so that it applies nothing. Prepared and checked here, before any change.
+    // rollback there is the previous release with its own chain, and only while that chain equals
+    // the ledger, so that it applies nothing.
+    //
+    // Re-review 5, F5-1: one judgement decides both whether an ordinary upgrade can promise that
+    // rollback and whether a Ready installation may recover forward instead. It reads the chain from
+    // the same source and checks the rollback preparation uses (readRollbackMigrationChain), not the
+    // migration owners' chains, which answer a different question (previousFits above). Not being
+    // able to read either is its own error, never a verdict.
+    const needsOwnChainRollback = Boolean(boundary?.pending.length && !componentTransition);
+    let rollbackChain = null;
+    let rollbackVerdict = null;
+    if (needsOwnChainRollback && (!recovery || startState?.phase === 'Ready')) {
+      try {
+        rollbackChain = await operations.readRollbackMigrationChain(previousLock, { sourceArtifactCredential });
+        rollbackVerdict = chainVerdict(rollbackChain, operations.readMigrationLedger());
+      } catch (error) {
+        throw new Error(`Whether the previous release can be restored without applying ${describeOneWay(boundary.pending)} `
+          + `could not be established (${error.message}); stopped before any change`);
+      }
+    }
+    if (recovery && startState?.phase === 'Ready' && previousFits
+      && !(needsOwnChainRollback && rollbackVerdict.kind !== 'fits')) {
+      // A Ready installation recovers forward only when that judgement found a concrete reason why
+      // an ordinary upgrade cannot promise a rollback that applies nothing.
+      throw new Error('The installation is Ready and its release fits the database; use an ordinary upgrade');
+    }
     let ownChainRollback = null;
-    if (boundary?.pending.length && !componentTransition && !recovery) {
+    if (needsOwnChainRollback && !recovery) {
+      if (rollbackVerdict.kind !== 'fits' || rollbackVerdict.databaseRows !== boundary.applied) {
+        const reason = rollbackVerdict.kind !== 'fits' ? describeChainVerdict(rollbackVerdict)
+          : `the ledger changed from ${boundary.applied} to ${rollbackVerdict.databaseRows} migrations during preparation`;
+        throw new Error(`An ordinary upgrade cannot promise a rollback that applies nothing before ${describeOneWay(boundary.pending)}: `
+          + `${reason}. Stopped before any change. Review a forward-only recovery with upgrade --one-way-recovery-plan`);
+      }
       ownChainRollback = await operations.prepareRelease(previousLock, ownChainRollbackWork, config.storageClass,
         effectiveConsoleUrl, config.authEnvironment,
         { optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS, sourceArtifactCredential, registryCredentials });
-      try {
-        const ownChain = ownChainRollback.foundation?.migration?.manifest;
-        const held = ledgerPosition(ownChain, operations.readMigrationLedger());
-        if (held !== boundary.applied || held !== ownChain.migrations.length) {
-          throw new Error(`the database has ${held} migrations; the chain has ${ownChain.migrations.length} and the target analysis saw ${boundary.applied}`);
-        }
-      } catch (error) {
-        throw new Error(`The previous release's own migration chain does not hold the current database (${error.message}); `
-          + `a rollback before ${describeOneWay(boundary.pending)} could not avoid applying it, so the upgrade stopped before any change. `
-          + 'Review a forward-only recovery with upgrade --one-way-recovery-plan');
+      // The prepared installers must carry exactly the judged chain.
+      const prepared = ownChainRollback.foundation?.migration?.manifest?.migrations;
+      if (!Array.isArray(prepared) || JSON.stringify(prepared) !== JSON.stringify(rollbackChain.migrations)) {
+        throw new Error('The prepared rollback carries a different migration chain from the one judged; stopped before any change');
       }
     }
     const transition = repair ? undefined : {
@@ -3432,6 +3458,8 @@ export async function upgrade(
               committed: committed === null ? null : crossed.map((e) => e.globalId),
               appliedMigrations: progress ? progress.applied : null,
               rollbackAvailable: false,
+              // Re-review 5: why no rollback, for the recovery plan and Console to show as is.
+              reason: what,
               inventoryVerified: false
             } } });
           } catch (recordError) {

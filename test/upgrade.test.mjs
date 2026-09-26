@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {assertForwardRepair,installationRecordDigest} from '../src/forward-repair.mjs';
+import {chainVerdict,describeChainVerdict} from '../src/one-way-migrations.mjs';
 import {
   bootstrap,
   COMPONENT_ROLLOUTS,
@@ -940,7 +941,8 @@ const localEdge = (release) => {
   return release;
 };
 function cutoverRuntime(previous, target, events, {
-  ledger, failTarget = false, recordedInventory = null, store = recordStore(previous), previousChain = PRE_CUTOVER_CHAIN, chain = CHAIN, on = {}
+  ledger, failTarget = false, recordedInventory = null, store = recordStore(previous), previousChain = PRE_CUTOVER_CHAIN, chain = CHAIN,
+  rollbackChain = previousChain, ownerChain = previousChain, on = {}
 }) {
   const base = runtime(previous, events, { failTarget, recordedInventory, store });
   const withChain = (release, prepared, manifest = chain) => release.releaseDigest !== target.releaseDigest ? prepared
@@ -966,7 +968,10 @@ function cutoverRuntime(previous, target, events, {
       if (on.ledger) return on.ledger();
       return ledger.map(row);
     },
-    readReleaseMigrationManifests: async (release) => { events.push(`previous-chain:${release.sourceRevision}`); return [previousChain]; },
+    // The migration owners' chains (does the release fit a crossed cutover) and the chain a rollback
+    // hands its installers (does it apply nothing) are separate reads, as in the product.
+    readReleaseMigrationManifests: async (release) => { events.push(`previous-chain:${release.sourceRevision}`); if (on.ownerChain) return on.ownerChain(); return [ownerChain]; },
+    readRollbackMigrationChain: async (release) => { events.push(`rollback-chain-read:${release.sourceRevision}`); if (on.rollbackChain) return on.rollbackChain(); return rollbackChain; },
     installPreparedRelease: (release, prepared, storageClass, consoleUrl, label) => {
       events.push(`install:${label}:${release.sourceRevision}`);
       if (label === '롤백') {
@@ -1029,16 +1034,21 @@ test('one-way cutover: target migrations before it without it keep the target; n
   assertTargetKept(events, store, target, 'partial-migration-recovery-required');
   assert.deepEqual(store.state.transition.outcome.committed, []);
   assert.equal(store.state.transition.outcome.appliedMigrations, 2);
+  assert.match(store.state.transition.outcome.reason, /1 target migration\(s\) committed before R2D2 task engine cutover .*no longer fits the database without applying it/);
 });
 
-for (const [name, previousChain, ledger] of [
-  ['lacks a migration the database has', Object.freeze({ schemaVersion: 1, migrations: [] }), [BEFORE]],
-  ['has migrations the database lacks (its installers would apply them)', CHAIN_WITH_MID, [BEFORE]],
+for (const [name, previousChain, ledger, pattern] of [
+  ['lacks a migration the database has', Object.freeze({ schemaVersion: 1, migrations: [] }), [BEFORE],
+    /cannot promise a rollback that applies nothing .*: the database has 1 migration\(s\) beyond the previous release's chain.*Stopped before any change/],
+  ['has migrations the database lacks (its installers would apply them)', CHAIN_WITH_MID, [BEFORE],
+    /cannot promise a rollback that applies nothing .*: the previous release's installers would apply 3 migration\(s\) the database lacks.*Stopped before any change/],
+  ['differs from the database at a row', Object.freeze({ schemaVersion: 1, migrations: [{ ...BEFORE, sha256: `sha256:${'e'.repeat(64)}` }] }), [BEFORE],
+    /cannot promise a rollback that applies nothing .*: the database differs from the previous release's chain at migration 1/],
 ]) {
   test(`one-way cutover: a previous release whose own chain ${name} stops the upgrade before any change`, async () => {
     const { previous, target } = activation(), events = [], store = recordStore(previous);
     await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger, store, previousChain }) }),
-      /previous release's own migration chain does not hold the current database .*stopped before any change/);
+      pattern);
     assert.deepEqual(installs(events), []); assert.equal(store.rv, 1, 'the installation record is untouched');
   });
 }
@@ -1185,7 +1195,7 @@ test('one-way cutover: a Ready release whose own chain the database outgrew is n
   const events = [];
   // An ordinary upgrade cannot promise a rollback that applies nothing, so it stops before any change ...
   await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger, store, chain: CHAIN_WITH_MID }) }),
-    /own migration chain does not hold the current database .*--one-way-recovery-plan/);
+    /cannot promise a rollback that applies nothing .*database has 1 migration\(s\) beyond .*--one-way-recovery-plan/);
   assert.deepEqual(installs(events), []); assert.equal(store.rv, 1);
   // ... and the reviewed forward-only recovery is accepted from Ready.
   const recovered = [];
@@ -1195,6 +1205,88 @@ test('one-way cutover: a Ready release whose own chain the database outgrew is n
   assert.equal(result.changed, true);
   assert.deepEqual(installs(recovered), [`install:업그레이드:${target.sourceRevision}`]);
   assert.equal(store.release.releaseDigest, target.releaseDigest); assert.equal(store.state.phase, 'Ready');
+});
+
+// Re-review 5, F5-1: the ordinary upgrade and a Ready recovery decide from one judgement of the chain
+// a rollback hands its installers, not from the migration owners' chains, and a read failure is
+// never a verdict.
+const MID_CHAIN = Object.freeze({ schemaVersion: 1, migrations: [BEFORE, MID] });
+async function attemptOverMid({ ledger, recovery = false, on = {}, ...options }) {
+  const { previous, target } = activation(), store = recordStore(previous), events = [], live = [...ledger];
+  let error = null, result = null;
+  try {
+    result = await upgrade(previous, target, { ...(recovery ? { oneWayRecoveryRecordDigest: installationRecordDigest(store.read()) } : {}),
+      runtime: cutoverRuntime(previous, target, events, { ledger: live, store, chain: CHAIN_WITH_MID, ...options,
+        on: { install: () => { if (live.length === 1) live.push(MID); live.push(CUTOVER_AFTER_MID, AFTER); }, ...on } }) });
+  } catch (e) { error = e.message; }
+  return { error, changed: result?.changed ?? false, installs: installs(events), events, store };
+}
+
+test('F5-1: the rollback chain behind the ledger while the owners\' chain matches it: the upgrade stops, recovery goes forward', async () => {
+  const setup = { ledger: [BEFORE, MID], rollbackChain: PRE_CUTOVER_CHAIN, ownerChain: MID_CHAIN };
+  const ordinary = await attemptOverMid(setup);
+  assert.match(ordinary.error, /database has 1 migration\(s\) beyond the previous release's chain.*--one-way-recovery-plan/);
+  assert.deepEqual(ordinary.installs, []); assert.equal(ordinary.store.rv, 1);
+  const recovered = await attemptOverMid({ ...setup, recovery: true });
+  assert.equal(recovered.error, null); assert.equal(recovered.changed, true);
+  assert.deepEqual(recovered.installs, [`install:업그레이드:${'2'.repeat(40)}`]);
+});
+
+test('F5-1: the rollback chain equal to the ledger while the owners\' chain differs: the upgrade runs, recovery is refused', async () => {
+  const setup = { ledger: [BEFORE], rollbackChain: PRE_CUTOVER_CHAIN, ownerChain: MID_CHAIN };
+  const ordinary = await attemptOverMid(setup);
+  assert.equal(ordinary.error, null); assert.equal(ordinary.changed, true);
+  const recovery = await attemptOverMid({ ...setup, recovery: true });
+  assert.match(recovery.error, /Ready and its release fits the database; use an ordinary upgrade/);
+  assert.deepEqual(recovery.installs, []); assert.equal(recovery.store.rv, 1);
+});
+
+test('F5-1: an unreadable rollback chain is not a verdict; neither route proceeds and recovery is not admitted', async () => {
+  const unreadable = { ledger: [BEFORE], on: { rollbackChain: () => { throw new Error('manifest transport unavailable'); } } };
+  for (const recovery of [false, true]) {
+    const attempt = await attemptOverMid({ ...unreadable, recovery });
+    assert.match(attempt.error, /could not be established \(manifest transport unavailable\); stopped before any change/, `recovery=${recovery}`);
+    assert.deepEqual(attempt.installs, []); assert.equal(attempt.store.rv, 1);
+  }
+  // The owners' chains answer another question; their read failing does not admit a Ready recovery.
+  const ownerUnreadable = await attemptOverMid({ ledger: [BEFORE], recovery: true, on: { ownerChain: () => { throw new Error('owner manifest unavailable'); } } });
+  assert.match(ownerUnreadable.error, /use an ordinary upgrade/); assert.deepEqual(ownerUnreadable.installs, []);
+});
+
+test('F5-1 control: matching chains run the ordinary upgrade and refuse a Ready recovery', async () => {
+  const ordinary = await attemptOverMid({ ledger: [BEFORE] });
+  assert.equal(ordinary.error, null); assert.equal(ordinary.changed, true);
+  assert.ok(ordinary.events.includes(`rollback-chain-read:${preWorkerLock().sourceRevision}`));
+  const recovery = await attemptOverMid({ ledger: [BEFORE], recovery: true });
+  assert.match(recovery.error, /use an ordinary upgrade/); assert.deepEqual(recovery.installs, []);
+});
+
+test('F5-1 control: past the cutover, a Ready release that includes it is refused recovery without judging the rollback chain', async () => {
+  const previous = localEdge(lock('1'.repeat(40), 'a')), target = localEdge(lock('2'.repeat(40), 'b'));
+  const store = recordStore(previous), events = [];
+  await assert.rejects(upgrade(previous, target, { oneWayRecoveryRecordDigest: installationRecordDigest(store.read()),
+    runtime: cutoverRuntime(previous, target, events, { ledger: [BEFORE, CUTOVER], store, previousChain: CHAIN, rollbackChain: PRE_CUTOVER_CHAIN }) }),
+  /use an ordinary upgrade/);
+  assert.equal(events.some((e) => e.startsWith('rollback-chain-read:')), false);
+  assert.deepEqual(installs(events), []);
+});
+
+test('F5-1: a prepared rollback that carries another chain than the judged one stops before any change', async () => {
+  const attempt = await attemptOverMid({ ledger: [BEFORE], rollbackChain: PRE_CUTOVER_CHAIN, previousChain: MID_CHAIN });
+  assert.match(attempt.error, /prepared rollback carries a different migration chain from the one judged; stopped before any change/);
+  assert.deepEqual(attempt.installs, []); assert.equal(attempt.store.rv, 1);
+});
+
+test('F5-1: the chain verdict separates fits, would-apply, database-ahead and diverged, and throws on malformed input', () => {
+  const rows = [row(BEFORE), row(MID)];
+  assert.equal(chainVerdict(MID_CHAIN, rows).kind, 'fits');
+  assert.deepEqual({ ...chainVerdict(CHAIN_WITH_MID, rows) }, { kind: 'would-apply', databaseRows: 2, chainLength: 4 });
+  assert.deepEqual({ ...chainVerdict(PRE_CUTOVER_CHAIN, rows) }, { kind: 'database-ahead', databaseRows: 2, chainLength: 1 });
+  const other = { schemaVersion: 1, migrations: [BEFORE, { ...MID, sha256: `sha256:${'e'.repeat(64)}` }] };
+  assert.deepEqual({ ...chainVerdict(other, rows) }, { kind: 'diverged', at: 2, databaseRows: 2, chainLength: 2 });
+  assert.notEqual(describeChainVerdict(chainVerdict(CHAIN_WITH_MID, rows)), describeChainVerdict(chainVerdict(PRE_CUTOVER_CHAIN, rows)));
+  assert.throws(() => chainVerdict(undefined, rows), /chain is unavailable or malformed/);
+  assert.throws(() => chainVerdict(MID_CHAIN, [['only', 'two']]), /ledger answer is malformed/);
 });
 
 test('one-way cutover: an interrupted run cannot be papered over by completing the earlier release', async () => {
