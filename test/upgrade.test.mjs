@@ -1291,7 +1291,6 @@ test('F5-1: the chain verdict separates fits, would-apply, database-ahead and di
 });
 
 test('one-way cutover: an interrupted run cannot be papered over by completing the earlier release', async () => {
-  // A canonical earlier release (a pre-worker lock cannot be completed at all and must be recovered).
   const previous = localEdge(lock('1'.repeat(40), 'a')), target = localEdge(lock('2'.repeat(40), 'b'));
   const interrupted = (ledgerRows) => {
     const store = recordStore(previous, { phase: 'Installing', transition: { runId: '00000000-0000-4000-8000-000000000000',
@@ -1299,6 +1298,7 @@ test('one-way cutover: an interrupted run cannot be papered over by completing t
       oneWay: { migrations: [{ globalId: CUTOVER.globalId, semanticKey: CUTOVER.semanticKey }], committedAtStart: [] } } });
     const verified = [];
     const ops = { readInstallationRecord: () => store.read(), readReleaseInventory: () => [{ name: 'complete-release' }],
+      readBeszelBootstrapHistory: () => null,
       recordInstallationState: (release, _s, _a, _u, _e, _t, phase, options) => {
         store.write(release, phase, options);
         const written = store.read();
