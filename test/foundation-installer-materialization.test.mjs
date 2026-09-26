@@ -75,3 +75,28 @@ test('Cilium compatibility policy reaches both preflight and the actual PowerShe
   assert.match(result.release[0].yaml,/"toEntities":\["kube-apiserver"\]/);
   assert.equal(installer.split('---\n')[1],result.release[0].yaml.split('---\n')[1]);
 });
+
+// 2026-09-27: B0 (a component record) carried Knowledge edge.12 promoted by a Console Knowledge
+// release while its Gateway source named edge.7, so preparing it as the rollback baseline of an
+// integrated upgrade failed before anything ran.
+const recorded={...knowledge,sha256:'c'.repeat(64),knowledgeImage:'synthetic-promoted-image'};
+test('reinstalling a component record admits its recorded Knowledge through the installer release root',async()=>{
+  const h=harness();
+  const result=await h.run({sourceRevision:'a'.repeat(40),releaseScope:'component',knowledge:recorded},'/unused','standard','https://localhost:1114','development');
+  const locks=h.writes.filter(w=>w.path===KNOWLEDGE_LOCK_PATH);
+  assert.equal(locks.length,2);
+  assert.deepEqual(JSON.parse(locks[0].contents),knowledge);
+  assert.deepEqual(JSON.parse(locks[1].contents),recorded);
+  assert.equal(h.knowledgeCalls.length,1);
+  assert.deepEqual(h.knowledgeCalls[0].lock,recorded);
+  assert.equal(result.knowledgeDirectory,join('/unused','verified-knowledge'));
+});
+test('a newly resolved integrated release still needs exactly its Gateway source Knowledge',async()=>{
+  for(const lock of [{sourceRevision:'a'.repeat(40),knowledge:recorded},{sourceRevision:'a'.repeat(40),releaseScope:'integrated',knowledge:recorded},
+    {sourceRevision:'a'.repeat(40),releaseScope:'component'}]){
+    const h=harness();
+    await assert.rejects(h.run(lock,'/unused','standard','https://localhost:1114','development'),/exact source-admitted Knowledge package/);
+    assert.equal(h.writes.filter(w=>w.path===KNOWLEDGE_LOCK_PATH).length,1);
+    assert.equal(h.knowledgeCalls.length,0);
+  }
+});

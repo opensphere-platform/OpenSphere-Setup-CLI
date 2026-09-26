@@ -1294,6 +1294,31 @@ function sameComponent(left, right) {
   return JSON.stringify(stableValue(left)) === JSON.stringify(stableValue(right));
 }
 
+function knowledgeVersionParts(version) {
+  const match = /^knowledge-v(\d+)\.(\d+)\.(\d+)-edge\.(\d+)$/.exec(version ?? '');
+  if (!match) throw new Error(`Installed or target Knowledge version ${version} has no release order`);
+  return match.slice(1).map(BigInt);
+}
+
+// 2026-09-27: an integrated release carries its Gateway source's Knowledge baseline, which can be
+// older than the pointer a Console Knowledge release promoted on the installation. Installing it
+// would replace the recorded package with an older one (knowledge-update-lifecycle.md rejects a
+// downgrade, a same-version replacement and removal), and the Gateway would keep serving the newer
+// database content while the record names the older package. Refused before anything changes.
+function assertIntegratedKnowledgeAdvance(base, target) {
+  if (!base.knowledge || sameComponent(base.knowledge, target.knowledge)) return;
+  if (!target.knowledge) {
+    throw new Error(`The target release records no Knowledge package; it would remove the installed ${base.knowledge.version}`);
+  }
+  const before = knowledgeVersionParts(base.knowledge.version);
+  const after = knowledgeVersionParts(target.knowledge.version);
+  const position = before.findIndex((part, index) => part !== after[index]);
+  if (position < 0 || after[position] < before[position]) {
+    throw new Error(`The target release carries Knowledge ${target.knowledge.version}, not newer than the installed `
+      + `${base.knowledge.version}; resolve a release whose Gateway source admits a newer Knowledge package`);
+  }
+}
+
 // A component release remains a complete installation lock. The transition
 // contract proves that only the explicitly named components changed and that
 // every other digest and provenance field was inherited byte-for-byte from the
@@ -1309,6 +1334,7 @@ export function validateReleaseTransition(baseLock, targetLock) {
     return target;
   }
   if ((target.releaseScope ?? RELEASE_SCOPE_INTEGRATED) !== RELEASE_SCOPE_COMPONENT) {
+    assertIntegratedKnowledgeAdvance(base, target);
     return target;
   }
   if (target.baseReleaseDigest !== base.releaseDigest) {

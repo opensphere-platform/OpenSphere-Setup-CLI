@@ -1252,9 +1252,20 @@ async function materializeFoundationInstallers(
   let knowledgeDirectory;
   if (target) {
     const sourceKnowledge = JSON.parse(artifacts.find(item => item.path === KNOWLEDGE_LOCK_PATH)?.contents ?? 'null');
-    if (!sourceKnowledge || !lock.knowledge
-      || JSON.stringify(Object.entries(sourceKnowledge).sort()) !== JSON.stringify(Object.entries(lock.knowledge).sort())) {
+    if (!sourceKnowledge || !lock.knowledge) {
       throw new Error('Native installation requires the exact source-admitted Knowledge package');
+    }
+    if (JSON.stringify(Object.entries(sourceKnowledge).sort()) !== JSON.stringify(Object.entries(lock.knowledge).sort())) {
+      // 2026-09-27: a component record carries the Knowledge pointer that its admitted transitions
+      // recorded (a Console Knowledge release promotes it; later code updates inherit it), while its
+      // Gateway source still names the older baseline. Reinstalling that record - the rollback
+      // baseline of an integrated upgrade - must restore what it records, and the native installer
+      // admits only the lock in its release root, so that root carries the recorded pointer. A newly
+      // resolved integrated release is not a record: it must still equal its Gateway source.
+      if (lock.releaseScope !== 'component') {
+        throw new Error('Native installation requires the exact source-admitted Knowledge package');
+      }
+      await writeReleaseArtifact(root, KNOWLEDGE_LOCK_PATH, `${JSON.stringify(lock.knowledge, null, 2)}\n`);
     }
     knowledgeDirectory = join(root, 'verified-knowledge');
     await materializeKnowledgeDirectory(lock.knowledge, knowledgeDirectory, { registryCredentials });
