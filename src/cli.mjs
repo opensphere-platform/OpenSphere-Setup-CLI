@@ -15,6 +15,7 @@ import {
   preflightReleaseArtifacts,
   readInstallationLock,
   readInstallationRecord,
+  readMigrationLedger,
   readReleaseInventory,
   uninstallManagedInstallation,
   upgrade
@@ -165,6 +166,7 @@ Usage:
       [--context <kube-context>] [--storage-class <name>] [--console <https-origin>]
       [--registry-username <github-login> --registry-token-stdin]
       [--repair-plan | --forward-repair <reviewed-installation-record-sha256>]
+      [--one-way-recovery-plan | --one-way-recovery <reviewed-installation-record-sha256>]
   opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
       [--complete-installation]
   opensphere-setup recovery-drill --component <supabase|gitea> --manifest-key <s3-object-key>
@@ -224,6 +226,15 @@ async function main() {
   if ((repairPlan || forwardRepairRecordDigest !== undefined)
     && (command !== 'upgrade' || !explicitLock || (repairPlan && forwardRepairRecordDigest !== undefined))) {
     throw Error('Use upgrade --lock with either --repair-plan or --forward-repair <reviewed-record-sha256>');
+  }
+  // Re-review F2: a Failed, Installing or stale installation past a one-way migration is recovered
+  // forward only, bound to the installation record the operator reviewed.
+  const oneWayRecoveryPlan = hasOption('--one-way-recovery-plan');
+  const oneWayRecoveryRecordDigest = option('--one-way-recovery', undefined);
+  if ((oneWayRecoveryPlan || oneWayRecoveryRecordDigest !== undefined)
+    && (command !== 'upgrade' || !explicitLock || (oneWayRecoveryPlan && oneWayRecoveryRecordDigest !== undefined)
+      || repairPlan || forwardRepairRecordDigest !== undefined)) {
+    throw Error('Use upgrade --lock with either --one-way-recovery-plan or --one-way-recovery <reviewed-record-sha256>, not with forward repair');
   }
   const context = option('--context', '');
   const suppliedConsoleUrl = hasOption('--console') ? normalizeConsoleUrl(option('--console', '')) : undefined;
@@ -539,7 +550,8 @@ async function main() {
     const registryCredentials = await registryCredentialsOption();
     assertKubectl();
     const targetPlatforms = readNodePlatforms();
-    const migrated = (repairPlan || forwardRepairRecordDigest !== undefined) ? false : await migrateLegacyInstallationLock();
+    const recoveryMode = oneWayRecoveryPlan || oneWayRecoveryRecordDigest !== undefined;
+    const migrated = (repairPlan || forwardRepairRecordDigest !== undefined || recoveryMode) ? false : await migrateLegacyInstallationLock();
     if (migrated) console.log(`[마이그레이션] 기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
     const installed = readInstallationLock();
     if (!installed) throw new Error('No managed OpenSphere installation lock was found');
@@ -564,13 +576,28 @@ async function main() {
       console.log('[검토] 조회만 완료. 이전 버전 자동 롤백·자원 삭제 없음. 실행하려면 이 설치 기록 digest로 --forward-repair를 명시하세요.');
       return;
     }
+    if (oneWayRecoveryPlan) {
+      // Read only: the record to review, its state and where the database stands. No change.
+      const record = readInstallationRecord();
+      const state = JSON.parse(record.data?.['state.json'] ?? 'null');
+      let ledger;
+      try { const rows = readMigrationLedger(); ledger = { applied: rows.length, last: rows.at(-1)?.slice(0, 2) ?? null }; }
+      catch (error) { ledger = { unreadable: error.message }; }
+      console.log(JSON.stringify({ mode: 'one-way-recovery', installationRecordSha256: installationRecordDigest(record),
+        installedReleaseDigest: installed.releaseDigest, targetReleaseDigest: target.releaseDigest,
+        state: state ? { phase: state.phase, failureCode: state.failureCode ?? null, transition: state.transition ?? null } : null,
+        ledger }, null, 2));
+      console.log('[검토] 조회만 완료. 복구는 이전 release로 되돌리지 않고 대상으로만 진행합니다. 실행하려면 이 설치 기록 digest로 --one-way-recovery를 명시하세요.');
+      return;
+    }
     const result = await upgrade(installed, target, {
       storageClass: option('--storage-class', undefined),
       consoleUrl: suppliedConsoleUrl,
       registryCredentials,
       sourceArtifactCredential,
       requiredPlatforms: targetPlatforms,
-      forwardRepairRecordDigest
+      forwardRepairRecordDigest,
+      oneWayRecoveryRecordDigest
     });
     console.log(result.changed ? '[완료] release upgrade 트랜잭션 검증' : '[재사용] 이미 요청 release가 설치됨');
     console.log('[안내] 호스트 os CLI는 변경하지 않았습니다. 필요하면 install-cli를 별도로 실행하세요.');

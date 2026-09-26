@@ -10,6 +10,7 @@ import {
   renderManifest,
   terminalPodError,
   upgrade,
+  completeInstallationVerification,
   workloadReady
 } from '../src/bootstrap.mjs';
 import {
@@ -204,12 +205,37 @@ function agentIdentityCutoverLocks() {
   return { previous, target };
 }
 
+// The installation record ConfigMap as upgrade() sees it: a Ready record of the installed release,
+// a uid and a resourceVersion that every write advances, and the recordPrecondition check.
+function recordStore(release, state = { phase: 'Ready', verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: '2026-09-26T00:00:00Z' } }) {
+  const store = { uid: 'installation-record-uid', rv: 1, release, state: { releaseDigest: release.releaseDigest, ...state } };
+  store.read = () => ({ apiVersion: 'v1', kind: 'ConfigMap',
+    metadata: { namespace: 'opensphere-console', name: 'opensphere-installation-lock', uid: store.uid, resourceVersion: String(store.rv) },
+    data: { 'release.json': JSON.stringify(store.release), 'config.json': JSON.stringify({ architecture: 'supabase-data-identity+gitea-change-authority', releaseDigest: store.release.releaseDigest,
+        consoleUrl: 'https://localhost:8090', storageClass: 'hostpath', authEnvironment: 'development', initialAdmin: { username: 'opensphere-admin' } }),
+      'state.json': JSON.stringify({ apiVersion: 'bootstrap.opensphere.io/v1alpha1', kind: 'OpenSphereInstallationState', ...store.state }) } });
+  store.write = (written, phase = 'Preparing', options = {}) => {
+    const p = options.recordPrecondition;
+    if (p && (p.uid !== store.uid || p.resourceVersion !== String(store.rv))) throw new Error('installation record precondition failed');
+    store.release = written;
+    store.state = { phase, releaseDigest: written.releaseDigest,
+      ...(options.failureCode ? { failureCode: options.failureCode } : {}),
+      ...(options.verification ? { verification: options.verification } : {}),
+      ...(options.transition ? { transition: options.transition } : {}) };
+    store.rv += 1;
+  };
+  return store;
+}
+
 function runtime(previous, events, {
   failTarget = false,
   failMigration = false,
-  recordedInventory = null
+  recordedInventory = null,
+  store = recordStore(previous)
 } = {}) {
   return {
+    store,
+    readInstallationRecord: () => store.read(),
     verifyReleaseLock: async (release, options) =>
       events.push(`supply:${release.sourceRevision}:${options?.allowLegacyComponentSet === true}`),
     ensureManagedNamespaces: () => events.push('namespaces'),
@@ -277,7 +303,10 @@ function runtime(previous, events, {
       return [];
     },
     deleteAgentIdentityNamespace: (namespace) => events.push(`delete-namespace:${namespace}`),
-    recordInstallationState: (release) => events.push(`record:${release.sourceRevision}`),
+    recordInstallationState: (release, _storageClass, _admin, _url, _auth, _tls, phase, options) => {
+      store.write(release, phase, options);
+      events.push(`record:${release.sourceRevision}`);
+    },
     waitForCoreRollouts: () => events.push('wait'),
     waitForComponentRollouts: (changed) => events.push(`wait-component:${changed.join(',')}`),
     verifyInstallation: async (release, options) => {
@@ -882,33 +911,48 @@ test('upgrade and rollback enter Installing before verification and Ready only w
   }
 });
 
-// Review R1 (2026-09-26): the R2D2 task engine cutover is one-way. After it commits, or when that
-// cannot be established, a failed upgrade keeps the target and never reinstalls the previous release.
-const BEFORE = { globalId: 'opensphere-console/20260924/0076', semanticKey: 'console.shell.module_mfa_retry' };
-const CUTOVER = { globalId: 'opensphere-console/20260924/0080', semanticKey: 'console.osdst.task_engine_cutover' };
-const AFTER = { globalId: 'opensphere-console/20260926/0088', semanticKey: 'console.osaa.semantic_routing_policy' };
+// Review R1 and re-review F1–F3 (2026-09-26): the R2D2 task engine cutover is one-way. The ledger
+// must be an exact prefix of the target chain; after the cutover commits, or when that cannot be
+// established, no earlier release is installed; an ordinary upgrade starts only from Ready; a
+// Failed or stale installation is recovered explicitly and never rolled back.
+const CHAIN_REVISION = '3'.repeat(40);
+const chainEntry = (n, semanticKey, previousNumber) => ({
+  globalId: `opensphere-console/20260924/00${n}`, semanticKey,
+  predecessorGlobalId: previousNumber ? `opensphere-console/20260924/00${previousNumber}` : '',
+  sha256: `sha256:${String(n % 10).repeat(64)}`, sourceRevision: CHAIN_REVISION,
+  setDigest: `sha256:${'5'.repeat(64)}`, setSize: n
+});
+const BEFORE = chainEntry(76, 'console.shell.module_mfa_retry', 75);
+const CUTOVER = chainEntry(80, 'console.osdst.task_engine_cutover', 76);
+const AFTER = chainEntry(88, 'console.osaa.semantic_routing_policy', 80);
+const CHAIN = Object.freeze({ schemaVersion: 1, migrations: [BEFORE, CUTOVER, AFTER] });
+const PRE_CUTOVER_CHAIN = Object.freeze({ schemaVersion: 1, migrations: [BEFORE] });
+const row = (e) => [e.globalId, e.semanticKey, e.predecessorGlobalId, e.sha256, e.sourceRevision, e.setDigest, String(e.setSize)];
 const localEdge = (release) => {
   release.trust = LOCAL_EDGE_TRUST;
   delete release.releaseBom;
   release.releaseDigest = calculateReleaseDigest('edge', release.components, release.trust, undefined, { auxiliaryArtifacts: release.auxiliaryArtifacts });
   return release;
 };
-function cutoverRuntime(previous, events, { ledger, failTarget = false, recordedInventory = null, installed = previous, on = {} }) {
-  const base = runtime(previous, events, { failTarget, recordedInventory });
-  const withManifest = (release, prepared) => release.sourceRevision === previous.sourceRevision ? prepared
-    : { ...prepared, foundation: { ...prepared.foundation, migration: { manifest: { schemaVersion: 1, migrations: [BEFORE, CUTOVER, AFTER] } } } };
+function cutoverRuntime(previous, target, events, {
+  ledger, failTarget = false, recordedInventory = null, store = recordStore(previous), previousChain = PRE_CUTOVER_CHAIN, on = {}
+}) {
+  const base = runtime(previous, events, { failTarget, recordedInventory, store });
+  const withChain = (release, prepared) => release.releaseDigest !== target.releaseDigest ? prepared
+    : { ...prepared, foundation: { ...prepared.foundation, migration: { manifest: CHAIN } } };
   return {
     ...base,
-    readInstallationLock: () => installed,
-    prepareRelease: async (release, ...rest) => withManifest(release, await base.prepareRelease(release, ...rest)),
-    prepareComponentRelease: async (release, ...rest) => withManifest(release, await base.prepareComponentRelease(release, ...rest)),
+    readInstallationLock: () => store.release,
+    prepareRelease: async (release, ...rest) => { on.prepare?.(release); return withChain(release, await base.prepareRelease(release, ...rest)); },
+    prepareComponentRelease: async (release, ...rest) => withChain(release, await base.prepareComponentRelease(release, ...rest)),
     readMigrationLedger: () => {
       events.push('ledger');
-      if (on.ledgerFails?.()) throw new Error('database unavailable');
-      return ledger.map((e) => [e.globalId, e.semanticKey]);
+      if (on.ledger) return on.ledger();
+      return ledger.map(row);
     },
+    readReleaseMigrationManifests: async (release) => { events.push(`previous-chain:${release.sourceRevision}`); return [previousChain]; },
     installPreparedRelease: (release, prepared, storageClass, consoleUrl, label) => {
-      events.push(`install:${label}:${prepared.all[0].yaml}`);
+      events.push(`install:${label}:${release.sourceRevision}`);
       if (label === '업그레이드') on.install?.();
     },
     installPreparedComponentRelease: (release, prepared, storageClass, consoleUrl, label, changed) => {
@@ -916,101 +960,228 @@ function cutoverRuntime(previous, events, { ledger, failTarget = false, recorded
       if (label === '업그레이드') on.install?.();
     },
     waitForCoreRollouts: () => { events.push('wait'); on.wait?.(); },
-    recordInstallationState: (release, _storageClass, _admin, _url, _auth, _tls, phase = 'Preparing', options = {}) =>
-      events.push(`record:${release.sourceRevision}:${phase}:${options.failureCode ?? ''}`),
+    recordInstallationState: (release, _storageClass, _admin, _url, _auth, _tls, phase = 'Preparing', options = {}) => {
+      on.record?.(phase, options);
+      store.write(release, phase, options);
+      events.push(`record:${release.sourceRevision}:${phase}:${options.failureCode ?? ''}`);
+    },
   };
 }
-const oldInstalls = (events) => events.filter((e) => e.startsWith('install:롤백') || e.startsWith('install-component:롤백'));
-function assertTargetKept(events, target, failureCode) {
-  assert.deepEqual(oldInstalls(events), [], 'the previous release is never installed after the cutover');
+const installs = (events) => events.filter((e) => e.startsWith('install'));
+const earlierInstalls = (events) => events.filter((e) => e.startsWith('install:롤백') || e.startsWith('install-component:롤백'));
+const activation = () => ({ previous: preWorkerLock(), target: localEdge(lock('2'.repeat(40), 'b')) });
+function assertTargetKept(events, store, target, failureCode) {
+  assert.deepEqual(earlierInstalls(events), [], 'no earlier release is installed after the cutover');
   assert.equal(events.some((e) => e.startsWith('prune:')), false, 'nothing is pruned, the worker included');
   assert.ok(events.includes(`inventory:${target.sourceRevision}`));
-  assert.ok(events.includes(`record:${target.sourceRevision}:Failed:${failureCode}`));
+  assert.equal(store.release.releaseDigest, target.releaseDigest);
+  assert.equal(store.state.phase, 'Failed'); assert.equal(store.state.failureCode, failureCode);
+  assert.equal(store.state.transition.targetReleaseDigest, target.releaseDigest);
+  assert.equal(store.state.transition.outcome.rollbackAvailable, false);
 }
 
 test('one-way cutover: a failure before it commits restores the previous release as before', async () => {
-  const previous = preWorkerLock(), target = localEdge(lock('2'.repeat(40), 'b'));
-  const events = [];
-  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, events, {
-    ledger: [BEFORE], on: { install: () => { throw new Error('Gitea bootstrap failed'); } } }) }),
+  const { previous, target } = activation(), events = [], store = recordStore(previous);
+  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, {
+    ledger: [BEFORE], store, on: { install: () => { throw new Error('Gitea bootstrap failed'); } } }) }),
   /previous release was restored: Gitea bootstrap failed/);
-  assert.deepEqual(oldInstalls(events), [`install:롤백:${previous.sourceRevision}`]);
+  assert.deepEqual(earlierInstalls(events), [`install:롤백:${previous.sourceRevision}`]);
+  assert.equal(store.release.releaseDigest, previous.releaseDigest); assert.equal(store.state.phase, 'Ready');
 });
 
-test('one-way cutover: a failure right after it commits keeps the target and installs nothing old', async () => {
-  const previous = preWorkerLock(), target = localEdge(lock('2'.repeat(40), 'b'));
-  const events = [], ledger = [BEFORE];
-  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, events, {
-    ledger, on: { install: () => ledger.push(CUTOVER), wait: () => { throw new Error('rollout timed out'); } } }) }),
-  /one-way-migration-recovery-required: .*R2D2 task engine cutover \(opensphere-console\/20260924\/0080\) committed; the previous release was not reinstalled/);
-  assertTargetKept(events, target, 'one-way-migration-recovery-required');
-});
+for (const [name, on, failTarget, pattern] of [
+  ['right after it commits (rollout timeout)', (ledger) => ({ install: () => ledger.push(CUTOVER), wait: () => { throw new Error('rollout timed out'); } }), false, /rollout timed out/],
+  ['when a later migration fails after it', (ledger) => ({ install: () => { ledger.push(CUTOVER); throw new Error('migration 0081 failed'); } }), false, /migration 0081 failed/],
+  ['when verification fails after every migration', (ledger) => ({ install: () => ledger.push(CUTOVER, AFTER) }), true, /target is unhealthy/],
+]) {
+  test(`one-way cutover: the target is kept ${name}`, async () => {
+    const { previous, target } = activation(), events = [], store = recordStore(previous), ledger = [BEFORE];
+    await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger, store, failTarget, on: on(ledger) }) }),
+      (e) => /one-way-migration-recovery-required: .*R2D2 task engine cutover \(opensphere-console\/20260924\/0080\) committed; the earlier release was not reinstalled/.test(e.message) && pattern.test(e.message));
+    assertTargetKept(events, store, target, 'one-way-migration-recovery-required');
+    assert.deepEqual(store.state.transition.outcome.committed, [CUTOVER.globalId]);
+  });
+}
 
-test('one-way cutover: a later migration failing after it still keeps the target', async () => {
-  const previous = preWorkerLock(), target = localEdge(lock('2'.repeat(40), 'b'));
-  const events = [], ledger = [BEFORE];
-  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, events, {
-    ledger, on: { install: () => { ledger.push(CUTOVER); throw new Error('migration 0081 failed'); } } }) }),
-  /one-way-migration-recovery-required: .*migration 0081 failed/);
-  assertTargetKept(events, target, 'one-way-migration-recovery-required');
-});
+for (const [name, after] of [
+  ['unreadable', () => { throw new Error('database unavailable'); }],
+  ['shrunk (a row it had is gone)', () => []],
+  ['changed at a known row (same id, other key)', () => [[BEFORE.globalId, 'console.other', ...row(BEFORE).slice(2)]]],
+  ['malformed', () => [['only', 'two']]],
+]) {
+  test(`one-way cutover: a ledger that is ${name} after a failure counts as unknown`, async () => {
+    const { previous, target } = activation(), events = [], store = recordStore(previous);
+    let failed = false;
+    await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger: [BEFORE], store,
+      on: { ledger: () => failed ? after() : [row(BEFORE)], install: () => { failed = true; throw new Error('database pod restarted'); } } }) }),
+    /one-way-migration-state-unknown: .*cannot be established whether R2D2 task engine cutover/);
+    assertTargetKept(events, store, target, 'one-way-migration-state-unknown');
+    assert.equal(store.state.transition.outcome.committed, null);
+  });
+}
 
-test('one-way cutover: failed verification after every migration keeps the target', async () => {
-  const previous = preWorkerLock(), target = localEdge(lock('2'.repeat(40), 'b'));
-  const events = [], ledger = [BEFORE];
-  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, events, {
-    ledger, failTarget: true, on: { install: () => ledger.push(CUTOVER, AFTER) } }) }),
-  /one-way-migration-recovery-required: .*target is unhealthy/);
-  assertTargetKept(events, target, 'one-way-migration-recovery-required');
-});
+for (const [name, rows] of [
+  ['unreadable', () => { throw new Error('no Ready database pod'); }],
+  ['a row with the same id and another key', () => [[BEFORE.globalId, 'console.other', ...row(BEFORE).slice(2)]]],
+  ['a row with another file hash', () => [[...row(BEFORE).slice(0, 3), `sha256:${'f'.repeat(64)}`, ...row(BEFORE).slice(4)]]],
+  ['a row at the wrong position (same key, other id)', () => [row(CUTOVER)]],
+  ['ahead of the target chain', () => [row(BEFORE), row(CUTOVER), row(AFTER), row(AFTER)]],
+  ['malformed', () => 'not rows'],
+]) {
+  test(`one-way cutover: a ledger that is ${name} before the upgrade stops it before any workload, migration or record change`, async () => {
+    const { previous, target } = activation(), events = [], store = recordStore(previous);
+    await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger: [], store, on: { ledger: rows } }) }),
+      /stopped before any workload, migration or installation record change/);
+    assert.deepEqual(installs(events), []); assert.equal(store.rv, 1, 'the installation record is untouched');
+  });
+}
 
-test('one-way cutover: when the ledger cannot be read after a failure, it is treated as committed', async () => {
-  const previous = preWorkerLock(), target = localEdge(lock('2'.repeat(40), 'b'));
-  const events = [], ledger = [BEFORE];
-  let reads = 0;
-  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, events, {
-    ledger, on: { ledgerFails: () => ++reads > 1, install: () => ledger.push(CUTOVER), wait: () => { throw new Error('database pod restarted'); } } }) }),
-  /one-way-migration-state-unknown: .*cannot be established whether R2D2 task engine cutover/);
-  assertTargetKept(events, target, 'one-way-migration-state-unknown');
-});
-
-test('one-way cutover: an unreadable ledger before the upgrade changes nothing', async () => {
-  const previous = preWorkerLock(), target = localEdge(lock('2'.repeat(40), 'b'));
-  const events = [];
-  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, events, {
-    ledger: [BEFORE], on: { ledgerFails: () => true } }) }),
-  /ledger could not be read before an upgrade that includes a one-way migration; nothing was changed/);
-  assert.equal(events.some((e) => e.startsWith('install') || e.startsWith('record:') || e.startsWith('inventory:')), false);
-});
-
-test('one-way cutover: retrying after a blocked upgrade never installs the previous release', async () => {
-  const previous = preWorkerLock(), target = localEdge(lock('2'.repeat(40), 'b'));
-  // The blocked upgrade recorded the target; the same command again is refused before any change.
+test('one-way cutover: when recording the failure also fails, a retry from the unchanged lock is refused (F1)', async () => {
+  const { previous, target } = activation(), events = [], store = recordStore(previous), ledger = [BEFORE];
+  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger, store,
+    on: { install: () => { ledger.push(CUTOVER); throw new Error('migration 0081 failed'); }, record: (phase) => { if (phase === 'Failed') throw new Error('API server unavailable'); } } }) }),
+  /the earlier release was not reinstalled, and the installation record could not be updated \(API server unavailable\)/);
+  assert.deepEqual(earlierInstalls(events), []);
+  // The claim written before the first change still names the interrupted transition.
+  assert.equal(store.release.releaseDigest, previous.releaseDigest); assert.equal(store.state.phase, 'Installing');
+  assert.equal(store.state.transition.targetReleaseDigest, target.releaseDigest);
+  // The CLI reads the current lock, so it retries upgrade(previous, target): refused before any change.
   const again = [];
-  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, again, {
-    ledger: [BEFORE, CUTOVER], installed: target }) }), /Cluster release lock changed/);
-  assert.equal(again.some((e) => e.startsWith('install')), false);
-  // Observing the recorded target changes nothing either; recovery is a fixed forward release.
-  const observe = [];
-  const result = await upgrade(target, target, { runtime: cutoverRuntime(target, observe, { ledger: [BEFORE, CUTOVER, AFTER], installed: target }) });
-  assert.equal(result.changed, false);
-  assert.equal(observe.some((e) => e.startsWith('install')), false);
+  await assert.rejects(upgrade(store.release, target, { runtime: cutoverRuntime(previous, target, again, { ledger, store, failTarget: true }) }),
+    /installation is Installing; an ordinary upgrade starts only from a Ready installation/);
+  assert.deepEqual(installs(again), []);
 });
 
-test('one-way cutover: an installation already past it rolls back to its post-cutover release as before', async () => {
-  const previous = localEdge(lock('1'.repeat(40), 'a')), target = localEdge(lock('2'.repeat(40), 'b'));
+test('one-way cutover: a Ready record of a release that predates a crossed cutover is refused, then recovered forward only (F1)', async () => {
+  const { previous, target } = activation(), store = recordStore(previous), ledger = [BEFORE, CUTOVER];
+  const refused = [];
+  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, refused, { ledger, store }) }),
+    /already passed R2D2 task engine cutover .* predates it .* Stopped before any workload, migration or installation record change/);
+  assert.deepEqual(installs(refused), []); assert.equal(store.rv, 1);
+  // An unreadable previous chain is not taken as fitting either.
+  const unknown = [];
+  const failingChain = { ...cutoverRuntime(previous, target, unknown, { ledger, store }), readReleaseMigrationManifests: async () => { throw new Error('source unavailable'); } };
+  await assert.rejects(upgrade(previous, target, { runtime: failingChain }), /predates it or that cannot be established/);
+  // Explicit recovery bound to the reviewed record goes forward and, failing again, never goes back.
+  const recovered = [];
+  await assert.rejects(upgrade(previous, target, { oneWayRecoveryRecordDigest: installationRecordDigest(store.read()),
+    runtime: cutoverRuntime(previous, target, recovered, { ledger, store, failTarget: true }) }),
+  /one-way-migration-recovery-required: .*committed; the earlier release was not reinstalled/);
+  assert.deepEqual(earlierInstalls(recovered), []);
+  assert.ok(recovered.includes(`install:업그레이드:${target.sourceRevision}`));
+  assert.equal(recovered.some((e) => e.startsWith('supply:1111')), false, 'the earlier release is not fetched for a rollback');
+  assert.equal(store.state.transition.mode, 'one-way-recovery');
+  assert.equal(store.state.transition.rollback, 'never');
+});
+
+test('one-way cutover: a Failed target is not an ordinary rollback point; recovery never restores it (F2)', async () => {
+  const { target } = activation(), next = localEdge(lock('4'.repeat(40), 'c'));
+  const store = recordStore(target, { phase: 'Failed', failureCode: 'one-way-migration-recovery-required' });
+  const ledger = [BEFORE, CUTOVER];
+  const ordinary = [];
+  await assert.rejects(upgrade(target, next, { runtime: cutoverRuntime(target, next, ordinary, { ledger, store, previousChain: CHAIN }) }),
+    /installation is Failed \(one-way-migration-recovery-required\); an ordinary upgrade starts only from a Ready installation/);
+  assert.deepEqual(installs(ordinary), []);
+  const stale = [];
+  await assert.rejects(upgrade(target, next, { oneWayRecoveryRecordDigest: `sha256:${'0'.repeat(64)}`,
+    runtime: cutoverRuntime(target, next, stale, { ledger, store, previousChain: CHAIN }) }), /review a fresh recovery plan/);
+  assert.deepEqual(installs(stale), []);
+  const recovered = [];
+  await assert.rejects(upgrade(target, next, { oneWayRecoveryRecordDigest: installationRecordDigest(store.read()),
+    runtime: cutoverRuntime(target, next, recovered, { ledger, store, previousChain: CHAIN, failTarget: true }) }),
+  /one-way-migration-recovery-required: .*the earlier release was not reinstalled/);
+  assert.deepEqual(earlierInstalls(recovered), [], 'the Failed target is never restored');
+  assert.equal(store.release.releaseDigest, next.releaseDigest); assert.equal(store.state.phase, 'Failed');
+});
+
+test('one-way cutover: recovery re-applies the same Failed target forward and ends Ready only with verification', async () => {
+  const { target } = activation();
+  const store = recordStore(target, { phase: 'Failed', failureCode: 'one-way-migration-recovery-required' });
   const events = [];
-  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, events, {
-    ledger: [BEFORE, CUTOVER], failTarget: true }) }), /previous release was restored: target is unhealthy/);
-  assert.deepEqual(oldInstalls(events), [`install:롤백:${previous.sourceRevision}`]);
+  const result = await upgrade(target, target, { oneWayRecoveryRecordDigest: installationRecordDigest(store.read()),
+    runtime: cutoverRuntime(target, target, events, { ledger: [BEFORE, CUTOVER, AFTER], store, previousChain: CHAIN }) });
+  assert.equal(result.changed, true);
+  assert.deepEqual(installs(events), [`install:업그레이드:${target.sourceRevision}`]);
+  assert.equal(store.state.phase, 'Ready'); assert.equal(store.state.verification?.evidenceConfigMap, 'opensphere-installation-evidence');
+  // Observing the same release without recovery installs nothing and leaves a Failed state Failed.
+  const failed = recordStore(target, { phase: 'Failed', failureCode: 'one-way-migration-recovery-required' });
+  const observe = [];
+  await upgrade(target, target, { runtime: cutoverRuntime(target, target, observe, { ledger: [BEFORE, CUTOVER], store: failed }) });
+  assert.deepEqual(installs(observe), []); assert.equal(failed.state.phase, 'Failed');
 });
 
-test('one-way cutover: a component release crossing it keeps the target components too', async () => {
+test('one-way cutover: recovery is refused for a Ready installation whose release fits the database', async () => {
+  const previous = localEdge(lock('1'.repeat(40), 'a')), target = localEdge(lock('2'.repeat(40), 'b'));
+  const store = recordStore(previous), events = [];
+  await assert.rejects(upgrade(previous, target, { oneWayRecoveryRecordDigest: installationRecordDigest(store.read()),
+    runtime: cutoverRuntime(previous, target, events, { ledger: [BEFORE, CUTOVER], store, previousChain: CHAIN }) }), /use an ordinary upgrade/);
+  assert.deepEqual(installs(events), []);
+});
+
+test('one-way cutover: an interrupted run cannot be papered over by completing the earlier release', async () => {
+  // A canonical earlier release (a pre-worker lock cannot be completed at all and must be recovered).
+  const previous = localEdge(lock('1'.repeat(40), 'a')), target = localEdge(lock('2'.repeat(40), 'b'));
+  const interrupted = (ledgerRows) => {
+    const store = recordStore(previous, { phase: 'Installing', transition: { runId: '00000000-0000-4000-8000-000000000000',
+      previousReleaseDigest: previous.releaseDigest, targetReleaseDigest: target.releaseDigest,
+      oneWay: { migrations: [{ globalId: CUTOVER.globalId, semanticKey: CUTOVER.semanticKey }], committedAtStart: [] } } });
+    const verified = [];
+    const ops = { readInstallationRecord: () => store.read(), readReleaseInventory: () => [{ name: 'complete-release' }],
+      recordInstallationState: (release, _s, _a, _u, _e, _t, phase, options) => {
+        store.write(release, phase, options);
+        const written = store.read();
+        return { config: JSON.parse(written.data['config.json']), state: JSON.parse(written.data['state.json']) };
+      },
+      verifyInstallation: async (release) => { verified.push(release.sourceRevision); return { releaseDigest: release.releaseDigest, verifiedAt: '2026-09-26T01:00:00Z' }; },
+      readMigrationLedger: ledgerRows };
+    return { store, verified, ops };
+  };
+  const crossed = interrupted(() => [row(BEFORE), row(CUTOVER)]);
+  await assert.rejects(completeInstallationVerification(previous, { runtime: crossed.ops }), /interrupted and the database has passed, or may have passed/);
+  assert.deepEqual(crossed.verified, []);
+  const unreadable = interrupted(() => { throw new Error('no database'); });
+  await assert.rejects(completeInstallationVerification(previous, { runtime: unreadable.ops }), /may have passed/);
+  // Interrupted before the cutover: the earlier release may still be completed.
+  const before = interrupted(() => [row(BEFORE)]);
+  await completeInstallationVerification(previous, { runtime: before.ops });
+  assert.deepEqual(before.verified, [previous.sourceRevision]); assert.equal(before.store.state.phase, 'Ready');
+  // And an ordinary upgrade from the interrupted record is refused either way.
+  const events = [];
+  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger: [BEFORE], store: interrupted(() => [row(BEFORE)]).store }) }),
+    /installation is Installing/);
+  assert.deepEqual(installs(events), []);
+});
+
+test('one-way cutover: another writer between the Ready check and the claim stops the run before any change', async () => {
+  const { previous, target } = activation(), events = [], store = recordStore(previous);
+  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger: [BEFORE], store,
+    on: { prepare: () => { store.rv += 1; } } }) }), /installation record changed during this upgrade/);
+  assert.deepEqual(installs(events), []);
+});
+
+test('one-way cutover: another writer during the run means no rollback and no record change', async () => {
+  const { previous, target } = activation(), events = [], store = recordStore(previous);
+  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger: [BEFORE], store,
+    on: { install: () => { store.rv += 1; throw new Error('Gitea bootstrap failed'); } } }) }),
+  /installation record changed meanwhile; no rollback or record change was made/);
+  assert.deepEqual(earlierInstalls(events), []);
+});
+
+test('one-way cutover: between releases that both include it, an ordinary rollback still works', async () => {
+  const previous = localEdge(lock('1'.repeat(40), 'a')), target = localEdge(lock('2'.repeat(40), 'b'));
+  const events = [], store = recordStore(previous);
+  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, {
+    ledger: [BEFORE, CUTOVER], store, previousChain: CHAIN, failTarget: true }) }), /previous release was restored: target is unhealthy/);
+  assert.deepEqual(earlierInstalls(events), [`install:롤백:${previous.sourceRevision}`]);
+  assert.equal(store.release.releaseDigest, previous.releaseDigest); assert.equal(store.state.phase, 'Ready');
+});
+
+test('one-way cutover: a component release crossing it keeps the target components', async () => {
   const previous = localEdge(lock('1'.repeat(40), 'a'));
   const target = componentTarget(previous, '2'.repeat(40), ['osaaGateway', 'osdst']);
-  const events = [], ledger = [BEFORE];
-  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, events, {
-    ledger, failTarget: true, recordedInventory: [{ name: 'complete-release' }], on: { install: () => ledger.push(CUTOVER) } }) }),
+  const events = [], store = recordStore(previous), ledger = [BEFORE];
+  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, {
+    ledger, store, failTarget: true, recordedInventory: [{ name: 'complete-release' }], on: { install: () => ledger.push(CUTOVER) } }) }),
   /one-way-migration-recovery-required/);
-  assertTargetKept(events, target, 'one-way-migration-recovery-required');
+  assertTargetKept(events, store, target, 'one-way-migration-recovery-required');
 });

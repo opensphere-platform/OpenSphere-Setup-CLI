@@ -1,8 +1,8 @@
-import { pendingOneWayMigrations, committedOneWayMigrations, describeOneWay } from './one-way-migrations.mjs';
+import { LedgerMismatch, oneWayBoundary, committedAfterFailure, releaseIncludes, describeOneWay, transitionOneWay } from './one-way-migrations.mjs';
 import {KUBERNETES_EGRESS_SLOT,discoverRegistryKubernetesEgress,renderRegistryKubernetesEgress,discoverConsoleApiCiliumPolicy} from './registry-runtime-access.mjs';
 import {setTimeout as registryDelay} from 'node:timers/promises';
 import {REGISTRY_AUTH_SECRET,REGISTRY_AUTH_CONTRACT,REGISTRY_NAMESPACES,initialRegistryState,registryStateSecret,parseRegistryState,requiredImages,pullSecretData,GENERATION_ANNOTATION,validateCredential} from './registry-lifecycle-contract.mjs';
-import { createHash, createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { isIP } from 'node:net';
 import { readFileSync } from 'node:fs';
@@ -55,7 +55,7 @@ import {
 import { reportReleaseProgress } from './progress.mjs';
 import { publishSetupJournal } from './setup-journal.mjs';
 import { materializeRuntimeAsset } from './runtime-assets.mjs';
-import { assertForwardRepair } from './forward-repair.mjs';
+import { assertForwardRepair, installationRecordDigest } from './forward-repair.mjs';
 import {HISS_EXECUTION_PROFILE,HISS_VALIDATION_ARTIFACT,verifyHissExecutionProfile,verifyHissValidationArtifact,prepareHissPrerequisites,prepareHissValidation,createHissPrerequisiteClient} from './hiss-prerequisites.mjs';
 import {prepareCephExecutionProfile} from './ceph-prerequisites.mjs';
 import {PLATFORM_CORE_ARTIFACT,verifyPlatformCoreProfile,preparePlatformCorePrerequisites} from './platform-core-prerequisites.mjs';
@@ -1444,9 +1444,29 @@ export function readMigrationLedger() {
     "SELECT CASE WHEN to_regclass('console_migration.applied_migration') IS NULL THEN 'absent' ELSE 'present' END;") !== 'present') {
     throw new Error('The global migration ledger is absent');
   }
-  const output = runComponentMigrationSql(pod,
-    "SELECT global_id || '|' || semantic_key FROM console_migration.applied_migration ORDER BY applied_sequence;");
+  const output = runComponentMigrationSql(pod, [
+    "SELECT global_id || '|' || semantic_key || '|' || COALESCE(predecessor_global_id, '') || '|' ||",
+    "       file_sha256 || '|' || source_revision || '|' || migration_set_digest || '|' || migration_set_size::text",
+    'FROM console_migration.applied_migration ORDER BY applied_sequence;'
+  ].join('\n'));
   return output ? output.split(/\r?\n/u).map((row) => row.split('|')) : [];
+}
+
+// The verified migration chains a release's migration owners were built from (one per distinct
+// source revision). Used to decide whether that release fits a database past a one-way migration.
+export async function readReleaseMigrationManifests(lock, { sourceArtifactCredential = null } = {}) {
+  const revisions = [...new Set(MIGRATION_OWNER_COMPONENTS
+    .map((component) => (lock.components?.[component] || lock.auxiliaryArtifacts?.[component])?.sourceRevision)
+    .filter(Boolean))];
+  if (!revisions.length) throw new Error('The release names no migration owner revision');
+  return Promise.all(revisions.map(async (revision) => {
+    const raw = await fetchReleaseArtifact(lock, migrationManifestPath(lock), { sourceRevision: revision, sourceArtifactCredential });
+    const signed = revision === lock.sourceRevision ? lock.releaseBom?.migrationManifest : undefined;
+    if (signed && signed.sha256 !== `sha256:${sha256Text(raw)}`) {
+      throw new Error('The release migration manifest differs from its signed evidence');
+    }
+    return parseSupabaseMigrationManifest(raw);
+  }));
 }
 
 function runComponentMigrations(foundation, progress) {
@@ -2014,7 +2034,8 @@ export function installationStateDocument(
     observedAt = new Date().toISOString(),
     verification,
     failureCode,
-    baselineObservabilitySecurity
+    baselineObservabilitySecurity,
+    transition
   } = {}
 ) {
   if (!INSTALLATION_PHASES.includes(phase)) {
@@ -2034,6 +2055,12 @@ export function installationStateDocument(
   if (phase === 'Failed' && !/^[a-z][a-z0-9-]{2,63}$/u.test(failureCode ?? '')) {
     throw new Error('Failed installation state requires a bounded failure code');
   }
+  if (transition !== undefined && (!transition || typeof transition !== 'object' || Array.isArray(transition)
+    || !/^[0-9a-f-]{36}$/u.test(transition.runId ?? '')
+    || !/^sha256:[a-f0-9]{64}$/u.test(transition.previousReleaseDigest ?? '')
+    || !/^sha256:[a-f0-9]{64}$/u.test(transition.targetReleaseDigest ?? ''))) {
+    throw new Error('Installation transition record is malformed');
+  }
   return {
     apiVersion: 'bootstrap.opensphere.io/v1alpha1',
     kind: 'OpenSphereInstallationState',
@@ -2044,7 +2071,8 @@ export function installationStateDocument(
     managedClusterScopedResources: installationClusterScopedResources(),
     baselineObservabilitySecurity: baselineObservabilityState(baselineObservabilitySecurity),
     ...(verification ? { verification } : {}),
-    ...(failureCode ? { failureCode } : {})
+    ...(failureCode ? { failureCode } : {}),
+    ...(transition ? { transition } : {})
   };
 }
 
@@ -2123,13 +2151,21 @@ export function readInstallationRecord() {
 // neither selects/applies images nor repeats registry authentication or migrations.
 export async function completeInstallationVerification(lock, {consoleUrl, requireZeroRestarts=false, runtime={}}={}) {
   validateLock(lock);
-  const ops={readInstallationRecord,readReleaseInventory,recordInstallationState,verifyInstallation,...runtime};
+  const ops={readInstallationRecord,readReleaseInventory,recordInstallationState,verifyInstallation,readMigrationLedger,...runtime};
   const original=ops.readInstallationRecord();
   const config=JSON.parse(original.data['config.json']),state=JSON.parse(original.data['state.json']);
   if (JSON.parse(original.data['release.json']).releaseDigest!==lock.releaseDigest
     ||config.releaseDigest!==lock.releaseDigest||state.releaseDigest!==lock.releaseDigest
     ||!['Failed','Installing'].includes(state.phase)) throw Error('Verification completion requires the same incomplete installed release');
   if (!ops.readReleaseInventory()?.length) throw Error('Verification completion requires the recorded release inventory');
+  // An upgrade to another release was interrupted while it could cross a one-way migration. The
+  // recorded release may be completed only while the ledger shows none of them applied.
+  const interrupted=state.transition&&state.transition.targetReleaseDigest!==lock.releaseDigest?state.transition.oneWay:null;
+  if (interrupted?.migrations?.length) {
+    let rows=null;try{rows=ops.readMigrationLedger();}catch{}
+    const crossed=!Array.isArray(rows)||interrupted.migrations.some(m=>rows.some(r=>Array.isArray(r)&&(r[0]===m.globalId||r[1]===m.semanticKey)));
+    if (crossed) throw Error(`An upgrade to ${state.transition.targetReleaseDigest} was interrupted and the database has passed, or may have passed, ${interrupted.migrations.map(m=>m.globalId).join(', ')}; completing this earlier release would put it on data it does not fit. Review the record and run upgrade --one-way-recovery.`);
+  }
   if (consoleUrl && normalizeConsoleUrl(consoleUrl)!==normalizeConsoleUrl(config.consoleUrl)) throw Error('Verification completion cannot change the Console URL');
   const repair=original.data['repair.json']?JSON.parse(original.data['repair.json']):undefined;
   let expectedRecordVersion=original.metadata.resourceVersion;
@@ -2900,6 +2936,7 @@ export async function upgrade(
     sourceArtifactCredential = null,
     requiredPlatforms,
     forwardRepairRecordDigest,
+    oneWayRecoveryRecordDigest,
     runtime = {}
   } = {}
 ) {
@@ -2924,6 +2961,7 @@ export async function upgrade(
     installPreparedComponentRelease,
     runComponentMigrations,
     readMigrationLedger,
+    readReleaseMigrationManifests,
     waitForCoreRollouts,
     waitForComponentRollouts,
     verifyInstallation,
@@ -2942,12 +2980,19 @@ export async function upgrade(
     },
     ...runtime
   };
+  const recovery = oneWayRecoveryRecordDigest !== undefined;
+  if (recovery && forwardRepairRecordDigest !== undefined) throw new Error('Choose either forward repair or one-way recovery');
+  if (recovery && !/^sha256:[a-f0-9]{64}$/u.test(oneWayRecoveryRecordDigest ?? '')) throw new Error('One-way recovery requires the reviewed installation record sha256');
+  if (recovery && targetLock.releaseScope === RELEASE_SCOPE_COMPONENT) {
+    throw new Error('One-way recovery applies an integrated release; a localhost component release uses --forward-repair');
+  }
   const repair = forwardRepairRecordDigest === undefined ? null : assertForwardRepair({
     previous: previousLock, target: targetLock, record: operations.readInstallationRecord(),
     expectedRecordDigest: forwardRepairRecordDigest, context: operations.currentKubeContext()
   });
   await Promise.all([
-    repair ? Promise.resolve() : operations.verifyReleaseLock(previousLock, {
+    // Forward repair and one-way recovery never install the previous release, so it is not fetched.
+    repair || recovery ? Promise.resolve() : operations.verifyReleaseLock(previousLock, {
       registryCredentials,
       requiredPlatforms,
       allowLegacyComponentSet: true,
@@ -2971,7 +3016,8 @@ export async function upgrade(
   if (consoleUrl && normalizeConsoleUrl(consoleUrl) !== effectiveConsoleUrl) {
     throw new Error(`Installation uses Console URL ${effectiveConsoleUrl}; changing it requires endpoint migration`);
   }
-  if (previousLock.releaseDigest === targetLock.releaseDigest && !repair) {
+  if (previousLock.releaseDigest === targetLock.releaseDigest && !repair && !recovery) {
+    // Observation only: it installs nothing and never clears a Failed state.
     return {
       changed: false,
       lock: previousLock,
@@ -2979,6 +3025,29 @@ export async function upgrade(
       evidence: await operations.verifyInstallation(previousLock, { consoleUrl: effectiveConsoleUrl })
     };
   }
+  // Re-review F2: an ordinary upgrade starts only from a Ready installation of the previous release.
+  // A Failed, Installing or unknown installation is recovered explicitly, bound to its reviewed record.
+  // Every record write of this run checks that no other writer changed the record meanwhile.
+  const startRecord = repair ? null : operations.readInstallationRecord();
+  let startState = null;
+  if (!repair) {
+    let recorded = null;
+    try { recorded = JSON.parse(startRecord.data?.['release.json'] ?? 'null'); startState = JSON.parse(startRecord.data?.['state.json'] ?? 'null'); } catch {}
+    if (!startRecord?.metadata?.uid || !startRecord.metadata.resourceVersion || recorded?.releaseDigest !== previousLock.releaseDigest) {
+      throw new Error('The installation record does not match the installed release lock');
+    }
+    if (recovery) {
+      if (installationRecordDigest(startRecord) !== oneWayRecoveryRecordDigest) throw new Error('Installation record changed; review a fresh recovery plan');
+    } else if (startState?.phase !== 'Ready' || startState.releaseDigest !== previousLock.releaseDigest) {
+      throw new Error(`The installation is ${startState?.phase ?? 'in an unknown state'}${startState?.failureCode ? ` (${startState.failureCode})` : ''}; an ordinary upgrade starts only from a Ready installation. Complete the same release with verify --complete-installation, or review the record and run upgrade --one-way-recovery.`);
+    }
+  }
+  const owner = startRecord ? { uid: startRecord.metadata.uid, resourceVersion: startRecord.metadata.resourceVersion } : null;
+  const ownsRecord = () => {
+    if (!owner) return true;
+    const current = operations.readInstallationRecord();
+    return current?.metadata?.uid === owner.uid && current.metadata.resourceVersion === owner.resourceVersion;
+  };
   operations.preflight({ storageClass: config.storageClass, channel: targetLock.channel });
   operations.ensureManagedNamespaces();
   // OAuth here authenticates supply-chain reads only. Preserve the installed
@@ -2999,13 +3068,13 @@ export async function upgrade(
   const introducedComponents = componentTransition
     ? changedComponents.filter((component) => !previousLock.components?.[component])
     : [];
-  const rollbackChangedComponents = repair ? [] : agentIdentityCutover
+  const rollbackChangedComponents = repair || recovery ? [] : agentIdentityCutover
     ? changedWorkloadComponents.map(installedNameForCanonicalComponent)
     : changedWorkloadComponents.filter((component) => !introducedComponents.includes(component));
   const targetWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-target-'));
   const rollbackWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-rollback-'));
   try {
-    console.log(repair ? '[복구] 새 대상은 정상 검증; 불완전한 이전 기록으로 자동 롤백하지 않음' : '[준비] 대상 release와 이전 release rollback artifact 검증');
+    console.log(repair || recovery ? '[복구] 새 대상은 정상 검증; 이전 release로 자동 롤백하지 않음' : '[준비] 대상 release와 이전 release rollback artifact 검증');
     const [target, rollback] = componentTransition
       ? await Promise.all([
         operations.prepareComponentRelease(
@@ -3045,7 +3114,7 @@ export async function upgrade(
           config.authEnvironment,
           { sourceArtifactCredential, registryCredentials }
         ),
-        operations.prepareRelease(
+        recovery ? Promise.resolve({ foundation: { root: rollbackWork, release: [], migration: null }, base: [], all: [] }) : operations.prepareRelease(
           previousLock,
           rollbackWork,
           config.storageClass,
@@ -3074,8 +3143,9 @@ export async function upgrade(
       repair.reconstructedResourceCount=recoveredInventory.inventory.length;
       console.log(`[복구 준비] 공식 설치 선언에서 관리 자원 ${repair.reconstructedResourceCount}개 재구성; 자원 적용·삭제 없음`);
     }
+    // A recovery never goes back, so it prunes only what the record says the installation owns.
     const previousInventory = recordedInventory ?? recoveredInventory?.inventory
-      ?? operations.releaseResourceInventory(rollback.all);
+      ?? (recovery ? [] : operations.releaseResourceInventory(rollback.all));
     const previousComponentInventory = componentTransition && rollback.all.length > 0
       ? operations.releaseResourceInventory(rollback.all)
       : [];
@@ -3089,9 +3159,57 @@ export async function upgrade(
     // Only the fixed Beszel bootstrap Job with unchanged images can reuse it;
     // all live services, credentials, databases and workloads are checked anew.
     const bootstrapHistory = repair ? null : operations.readBeszelBootstrapHistory(previousLock);
-    // Review R1: a one-way migration this upgrade would apply (the R2D2 task engine cutover). Once it
-    // commits, or when that cannot be established, the previous release is never reinstalled.
-    const oneWay = repair ? [] : pendingOneWayMigrations(target.foundation?.migration?.manifest, () => operations.readMigrationLedger());
+    // Review R1, re-review F1/F3: where the database stands against the target's one-way migrations
+    // (the R2D2 task engine cutover). The ledger must be an exact prefix of the target chain. If the
+    // database already passed one, the previous release must itself include it to be a rollback.
+    const targetManifest = target.foundation?.migration?.manifest;
+    let boundary = null;
+    if (!repair) {
+      try { boundary = oneWayBoundary(targetManifest, () => operations.readMigrationLedger()); }
+      catch (error) {
+        throw new Error(`${error instanceof LedgerMismatch ? error.message : `The migration ledger could not be read: ${error.message}`}; stopped before any workload, migration or installation record change`);
+      }
+    }
+    if (recovery && !boundary) {
+      throw new Error('One-way recovery applies only to a target carrying a one-way migration; use an ordinary upgrade or verify --complete-installation');
+    }
+    let previousFits = true;
+    if (boundary?.committed.length) {
+      try { previousFits = releaseIncludes(await operations.readReleaseMigrationManifests(previousLock, { sourceArtifactCredential }), boundary.committed); }
+      catch { previousFits = false; }
+      if (!previousFits && !recovery) {
+        throw new Error(`The database already passed ${describeOneWay(boundary.committed)}, but the installed release ${previousLock.releaseDigest} predates it or that cannot be established; an automatic rollback would install binaries that do not fit the data. Stopped before any workload, migration or installation record change. Review the installation record and run upgrade --one-way-recovery <record-sha256>.`);
+      }
+    }
+    if (recovery && startState?.phase === 'Ready' && previousFits) {
+      throw new Error('The installation is Ready and its release fits the database; use an ordinary upgrade');
+    }
+    const transition = repair ? undefined : {
+      runId: randomUUID(),
+      mode: recovery ? 'one-way-recovery' : 'upgrade',
+      previousReleaseDigest: previousLock.releaseDigest,
+      previousState: startState?.phase ?? null,
+      previousVerifiedAt: startState?.phase === 'Ready' ? startState.verification?.verifiedAt ?? null : null,
+      targetReleaseDigest: targetLock.releaseDigest,
+      startedAt: new Date().toISOString(),
+      rollback: recovery ? 'never' : boundary?.pending.length ? 'decided-after-failure' : 'available',
+      ...(boundary ? { oneWay: transitionOneWay(boundary) } : {})
+    };
+    // Owned writes: the record must still be the one this run read or last wrote.
+    const ownedWrite = (lock, phase, extra = {}) => {
+      if (!ownsRecord()) throw new Error('The installation record changed during this upgrade; another writer owns it now');
+      operations.recordInstallationState(lock, config.storageClass, initialAdmin, effectiveConsoleUrl,
+        config.authEnvironment, config.shellTlsSecret, phase,
+        { ...extra, recordPrecondition: { uid: owner.uid, resourceVersion: owner.resourceVersion } });
+      owner.resourceVersion = operations.readInstallationRecord().metadata.resourceVersion;
+    };
+    const writeState = (lock, phase, extra = {}) => repair
+      ? operations.recordInstallationState(lock, config.storageClass, initialAdmin, effectiveConsoleUrl,
+        config.authEnvironment, config.shellTlsSecret, phase, repairStateOptions(extra))
+      : ownedWrite(lock, phase, extra);
+    // Claim before the first change: a crash or a concurrent run now finds a non-Ready record that
+    // names this transition, so neither an ordinary upgrade nor another run proceeds silently.
+    if (!repair) ownedWrite(previousLock, 'Installing', { transition });
     let agentIdentityMigrationCommitted = false;
     let forwardRepairStarted = false;
     const repairStateOptions = (extra = {}) => {
@@ -3136,15 +3254,7 @@ export async function upgrade(
           targetLock, target, config.storageClass, effectiveConsoleUrl, '업그레이드'
         );
       }
-      operations.recordInstallationState(
-        targetLock,
-        config.storageClass,
-        initialAdmin,
-        effectiveConsoleUrl,
-        config.authEnvironment,
-        config.shellTlsSecret,
-        'Installing', repairStateOptions()
-      );
+      writeState(targetLock, 'Installing', transition ? { transition } : {});
       if (componentTransition) operations.waitForComponentRollouts(changedWorkloadComponents);
       else operations.waitForCoreRollouts(targetLock);
       const evidence = await operations.verifyInstallation(targetLock, {
@@ -3166,11 +3276,7 @@ export async function upgrade(
       // upgrade retries safe retirement after the last old reader disappears.
       appendRetainedResources(targetInventory, retainedKnowledge);
       operations.recordReleaseInventory(targetLock, targetInventory);
-      operations.recordInstallationState(
-        targetLock, config.storageClass, initialAdmin, effectiveConsoleUrl,
-        config.authEnvironment, config.shellTlsSecret, 'Ready',
-        repairStateOptions({ verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: evidence.verifiedAt } })
-      );
+      writeState(targetLock, 'Ready', { verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: evidence.verifiedAt } });
       return {
         changed: true,
         lock: targetLock,
@@ -3192,19 +3298,16 @@ export async function upgrade(
         throw new Error(`Forward repair incomplete; no automatic rollback or resource deletion: ${upgradeError.message}`);
       }
       console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
+      // Never act on an installation another writer changed meanwhile.
+      if (!ownsRecord()) {
+        throw new Error(`Upgrade failed and the installation record changed meanwhile; no rollback or record change was made: ${upgradeError.message}`);
+      }
       if (agentIdentityCutover) {
         if (agentIdentityMigrationCommitted) {
           // The DB schema, roles and policies now have OSAA identity. Preserve
           // the canonical lock and workloads for deterministic resume instead
           // of pretending that old binaries can be restored against new data.
-          operations.recordInstallationState(
-            targetLock,
-            config.storageClass,
-            initialAdmin,
-            effectiveConsoleUrl,
-            config.authEnvironment,
-            config.shellTlsSecret
-          );
+          writeState(targetLock, 'Preparing');
           operations.recordReleaseInventory(targetLock, targetInventory);
           throw new Error(
             `OSAA identity cutover requires attention after its one-way database migration; `
@@ -3219,23 +3322,32 @@ export async function upgrade(
         operations.recordReleaseInventory(previousLock, previousInventory);
         throw new Error(`OSAA identity cutover failed before migration; previous installation retained: ${upgradeError.message}`);
       }
-      if (oneWay.length) {
-        const committed = committedOneWayMigrations(oneWay, () => operations.readMigrationLedger());
-        if (committed === null || committed.length) {
-          // Keep the target lock, its inventory and every resource (the worker included) for a forward
-          // recovery; install no previous binaries, restore no old lock, prune nothing.
+      if (recovery || boundary?.pending.length) {
+        // A recovery never goes back. Otherwise the ledger decides: once a pending one-way migration
+        // committed, or that cannot be established (unreadable, mismatched or shrunk ledger), keep the
+        // target lock, its inventory and every resource (the worker included); install no earlier
+        // binaries, restore no old lock, prune nothing.
+        const committed = boundary.pending.length
+          ? committedAfterFailure(targetManifest, boundary, () => operations.readMigrationLedger())
+          : [];
+        if (recovery || committed === null || committed.length) {
           const failureCode = committed === null ? 'one-way-migration-state-unknown' : 'one-way-migration-recovery-required';
+          const crossed = [...boundary.committed, ...(committed ?? [])];
           const what = committed === null
-            ? `it cannot be established whether ${describeOneWay(oneWay)} committed`
-            : `${describeOneWay(committed)} committed`;
+            ? `it cannot be established whether ${describeOneWay(boundary.pending)} committed`
+            : crossed.length ? `${describeOneWay(crossed)} committed` : 'this recovery does not roll back';
           try {
             operations.recordReleaseInventory(targetLock, targetInventory);
-            operations.recordInstallationState(targetLock, config.storageClass, initialAdmin, effectiveConsoleUrl,
-              config.authEnvironment, config.shellTlsSecret, 'Failed', { failureCode });
+            ownedWrite(targetLock, 'Failed', { failureCode, transition: { ...transition, outcome: {
+              failedAt: new Date().toISOString(),
+              committed: committed === null ? null : crossed.map((e) => e.globalId),
+              rollbackAvailable: false,
+              inventoryVerified: false
+            } } });
           } catch (recordError) {
-            throw new Error(`Upgrade failed and ${what}; the previous release was not reinstalled, and the installation record could not be updated (${recordError.message}): ${upgradeError.message}`);
+            throw new Error(`Upgrade failed and ${what}; the earlier release was not reinstalled, and the installation record could not be updated (${recordError.message}): ${upgradeError.message}`);
           }
-          throw new Error(`${failureCode}: upgrade failed and ${what}; the previous release was not reinstalled and the target release was kept for a forward recovery: ${upgradeError.message}`);
+          throw new Error(`${failureCode}: upgrade failed and ${what}; the earlier release was not reinstalled and the target release was kept for a forward recovery: ${upgradeError.message}`);
         }
         // Confirmed not applied: the database still fits the previous release, so the rollback below is safe.
       }
@@ -3259,15 +3371,7 @@ export async function upgrade(
         if (componentTransition) {
           appendRetainedResources(previousInventory, operations.pruneReleaseResources(targetComponentInventory, previousComponentInventory));
         }
-        operations.recordInstallationState(
-          previousLock,
-          config.storageClass,
-          initialAdmin,
-          effectiveConsoleUrl,
-          config.authEnvironment,
-          config.shellTlsSecret,
-          'Installing'
-        );
+        writeState(previousLock, 'Installing');
         if (componentTransition && rollbackChangedComponents.length > 0) {
           operations.waitForComponentRollouts(rollbackChangedComponents);
         }
@@ -3285,11 +3389,7 @@ export async function upgrade(
           appendRetainedResources(previousInventory, operations.pruneReleaseResources(targetInventory, previousInventory));
         }
         operations.recordReleaseInventory(previousLock, previousInventory);
-        operations.recordInstallationState(
-          previousLock, config.storageClass, initialAdmin, effectiveConsoleUrl,
-          config.authEnvironment, config.shellTlsSecret, 'Ready',
-          { verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: rollbackEvidence.verifiedAt } }
-        );
+        writeState(previousLock, 'Ready', { verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: rollbackEvidence.verifiedAt } });
       } catch (rollbackError) {
         throw new Error(`Upgrade failed (${upgradeError.message}); rollback also failed (${rollbackError.message})`);
       }

@@ -4,9 +4,9 @@ Status: Supabase + Gitea + Beszel backbone, Setup CLI 0.5 target contract
 
 ## 결정
 
-OpenSphere 설치 입력은 mutable tag 목록이 아니라 Console anchor digest에 첨부된 서명 `OpenSphereReleaseBOM`이다. BOM은 한 source revision에서 빌드된 **18개 canonical component**를 하나의 원자적 release로 묶는다. 설치 lock은 같은 release tag와 source revision에 결속된 **3개 auxiliary artifact**도 반드시 보존한다.
+OpenSphere 설치 입력은 mutable tag 목록이 아니라 Console anchor digest에 첨부된 서명 `OpenSphereReleaseBOM`이다. BOM은 한 source revision에서 빌드된 **19개 canonical component**를 하나의 원자적 release로 묶는다(R2D2 worker 이전에 설치된 18개 lock은 upgrade·rollback 기준으로만 받는다). 설치 lock은 같은 release tag와 source revision에 결속된 **4개 auxiliary artifact**도 반드시 보존한다(Console anchor에 index 렌더러 계약 `io.opensphere.console-index-content`가 없는 이전 release는 `consoleIndexContent`를 뺀 3개).
 
-`integrated` lock은 BOM과 동일한 통합 release다. 로컬 `edge`의 영향을 받은 이미지만 다시 빌드하는 경우에는 `component` lock을 사용할 수 있다. 이 lock도 canonical 18개와 auxiliary 3개의 전체 목록을 갖는 완전한 설치 상태이며 부분 목록이 아니다. 다음 전이 증명을 release digest에 결속한다.
+`integrated` lock은 BOM과 동일한 통합 release다. 로컬 `edge`의 영향을 받은 이미지만 다시 빌드하는 경우에는 `component` lock을 사용할 수 있다. 이 lock도 canonical 19개와 auxiliary 4개의 전체 목록을 갖는 완전한 설치 상태이며 부분 목록이 아니다. 다음 전이 증명을 release digest에 결속한다.
 
 - `baseReleaseDigest`: 현재 클러스터에 설치된 직전 lock
 - `changedComponents`: 이번에 실제로 다시 빌드한 canonical component의 정렬된 집합
@@ -16,7 +16,14 @@ OpenSphere 설치 입력은 mutable tag 목록이 아니라 Console anchor diges
 
 component lock은 localhost `edge`의 **upgrade 전용** 계약이다. fresh bootstrap, `candidate`/`stable`, signed Release BOM 승격에는 사용할 수 없다. 실패하면 직전의 완전한 base lock과 사전 확보한 artifact로 rollback한 뒤 그 상태를 다시 검증한다.
 
-**되돌릴 수 없는 migration(2026-09-26, 검토 R1):** 대상 release의 검증된 migration manifest에 R2D2 task engine 전환(`console.osdst.task_engine_cutover`)처럼 한 방향 migration이 있고 원장에 아직 없으면, Setup은 갱신 전에 원장을 읽는다(못 읽으면 아무것도 바꾸지 않고 멈춘다). 통합·component 갱신이 실패한 뒤 원장에 그 migration이 있거나 원장을 읽을 수 없으면 이전 release를 설치하지 않는다. 대상 lock과 inventory, worker를 포함한 자원을 그대로 두고 설치 기록을 `Failed`(`one-way-migration-recovery-required` 또는 `one-way-migration-state-unknown`)로 남긴다. 회복은 고친 새 release로 앞으로 가는 것이다. 원장에 없음이 확인된 실패만 기존처럼 rollback한다.
+**되돌릴 수 없는 migration(2026-09-26, 검토 R1·재검토 F1–F3):** 한 방향 migration은 semantic key로 정한다(지금은 R2D2 task engine 전환 `console.osdst.task_engine_cutover`). 대상 release의 검증된 migration manifest에 그 key가 있으면 Setup은 갱신 전에 원장을 읽고, 원장이 대상 migration 사슬의 정확한 prefix인지(ID·key·계보·file hash·source revision·set digest·size) 확인한다. 못 읽거나 어긋나거나 대상보다 앞서면 워크로드·migration·설치 기록을 바꾸기 전에 멈춘다(namespace와 pull secret 보장은 그보다 앞서 멱등으로 실행된다).
+
+- **이미 지난 경우:** 원장에 한 방향 migration이 이미 있으면, 이전 release의 migration 소유 구성요소가 빌드된 검증된 manifest에 그 migration이 같은 ID·hash로 들어 있어야 이전 release를 rollback 대상으로 인정한다. 없거나 확인할 수 없으면 일반 갱신은 바꾸기 전에 멈춘다.
+- **일반 갱신의 출발점:** 설치 기록이 이전 release의 `Ready`일 때만 일반 갱신을 한다. `Failed`·`Installing`·알 수 없는 상태는 `verify --complete-installation`(같은 release) 또는 `upgrade --one-way-recovery`로 다룬다. 같은 release를 관측만 하는 갱신은 아무것도 설치하지 않고 `Failed`를 풀지 않는다.
+- **선점 기록:** 첫 변경 전에 설치 기록을 이전 release의 `Installing`과 `transition`(실행 ID, 이전·대상 digest, 이전 검증 시각, 한 방향 migration과 rollback 방침)으로 바꾼다. 이 실행의 모든 기록 쓰기는 uid·resourceVersion을 대조한다. 다른 쓰기가 끼면 멈추고, 실패 처리에서도 되돌리지 않는다.
+- **실패 뒤:** 원장을 다시 읽는다. 이번 실행이 건너려던 한 방향 migration이 적용됐거나, 원장을 읽을 수 없거나, 사슬과 어긋나거나, 전에 있던 행이 사라졌으면 이전 release를 설치하지 않고 옛 lock을 복원하지 않으며 자원을 정리하지 않는다. 대상 lock·inventory를 두고 기록을 `Failed`(`one-way-migration-recovery-required` 또는 `one-way-migration-state-unknown`)와 `transition.outcome`으로 남긴다. 적용되지 않았음이 확인된 실패만 기존처럼 rollback한다.
+- **복구:** `upgrade --lock <대상> --one-way-recovery-plan`으로 기록 digest·상태·원장을 조회하고, 검토한 digest로 `--one-way-recovery`를 실행한다. 통합 release만 대상이다. 복구는 이전 release를 가져오거나 설치하지 않고 대상으로만 간다. 다시 실패해도 되돌리지 않고 `Failed`로 남는다. 기록이 `Ready`이고 그 release가 DB와 맞으면 복구를 거부한다(일반 갱신을 쓴다).
+- **중단된 실행:** 기록의 `transition`이 다른 대상으로 가던 중이고 그 한 방향 migration이 원장에 있거나 확인할 수 없으면 `verify --complete-installation`은 이전 release를 완료로 기록하지 않는다.
 
 Canonical 19개:
 
@@ -44,12 +51,13 @@ beszelBootstrap
 
 `r2d2HermesWorker`(`opensphere-console-r2d2-hermes-worker`)는 `opensphere-console-osaa-gateway` Deployment의 `hermes-worker` sidecar다. Setup은 Console 원본에 `__OPENSPHERE_R2D2_HERMES_WORKER_IMAGE__` 자리가 있을 때만 이 digest를 렌더링하고, native installer에는 lock에 이 구성요소가 있을 때만 `-R2d2HermesWorkerImage`를 넘긴다. 이 구성요소가 없는 기존 18개 lock은 설치된 upgrade/rollback 기준으로만 받는다. 기존 설치에는 integrated upgrade(`upgrade --release edge` 또는 명시 `--lock`)로 추가하며, component lock으로는 추가할 수 없다.
 
-Auxiliary 3개:
+Auxiliary 4개:
 
 ```text
 cliArtifacts
 osShellControl
 osShellRuntime
+consoleIndexContent
 ```
 
 Setup fresh bootstrap은 canonical 중 13개 bootstrap core와 `cliArtifacts`만 배포한다. `osaaGateway`, `osdst`, `osaaGovernedAdapter`, `notificationDispatcher`, `recovery` 5개는 Console이 설치 후 활성화하는 available module이다. `osShellControl`과 `osShellRuntime`도 Console에서 활성화하지만, Console이 mutable `:edge`를 다시 해석하지 않도록 exact digest를 최초 installation lock에 보존한다.
@@ -79,14 +87,14 @@ Setup은 다음을 모두 만족해야 release lock을 반환한다.
 - Release BOM predicate: `https://opensphere.io/attestations/release-bom/v1`
 - candidate/stable/GA signer workflow와 OIDC issuer가 채널 trust root와 일치
 - source repository와 40자리 source revision 일치
-- canonical component 정확히 18개, 추가나 누락 없음
-- auxiliary artifact 정확히 3개, 추가나 누락 없음
+- canonical component 정확히 19개, 추가나 누락 없음(설치된 18개 lock은 upgrade·rollback 기준으로만)
+- auxiliary artifact 정확히 4개, 추가나 누락 없음(index 렌더러 계약이 없는 이전 release는 3개)
 - 모든 image가 공식 repository의 `@sha256:<64 hex>`
 - candidate/stable/GA canonical component에 provenance와 SPDX SBOM attestation
 - 지원 platform이 `linux/amd64`, `linux/arm64`
 - 계산한 canonical release digest가 BOM/lock과 일치
 
-component upgrade lock은 공통 항목과 함께 base digest, 동일 channel/trust, 동일한 canonical 18개와 auxiliary 3개 집합, 명시된 변경 외 byte-for-byte 계승을 추가 검증한다.
+component upgrade lock은 공통 항목과 함께 base digest, 동일 channel/trust, 동일한 canonical 19개와 auxiliary 4개 집합, 명시된 변경 외 byte-for-byte 계승을 추가 검증한다.
 
 Setup은 그 source revision에서 manifest, installer와 SQL migration을 받는다. manifest의 모든 image는 lock digest로 치환되며 tag-only, upstream registry 또는 미해결 placeholder가 남으면 설치를 중단한다. signed BOM의 migration manifest SHA-256, set digest와 latest global ID도 materialized Console API installer에 전달해 SQL bytes와 lineage를 fail-closed 검증한다.
 
