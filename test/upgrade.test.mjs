@@ -13,6 +13,7 @@ import {
   upgrade,
   completeInstallationVerification,
   confirmRecordWrite,
+  recordWriteFailure,
   workloadReady
 } from '../src/bootstrap.mjs';
 import {
@@ -1112,7 +1113,7 @@ test('one-way cutover: when recording the failure also fails, a retry from the u
   const { previous, target } = activation(), events = [], store = recordStore(previous), ledger = [BEFORE];
   await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger, store,
     on: { install: () => { ledger.push(CUTOVER); throw new Error('migration 0081 failed'); }, record: (phase) => { if (phase === 'Failed') throw new Error('API server unavailable'); } } }) }),
-  /the earlier release was not reinstalled, and the installation record could not be updated \(API server unavailable\)/);
+  /the earlier release was not reinstalled, and the installation record could not be updated \(The Failed record write did not confirm its outcome \(API server unavailable\); ownership of the installation record is unknown/);
   assert.deepEqual(earlierInstalls(events), []);
   // The claim written before the first change still names the interrupted transition.
   assert.equal(store.release.releaseDigest, previous.releaseDigest); assert.equal(store.state.phase, 'Installing');
@@ -1397,10 +1398,44 @@ test('record ownership: a write whose response is lost or unconfirmed stops the 
     const operations = cutoverRuntime(previous, target, events, { ledger: [BEFORE], store });
     const record = operations.recordInstallationState;
     operations.recordInstallationState = (...args) => respond(record(...args));
-    await assert.rejects(upgrade(previous, target, { runtime: operations }), name === 'lost' ? /connection reset after send/ : /no confirmed new version; ownership is unknown/);
+    await assert.rejects(upgrade(previous, target, { runtime: operations }), (e) => e.code === 'RecordOwnershipUnknown'
+      && (name === 'lost' ? /Installing record write did not confirm its outcome \(kubectl patch: connection reset after send\)/
+        : /Installing record write returned no confirmed new version/).test(e.message)
+      && /ownership of the installation record is unknown, so this run stops\. Already done by this run: nothing beyond/.test(e.message)
+      && e.message.includes(`run ID ${store.state.transition.runId} is this run's`)
+      && /verify --complete-installation, or run upgrade --one-way-recovery/.test(e.message));
     assert.deepEqual(installs(events), [], name);
     assert.equal(store.state.phase, 'Installing', `${name}: the claim may have landed; recovery is explicit`);
   }
+});
+
+// 2026-09-27 localhost case 2a: the claim's lost response surfaced as the raw client error, whole
+// patch included. A later write with an unknown outcome must not start a rollback either: the record
+// may be this run's or not, so neither reinstalling the earlier release nor a failure record is safe.
+test('record ownership: a later write with an unknown outcome stops without a rollback or failure record', async () => {
+  const { previous, target } = activation(), events = [], store = recordStore(previous);
+  const operations = cutoverRuntime(previous, target, events, { ledger: [BEFORE], store, on: { install: () => {} } });
+  const record = operations.recordInstallationState;
+  let writes = 0;
+  operations.recordInstallationState = (...args) => {
+    const written = record(...args);
+    if (++writes === 2) throw new Error('installation record PATCH failed: exit code 1, unexpected EOF');
+    return written;
+  };
+  await assert.rejects(upgrade(previous, target, { runtime: operations }), (e) => e.code === 'RecordOwnershipUnknown'
+    && /did not confirm its outcome \(installation record PATCH failed: exit code 1, unexpected EOF\)/.test(e.message)
+    && /Already done by this run: recorded .* Installing/.test(e.message));
+  assert.deepEqual(earlierInstalls(events), [], 'the earlier release is not reinstalled');
+  assert.equal(events.some((e) => /:Failed:/.test(e)), false, 'no failure record over a record of unknown ownership');
+});
+
+test('a failed record PATCH reports how it ended without repeating the record', () => {
+  const error = Object.assign(new Error(`kubectl patch -p ${'{"secret-looking":"payload"}'.repeat(50)} failed with exit code 1\nline one\nerror: unexpected EOF`),
+    { exitStatus: 1, stderr: 'line one\nerror: unexpected EOF\n' });
+  assert.equal(recordWriteFailure(error), 'exit code 1, line one error: unexpected EOF');
+  assert.equal(recordWriteFailure(Object.assign(new Error('x'), { exitStatus: 2, stderr: 'e'.repeat(400) })), `exit code 2, …${'e'.repeat(300)}`);
+  assert.equal(recordWriteFailure(Object.assign(new Error('spawn kubectl ENOENT'), { code: 'ENOENT' })), 'client error ENOENT');
+  assert.doesNotMatch(recordWriteFailure(error), /payload/);
 });
 
 test('record ownership: lost during a successful verification means no prune, inventory or Ready (N2)', async () => {

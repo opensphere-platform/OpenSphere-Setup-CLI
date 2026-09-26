@@ -22,7 +22,9 @@ export function run(command, args, options = {}) {
   if (result.error) throw result.error;
   if (result.status !== 0) {
     const detail = capture ? `\n${result.stderr || result.stdout}` : '';
-    throw new Error(`${command} ${args.join(' ')} failed with exit code ${result.status}${detail}`);
+    // exitStatus/stderr let a caller report how a call ended without repeating its arguments.
+    throw Object.assign(new Error(`${command} ${args.join(' ')} failed with exit code ${result.status}${detail}`),
+      { exitStatus: result.status, stderr: capture ? result.stderr ?? '' : undefined });
   }
   return capture ? result.stdout.trim() : '';
 }

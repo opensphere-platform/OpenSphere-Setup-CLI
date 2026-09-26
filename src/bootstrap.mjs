@@ -2103,6 +2103,12 @@ export function installationStateDocument(
   };
 }
 
+export function recordWriteFailure(error) {
+  if (!Number.isInteger(error?.exitStatus)) return error?.code ? `client error ${error.code}` : 'client error';
+  const detail = String(error.stderr ?? '').trim().split(/\r?\n/u).filter(Boolean).slice(-2).join(' ');
+  return `exit code ${error.exitStatus}${detail ? `, ${detail.length > 300 ? `…${detail.slice(-300)}` : detail}` : ''}`;
+}
+
 // Re-review N1: the object a precondition PATCH returned must be the same record, at a new version,
 // holding exactly the data this write sent. Only then is its version this run's.
 export function confirmRecordWrite(output, uid, previousVersion, data) {
@@ -2161,11 +2167,17 @@ export function recordInstallationState(
     if (!uid || !resourceVersion) throw Error('Installation record precondition is incomplete');
     // Re-review N1: the version this write owns is the one its own PATCH response reports, with the
     // data it wrote. A later GET may already show another writer's version and is never adopted.
-    const output = kubectl(['-n','opensphere-console','patch','configmap','opensphere-installation-lock','--type=json','-o','json','-p',JSON.stringify([
-      {op:'test',path:'/metadata/uid',value:uid},
-      {op:'test',path:'/metadata/resourceVersion',value:resourceVersion},
-      {op:'replace',path:'/data',value:record.data},
-    ])],{capture:true});
+    let output;
+    try {
+      output = kubectl(['-n','opensphere-console','patch','configmap','opensphere-installation-lock','--type=json','-o','json','-p',JSON.stringify([
+        {op:'test',path:'/metadata/uid',value:uid},
+        {op:'test',path:'/metadata/resourceVersion',value:resourceVersion},
+        {op:'replace',path:'/data',value:record.data},
+      ])],{capture:true});
+    } catch (error) {
+      // The client error repeats the whole patch (the complete record); report only how it ended.
+      throw Error(`installation record PATCH failed: ${recordWriteFailure(error)}`);
+    }
     return { config, state, record: confirmRecordWrite(output, uid, resourceVersion, record.data) };
   } else applyYaml(`${JSON.stringify(record)}\n`);
   return { config, state };
@@ -3297,13 +3309,26 @@ export async function upgrade(
     // Owned writes: the record must still be the one this run read or last wrote, and the new
     // version is taken only from this write's own response (re-review N1). A write whose response
     // is lost leaves ownership unknown: the run stops and resumes only through explicit recovery.
+    // 2026-09-27 localhost case 2a: a lost PATCH response reaches Setup as a failed kubectl call,
+    // not as an unconfirmed response, and used to surface as the raw client error. Either way the
+    // write may have been applied, so this run no longer knows whether it holds the record.
+    const unknownOwnership = (reason) => Object.assign(new Error(`${reason}; ownership of the installation record is unknown, so this run stops. `
+      + `Already done by this run: ${effects.length ? effects.join('; ') : 'nothing beyond namespace and pull-secret checks'}. `
+      + 'Not done: any further install, prune, inventory, rollback or record write. '
+      + `Review the record (a transition with run ID ${transition?.runId ?? 'none'} is this run's), then complete the release it records `
+      + 'with verify --complete-installation, or run upgrade --one-way-recovery.'), { code: 'RecordOwnershipUnknown' });
     const ownedWrite = (lock, phase, extra = {}) => {
       assertOwned(`before the ${phase} record write`);
-      const written = operations.recordInstallationState(lock, config.storageClass, initialAdmin, effectiveConsoleUrl,
-        config.authEnvironment, config.shellTlsSecret, phase,
-        { ...extra, recordPrecondition: { uid: owner.uid, resourceVersion: owner.resourceVersion } });
+      let written;
+      try {
+        written = operations.recordInstallationState(lock, config.storageClass, initialAdmin, effectiveConsoleUrl,
+          config.authEnvironment, config.shellTlsSecret, phase,
+          { ...extra, recordPrecondition: { uid: owner.uid, resourceVersion: owner.resourceVersion } });
+      } catch (error) {
+        throw unknownOwnership(`The ${phase} record write did not confirm its outcome (${error.message})`);
+      }
       if (written?.record?.uid !== owner.uid || !written.record.resourceVersion || written.record.resourceVersion === owner.resourceVersion) {
-        throw new Error('The installation record write returned no confirmed new version; ownership is unknown, so this run stops. Review the record and resume with --one-way-recovery.');
+        throw unknownOwnership(`The ${phase} record write returned no confirmed new version`);
       }
       owner.resourceVersion = written.record.resourceVersion;
       effects.push(`recorded ${lock.releaseDigest.slice(0, 19)}… ${phase}`);
@@ -3413,6 +3438,9 @@ export async function upgrade(
         }
         throw new Error(`Forward repair incomplete; no automatic rollback or resource deletion: ${upgradeError.message}`);
       }
+      // This run's own record write has an unknown outcome: the record may now be this run's or not,
+      // so neither a rollback nor a failure record is safe. Stop with the account as it is.
+      if (upgradeError.code === 'RecordOwnershipUnknown') throw upgradeError;
       console.error(`[롤백] upgrade 검증 실패: ${upgradeError.message}`);
       // Never act on an installation another writer changed meanwhile.
       if (!ownsRecord()) {
