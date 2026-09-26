@@ -1180,6 +1180,23 @@ test('one-way cutover: recovery is refused for a Ready installation whose releas
   assert.deepEqual(installs(events), []);
 });
 
+test('one-way cutover: a Ready release whose own chain the database outgrew is no dead end; recovery goes forward', async () => {
+  const { previous, target } = activation(), store = recordStore(previous), ledger = [BEFORE, MID];
+  const events = [];
+  // An ordinary upgrade cannot promise a rollback that applies nothing, so it stops before any change ...
+  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger, store, chain: CHAIN_WITH_MID }) }),
+    /own migration chain does not hold the current database .*--one-way-recovery-plan/);
+  assert.deepEqual(installs(events), []); assert.equal(store.rv, 1);
+  // ... and the reviewed forward-only recovery is accepted from Ready.
+  const recovered = [];
+  const result = await upgrade(previous, target, { oneWayRecoveryRecordDigest: installationRecordDigest(store.read()),
+    runtime: cutoverRuntime(previous, target, recovered, { ledger, store, chain: CHAIN_WITH_MID,
+      on: { install: () => ledger.push(CUTOVER_AFTER_MID, AFTER) } }) });
+  assert.equal(result.changed, true);
+  assert.deepEqual(installs(recovered), [`install:업그레이드:${target.sourceRevision}`]);
+  assert.equal(store.release.releaseDigest, target.releaseDigest); assert.equal(store.state.phase, 'Ready');
+});
+
 test('one-way cutover: an interrupted run cannot be papered over by completing the earlier release', async () => {
   // A canonical earlier release (a pre-worker lock cannot be completed at all and must be recovered).
   const previous = localEdge(lock('1'.repeat(40), 'a')), target = localEdge(lock('2'.repeat(40), 'b'));

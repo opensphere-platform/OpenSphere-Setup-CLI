@@ -3203,8 +3203,19 @@ export async function upgrade(
         throw new Error(`The database already passed ${describeOneWay(boundary.committed)}, but the installed release ${previousLock.releaseDigest} predates it or that cannot be established; an automatic rollback would install binaries that do not fit the data. Stopped before any workload, migration or installation record change. Review the installation record and run upgrade --one-way-recovery <record-sha256>.`);
       }
     }
+    // The previous release's own chain equals the live ledger: its installers would apply nothing.
+    const previousChainIsLedger = async () => {
+      try {
+        const rows = operations.readMigrationLedger();
+        const manifests = await operations.readReleaseMigrationManifests(previousLock, { sourceArtifactCredential });
+        return manifests.length > 0 && manifests.every((manifest) => ledgerPosition(manifest, rows) === manifest.migrations.length);
+      } catch { return false; }
+    };
     if (recovery && startState?.phase === 'Ready' && previousFits) {
-      throw new Error('The installation is Ready and its release fits the database; use an ordinary upgrade');
+      // A Ready installation recovers forward only when an ordinary upgrade cannot start safely:
+      // target migrations before a pending one-way one are already applied (below).
+      const ordinaryWouldStop = boundary?.pending.length && !componentTransition && !(await previousChainIsLedger());
+      if (!ordinaryWouldStop) throw new Error('The installation is Ready and its release fits the database; use an ordinary upgrade');
     }
     // Acceptance preparation after re-review 4 (2026-09-26): an integrated rollback runs the previous
     // release's installers, and they apply every migration of the chain they are given. Given the
@@ -3224,7 +3235,8 @@ export async function upgrade(
         }
       } catch (error) {
         throw new Error(`The previous release's own migration chain does not hold the current database (${error.message}); `
-          + `a rollback before ${describeOneWay(boundary.pending)} could not avoid applying it, so the upgrade stopped before any change`);
+          + `a rollback before ${describeOneWay(boundary.pending)} could not avoid applying it, so the upgrade stopped before any change. `
+          + 'Review a forward-only recovery with upgrade --one-way-recovery-plan');
       }
     }
     const transition = repair ? undefined : {
