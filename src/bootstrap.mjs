@@ -1,4 +1,4 @@
-import { LedgerMismatch, oneWayBoundary, committedAfterFailure, releaseIncludes, describeOneWay, transitionOneWay } from './one-way-migrations.mjs';
+import { LedgerMismatch, ledgerPosition, oneWayBoundary, progressAfterFailure, releaseIncludes, describeOneWay, transitionOneWay } from './one-way-migrations.mjs';
 import {KUBERNETES_EGRESS_SLOT,discoverRegistryKubernetesEgress,renderRegistryKubernetesEgress,discoverConsoleApiCiliumPolicy} from './registry-runtime-access.mjs';
 import {setTimeout as registryDelay} from 'node:timers/promises';
 import {REGISTRY_AUTH_SECRET,REGISTRY_AUTH_CONTRACT,REGISTRY_NAMESPACES,initialRegistryState,registryStateSecret,parseRegistryState,requiredImages,pullSecretData,GENERATION_ANNOTATION,validateCredential} from './registry-lifecycle-contract.mjs';
@@ -3094,6 +3094,7 @@ export async function upgrade(
     : changedWorkloadComponents.filter((component) => !introducedComponents.includes(component));
   const targetWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-target-'));
   const rollbackWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-rollback-'));
+  const ownChainRollbackWork = await mkdtemp(join(tmpdir(), 'opensphere-upgrade-rollback-own-'));
   try {
     console.log(repair || recovery ? '[복구] 새 대상은 정상 검증; 이전 release로 자동 롤백하지 않음' : '[준비] 대상 release와 이전 release rollback artifact 검증');
     const [target, rollback] = componentTransition
@@ -3204,6 +3205,27 @@ export async function upgrade(
     }
     if (recovery && startState?.phase === 'Ready' && previousFits) {
       throw new Error('The installation is Ready and its release fits the database; use an ordinary upgrade');
+    }
+    // Acceptance preparation after re-review 4 (2026-09-26): an integrated rollback runs the previous
+    // release's installers, and they apply every migration of the chain they are given. Given the
+    // target's chain, a rollback before a pending one-way migration would apply it. The only safe
+    // rollback there is the previous release with its own chain, which must already hold the whole
+    // ledger so that it applies nothing. Prepared and checked here, before any change.
+    let ownChainRollback = null;
+    if (boundary?.pending.length && !componentTransition && !recovery) {
+      ownChainRollback = await operations.prepareRelease(previousLock, ownChainRollbackWork, config.storageClass,
+        effectiveConsoleUrl, config.authEnvironment,
+        { optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS, sourceArtifactCredential, registryCredentials });
+      try {
+        const ownChain = ownChainRollback.foundation?.migration?.manifest;
+        const held = ledgerPosition(ownChain, operations.readMigrationLedger());
+        if (held !== boundary.applied || held !== ownChain.migrations.length) {
+          throw new Error(`the database has ${held} migrations; the chain has ${ownChain.migrations.length} and the target analysis saw ${boundary.applied}`);
+        }
+      } catch (error) {
+        throw new Error(`The previous release's own migration chain does not hold the current database (${error.message}); `
+          + `a rollback before ${describeOneWay(boundary.pending)} could not avoid applying it, so the upgrade stopped before any change`);
+      }
     }
     const transition = repair ? undefined : {
       runId: randomUUID(),
@@ -3372,14 +3394,22 @@ export async function upgrade(
         // committed, or that cannot be established (unreadable, mismatched or shrunk ledger), keep the
         // target lock, its inventory and every resource (the worker included); install no earlier
         // binaries, restore no old lock, prune nothing.
-        const committed = boundary.pending.length
-          ? committedAfterFailure(targetManifest, boundary, () => operations.readMigrationLedger())
-          : [];
-        if (recovery || committed === null || committed.length) {
-          const failureCode = committed === null ? 'one-way-migration-state-unknown' : 'one-way-migration-recovery-required';
+        const progress = boundary.pending.length
+          ? progressAfterFailure(targetManifest, boundary, () => operations.readMigrationLedger())
+          : { applied: boundary.applied, committed: [] };
+        const committed = progress ? progress.committed : null;
+        // Target migrations before the one-way one committed but it did not: the previous release's
+        // own chain no longer holds the database, and the target's chain would apply the one-way
+        // migration. No installer can go back without crossing it, so this is kept forward too.
+        const partial = Boolean(ownChainRollback && committed && !committed.length && progress.applied !== boundary.applied);
+        if (recovery || committed === null || committed.length || partial) {
+          const failureCode = committed === null ? 'one-way-migration-state-unknown'
+            : partial ? 'partial-migration-recovery-required' : 'one-way-migration-recovery-required';
           const crossed = [...boundary.committed, ...(committed ?? [])];
           const what = committed === null
             ? `it cannot be established whether ${describeOneWay(boundary.pending)} committed`
+            : partial ? `${progress.applied - boundary.applied} target migration(s) committed before ${describeOneWay(boundary.pending)}, which did not; `
+              + 'the previous release no longer fits the database without applying it'
             : crossed.length ? `${describeOneWay(crossed)} committed` : 'this recovery does not roll back';
           try {
             assertOwned('before recording the kept target');
@@ -3388,6 +3418,7 @@ export async function upgrade(
             ownedWrite(targetLock, 'Failed', { failureCode, transition: { ...transition, outcome: {
               failedAt: new Date().toISOString(),
               committed: committed === null ? null : crossed.map((e) => e.globalId),
+              appliedMigrations: progress ? progress.applied : null,
               rollbackAvailable: false,
               inventoryVerified: false
             } } });
@@ -3396,7 +3427,7 @@ export async function upgrade(
           }
           throw new Error(`${failureCode}: upgrade failed and ${what}; the earlier release was not reinstalled and the target release was kept for a forward recovery: ${upgradeError.message}`);
         }
-        // Confirmed not applied: the database still fits the previous release, so the rollback below is safe.
+        // Confirmed unchanged: the previous release with its own chain (prepared above) applies nothing.
       }
       try {
         assertOwned('before the rollback');
@@ -3413,7 +3444,7 @@ export async function upgrade(
           );
         } else {
           if (!componentTransition) await operations.installPreparedRelease(
-            previousLock, rollback, config.storageClass, effectiveConsoleUrl, '롤백'
+            previousLock, ownChainRollback ?? rollback, config.storageClass, effectiveConsoleUrl, '롤백'
           );
         }
         effects.push('reinstalled the previous release');
@@ -3454,7 +3485,8 @@ export async function upgrade(
   } finally {
     await Promise.all([
       rm(targetWork, { recursive: true, force: true }),
-      rm(rollbackWork, { recursive: true, force: true })
+      rm(rollbackWork, { recursive: true, force: true }),
+      rm(ownChainRollbackWork, { recursive: true, force: true })
     ]);
   }
 }

@@ -54,13 +54,18 @@ export function oneWayBoundary(manifest, readLedger) {
   });
 }
 
-// After a failure: which of the pending one-way migrations committed. null when that cannot be
-// established: the ledger is unreadable, no longer matches the chain, or lost rows it had.
-export function committedAfterFailure(manifest, boundary, readLedger) {
+// After a failure: how far the database got and which of the pending one-way migrations committed.
+// null when that cannot be established: the ledger is unreadable, no longer matches the chain, or
+// lost rows it had.
+export function progressAfterFailure(manifest, boundary, readLedger) {
   let applied;
   try { applied = ledgerPosition(manifest, readLedger()); } catch { return null; }
   if (applied < boundary.applied) return null;
-  return boundary.pending.filter((e) => e.index < applied);
+  return Object.freeze({ applied, committed: boundary.pending.filter((e) => e.index < applied) });
+}
+
+export function committedAfterFailure(manifest, boundary, readLedger) {
+  return progressAfterFailure(manifest, boundary, readLedger)?.committed ?? null;
 }
 
 // A release fits a database past these migrations only if its own verified migration chain

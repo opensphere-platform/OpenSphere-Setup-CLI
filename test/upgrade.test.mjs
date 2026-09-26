@@ -940,15 +940,26 @@ const localEdge = (release) => {
   return release;
 };
 function cutoverRuntime(previous, target, events, {
-  ledger, failTarget = false, recordedInventory = null, store = recordStore(previous), previousChain = PRE_CUTOVER_CHAIN, on = {}
+  ledger, failTarget = false, recordedInventory = null, store = recordStore(previous), previousChain = PRE_CUTOVER_CHAIN, chain = CHAIN, on = {}
 }) {
   const base = runtime(previous, events, { failTarget, recordedInventory, store });
-  const withChain = (release, prepared) => release.releaseDigest !== target.releaseDigest ? prepared
-    : { ...prepared, foundation: { ...prepared.foundation, migration: { manifest: CHAIN } } };
+  const withChain = (release, prepared, manifest = chain) => release.releaseDigest !== target.releaseDigest ? prepared
+    : { ...prepared, foundation: { ...prepared.foundation, migration: { manifest } } };
+  // Like the real preparation: the target gets its own chain; the previous release gets the target's
+  // chain when prepared as the ordinary rollback (migrationSourceRevision), otherwise its own.
+  const prepared = (release, result, options = {}) => {
+    if (release.releaseDigest === target.releaseDigest) return withChain(release, result);
+    const own = !options.migrationSourceRevision;
+    if (own) events.push(`prepare-own-chain:${release.sourceRevision}`);
+    return { ...result, foundation: { ...result.foundation, migration: { manifest: own ? previousChain : chain, source: own ? 'own' : 'target' } } };
+  };
   return {
     ...base,
     readInstallationLock: () => store.release,
-    prepareRelease: async (release, ...rest) => { on.prepare?.(release); return withChain(release, await base.prepareRelease(release, ...rest)); },
+    prepareRelease: async (release, root, sc, url, auth, options = {}) => {
+      on.prepare?.(release, options);
+      return prepared(release, await base.prepareRelease(release, root, sc, url, auth, options), options);
+    },
     prepareComponentRelease: async (release, ...rest) => withChain(release, await base.prepareComponentRelease(release, ...rest)),
     readMigrationLedger: () => {
       events.push('ledger');
@@ -958,6 +969,10 @@ function cutoverRuntime(previous, target, events, {
     readReleaseMigrationManifests: async (release) => { events.push(`previous-chain:${release.sourceRevision}`); return [previousChain]; },
     installPreparedRelease: (release, prepared, storageClass, consoleUrl, label) => {
       events.push(`install:${label}:${release.sourceRevision}`);
+      if (label === '롤백') {
+        // The installers apply every migration of the chain they are given that the ledger lacks.
+        events.push(`rollback-chain:${prepared.foundation?.migration?.source ?? 'none'}`);
+      }
       if (label === '업그레이드') on.install?.();
     },
     installPreparedComponentRelease: (release, prepared, storageClass, consoleUrl, label, changed) => {
@@ -987,13 +1002,53 @@ function assertTargetKept(events, store, target, failureCode) {
   assert.equal(store.state.transition.outcome.rollbackAvailable, false);
 }
 
-test('one-way cutover: a failure before it commits restores the previous release as before', async () => {
+test('one-way cutover: a failure before any target migration restores the previous release with its own chain', async () => {
   const { previous, target } = activation(), events = [], store = recordStore(previous);
   await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, {
     ledger: [BEFORE], store, on: { install: () => { throw new Error('Gitea bootstrap failed'); } } }) }),
   /previous release was restored: Gitea bootstrap failed/);
   assert.deepEqual(earlierInstalls(events), [`install:롤백:${previous.sourceRevision}`]);
+  // Given the target's chain, the previous release's installers would apply the cutover while "rolling back".
+  assert.deepEqual(events.filter((e) => e.startsWith('rollback-chain:')), ['rollback-chain:own']);
+  assert.ok(events.indexOf(`prepare-own-chain:${previous.sourceRevision}`) < events.findIndex((e) => e.startsWith('record:')),
+    'the own-chain rollback is prepared before the first change');
   assert.equal(store.release.releaseDigest, previous.releaseDigest); assert.equal(store.state.phase, 'Ready');
+});
+
+// A chain with a target migration between the installed release and the cutover.
+const MID = chainEntry(77, 'console.agent.turn_budget', 76);
+const CUTOVER_AFTER_MID = chainEntry(80, 'console.osdst.task_engine_cutover', 77);
+const CHAIN_WITH_MID = Object.freeze({ schemaVersion: 1, migrations: [BEFORE, MID, CUTOVER_AFTER_MID, AFTER] });
+
+test('one-way cutover: target migrations before it without it keep the target; no installer goes back through it', async () => {
+  const { previous, target } = activation(), events = [], store = recordStore(previous), ledger = [BEFORE];
+  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger, store, chain: CHAIN_WITH_MID,
+    on: { install: () => { ledger.push(MID); throw new Error('migration 0078 failed'); } } }) }),
+  (e) => /partial-migration-recovery-required: upgrade failed and 1 target migration\(s\) committed before R2D2 task engine cutover \(opensphere-console\/20260924\/0080\), which did not/.test(e.message)
+    && /earlier release was not reinstalled/.test(e.message));
+  assertTargetKept(events, store, target, 'partial-migration-recovery-required');
+  assert.deepEqual(store.state.transition.outcome.committed, []);
+  assert.equal(store.state.transition.outcome.appliedMigrations, 2);
+});
+
+for (const [name, previousChain, ledger] of [
+  ['lacks a migration the database has', Object.freeze({ schemaVersion: 1, migrations: [] }), [BEFORE]],
+  ['has migrations the database lacks (its installers would apply them)', CHAIN_WITH_MID, [BEFORE]],
+]) {
+  test(`one-way cutover: a previous release whose own chain ${name} stops the upgrade before any change`, async () => {
+    const { previous, target } = activation(), events = [], store = recordStore(previous);
+    await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger, store, previousChain }) }),
+      /previous release's own migration chain does not hold the current database .*stopped before any change/);
+    assert.deepEqual(installs(events), []); assert.equal(store.rv, 1, 'the installation record is untouched');
+  });
+}
+
+test('one-way cutover: the own-chain rollback cannot be prepared, so the upgrade stops before any change', async () => {
+  const { previous, target } = activation(), events = [], store = recordStore(previous);
+  await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, { ledger: [BEFORE], store,
+    on: { prepare: (release, options) => { if (release.releaseDigest === previous.releaseDigest && !options.migrationSourceRevision) throw new Error('previous migration manifest unavailable'); } } }) }),
+  /previous migration manifest unavailable/);
+  assert.deepEqual(installs(events), []); assert.equal(store.rv, 1);
 });
 
 for (const [name, on, failTarget, pattern] of [
@@ -1180,6 +1235,9 @@ test('one-way cutover: between releases that both include it, an ordinary rollba
   await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, {
     ledger: [BEFORE, CUTOVER], store, previousChain: CHAIN, failTarget: true }) }), /previous release was restored: target is unhealthy/);
   assert.deepEqual(earlierInstalls(events), [`install:롤백:${previous.sourceRevision}`]);
+  // Nothing one-way is pending, so the ordinary rollback with the target's chain is unchanged.
+  assert.deepEqual(events.filter((e) => e.startsWith('rollback-chain:')), ['rollback-chain:target']);
+  assert.equal(events.some((e) => e.startsWith('prepare-own-chain:')), false);
   assert.equal(store.release.releaseDigest, previous.releaseDigest); assert.equal(store.state.phase, 'Ready');
 });
 
