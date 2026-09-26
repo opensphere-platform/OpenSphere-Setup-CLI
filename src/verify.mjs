@@ -212,8 +212,22 @@ export function readBeszelBootstrapHistory(lock) {
     allowLegacyComponentSet: true, allowInstalledAgentIdentityCutover: true
   });
   if (stored.releaseDigest !== lock.releaseDigest) throw new Error('Installation changed before bootstrap evidence capture');
-  return captureBeszelBootstrapHistory(stored, JSON.parse(record.data?.['state.json'] ?? '{}'),
+  return captureBeszelBootstrapHistory(stored, verifiedStateBeforeClaim(JSON.parse(record.data?.['state.json'] ?? '{}'), lock),
     readRecordedInstallationEvidence(), record.metadata.uid);
+}
+
+// 2026-09-27 localhost case 2c: an upgrade claim replaces a Ready state's verification with
+// transition.previousVerifiedAt. The bootstrap Job is deleted a day after it finishes, so completing
+// that same release could no longer prove it and every claim-stage stop older than a day was a dead
+// end. The proof binds through the verification the record held immediately before the claim; the
+// claim changed no workload, and all current runtime checks still run.
+export function verifiedStateBeforeClaim(state, lock) {
+  const transition = state?.transition;
+  if (state?.phase === 'Ready' || !['Installing', 'Failed'].includes(state?.phase) || transition?.previousState !== 'Ready'
+    || state.releaseDigest !== lock.releaseDigest || transition.previousReleaseDigest !== lock.releaseDigest
+    || typeof transition.previousVerifiedAt !== 'string') return state;
+  return { phase: 'Ready', releaseDigest: lock.releaseDigest,
+    verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: transition.previousVerifiedAt } };
 }
 
 function readRecordedInstallationEvidence() {

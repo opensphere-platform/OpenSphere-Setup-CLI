@@ -2206,7 +2206,7 @@ export function readInstallationRecord() {
 export async function completeInstallationVerification(lock, {consoleUrl, requireZeroRestarts=false, runtime={}}={}) {
   // The recorded release, as readInstallationLock() admits it; it may predate the worker.
   validateLock(lock, { allowLegacyComponentSet: true, allowInstalledAgentIdentityCutover: true });
-  const ops={readInstallationRecord,readReleaseInventory,recordInstallationState,verifyInstallation,readMigrationLedger,...runtime};
+  const ops={readInstallationRecord,readReleaseInventory,recordInstallationState,verifyInstallation,readMigrationLedger,readBeszelBootstrapHistory,...runtime};
   const original=ops.readInstallationRecord();
   const config=JSON.parse(original.data['config.json']),state=JSON.parse(original.data['state.json']);
   if (JSON.parse(original.data['release.json']).releaseDigest!==lock.releaseDigest
@@ -2239,14 +2239,20 @@ export async function completeInstallationVerification(lock, {consoleUrl, requir
     expectedRecordVersion=after.metadata.resourceVersion;
     return written;
   };
-  write('Installing');
+  // 2026-09-27 localhost case 2c: the proof of the (day-old, deleted) Beszel bootstrap binds through
+  // the verification held before an interrupted upgrade claimed the record; read it before writing.
+  // The interrupted transition stays on the Installing/Failed writes, so a retry keeps both that
+  // binding and the one-way ledger check above; only a verified Ready clears it.
+  const bootstrapHistory=ops.readBeszelBootstrapHistory(lock);
+  const kept=state.transition?{transition:state.transition}:{};
+  write('Installing',kept);
   try {
-    const evidence=await ops.verifyInstallation(lock,{consoleUrl:config.consoleUrl,requireZeroRestarts,mode:'installed'});
+    const evidence=await ops.verifyInstallation(lock,{consoleUrl:config.consoleUrl,requireZeroRestarts,mode:'installed',bootstrapHistory});
     if(evidence.releaseDigest!==lock.releaseDigest||!evidence.verifiedAt) throw Error('Verification returned a different release');
     write('Ready',{verification:{evidenceConfigMap:'opensphere-installation-evidence',verifiedAt:evidence.verifiedAt}});
     return evidence;
   } catch(error) {
-    write('Failed',{failureCode:'installation-verification-incomplete'});
+    write('Failed',{...kept,failureCode:'installation-verification-incomplete'});
     throw error;
   }
 }
