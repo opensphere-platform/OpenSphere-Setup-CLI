@@ -39,6 +39,8 @@ test('managed cluster RBAC owns every cluster authority installed by Console boo
     'clusterrolebinding/opensphere-cluster-manager-read',
     'clusterrole/opensphere-platform-support-core-observer',
     'clusterrolebinding/opensphere-platform-support-core-observer',
+    'clusterrole/opensphere-cluster-manager-workload-operator',
+    'clusterrolebinding/opensphere-cluster-manager-workload-operator',
     'clusterrole/opensphere-platform-support-runtime',
     'clusterrolebinding/opensphere-platform-support-runtime',
     'clusterrolebinding/opensphere-ceph-preparation-worker',

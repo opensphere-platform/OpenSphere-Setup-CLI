@@ -36,6 +36,9 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     'clusterrolebinding/opensphere-cluster-manager-read',
     'clusterrole/opensphere-platform-support-core-observer',
     'clusterrolebinding/opensphere-platform-support-core-observer',
+    // Cluster Manager's reviewed Kubernetes workload operations (Console extension-controller manifest, 2026-09-27).
+    'clusterrole/opensphere-cluster-manager-workload-operator',
+    'clusterrolebinding/opensphere-cluster-manager-workload-operator',
     'clusterrole/opensphere-platform-support-runtime',
     'clusterrolebinding/opensphere-platform-support-runtime',
     ...CEPH_PREPARATION_CLUSTER_RBAC,
