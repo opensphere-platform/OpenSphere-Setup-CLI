@@ -84,7 +84,9 @@ test('managed uninstall owns only Console bootstrap admission policies', () => {
     'validatingadmissionpolicybinding/opensphere-console-image-integrity-cronjob',
     'validatingadmissionpolicy/opensphere-console-image-integrity-cronjob',
     'validatingadmissionpolicybinding/opensphere-shell-runtime-template-v1',
-    'validatingadmissionpolicy/opensphere-shell-runtime-template-v1'
+    'validatingadmissionpolicy/opensphere-shell-runtime-template-v1',
+    'validatingadmissionpolicybinding/opensphere-cluster-manager-workload-guard',
+    'validatingadmissionpolicy/opensphere-cluster-manager-workload-guard'
   ]);
 });
 
