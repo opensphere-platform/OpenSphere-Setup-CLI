@@ -11,7 +11,9 @@ export const MANAGED_NAMESPACES = Object.freeze([
   'opensphere-shell-sessions',
   'opensphere-hiss-validation',
   'opensphere-system',
-  'opensphere-foundation'
+  'opensphere-foundation',
+  // Cluster Manager Kubernetes operation records (Console extension-controller manifest, 2026-09-27).
+  'opensphere-kubernetes-operations'
 ]);
 
 export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
