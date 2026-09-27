@@ -4,7 +4,7 @@
     "channel": "edge"
   },
   "bundleDigest": "sha256:cfb51f0d07ba9617aad546e0bbe76277908d44dca29151c7852b29c938e64908",
-  "image": "ghcr.io/opensphere-platform/opensphere-shell-cluster-manager@sha256:f83ede7c7bae05104e487218e47e2aa9812a6566c18d6579707769853c700ae4",
+  "image": "ghcr.io/opensphere-platform/opensphere-shell-cluster-manager@sha256:885288a9156d0bc396e9e918f7cbe57ee416183fc73fae39750a77c0a2996e8a",
   "resources": [
     {
       "apiVersion": "v1",
@@ -29,7 +29,7 @@
         }
       },
       "data": {
-        "image": "ghcr.io/opensphere-platform/opensphere-shell-cluster-manager@sha256:f83ede7c7bae05104e487218e47e2aa9812a6566c18d6579707769853c700ae4",
+        "image": "ghcr.io/opensphere-platform/opensphere-shell-cluster-manager@sha256:885288a9156d0bc396e9e918f7cbe57ee416183fc73fae39750a77c0a2996e8a",
         "bundleDigest": "sha256:2aa85a253f03ee0de29d183db0ac8a40cea88f05e8f43581115d13a527de6004",
         "nbdBundleDigest": "sha256:cfb51f0d07ba9617aad546e0bbe76277908d44dca29151c7852b29c938e64908"
       }
