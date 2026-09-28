@@ -1,8 +1,9 @@
 import {createHash} from 'node:crypto';
-// Explicitly approved 2026-09-07. Setup prepares fixed authority only;
-// actual Core workload installation remains 22 -> OS Shell -> existing owner.
+// The reviewed Console candidate profile includes PSSS read-only observation
+// of the Crossplane writer fence. Its exact bytes must ship with this Setup build.
+// Core workload installation still uses OS Shell and the current owner.
 export const PLATFORM_CORE_ARTIFACT='deploy/installation-profiles/platform-core.json';
-export const PLATFORM_CORE_SHA256='91f1797854df91116ea8f9f77f8c406d741291f1472ea8e8a0d65087554ce099';
+export const PLATFORM_CORE_SHA256='10cb06f04f64c5cf3a5294650f79ff5214b8fa7ee4f2265514373666cc92caf3';
 const scopeContract={context:'docker-desktop',channel:'edge',consoleUrl:'https://localhost:1114'};
 const canonical=v=>JSON.stringify(order(v));
 function order(v){return Array.isArray(v)?v.map(order):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,order(v[k])])):v;}
