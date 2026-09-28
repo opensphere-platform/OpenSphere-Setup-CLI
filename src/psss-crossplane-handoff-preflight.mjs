@@ -5,7 +5,7 @@ export const MODULES=Object.freeze([
  {id:'cluster-manager',repository:'ghcr.io/opensphere-platform/opensphere-shell-cluster-manager',
   signatureIdentity:'opensphere-module-local-v1',
   path:'/app/platform-core-writer-owner.js',
-  sha256:'49951a3d9a20b79f6fde66ce2faa92155c8501587dfba1d9a299f06f45579bef'},
+  sha256:'dd063b6c900eb417d1c42ecd85be5d846324ef7637103010e249312eac6a68be'},
  {id:'platform-support',repository:'ghcr.io/opensphere-platform/opensphere-platform-support',
   signatureIdentity:'opensphere-platform-support-local-v1',
   path:'/app/owner/crossplane-writer-handoff.cjs',
@@ -99,12 +99,16 @@ function operationState(value){
  if(!value||value.kind!=='ConfigMap'||value.metadata?.namespace!=='opensphere-console'||
   value.metadata?.name!=='opensphere-his-operation-crossplane-core'||!value.metadata?.uid||
   !value.metadata?.resourceVersion||value.metadata?.deletionTimestamp||
-  value.metadata?.labels?.['opensphere.io/platform-core-operation']!=='crossplane-core')
+  value.metadata?.labels?.['opensphere.io/platform-core-operation']!=='crossplane-core'||
+  ![undefined,'suspended'].includes(value.metadata.labels['opensphere.io/platform-core-handoff']))
   return {state:'Conflict'};
+ const suspended=value.metadata.labels['opensphere.io/platform-core-handoff']==='suspended';
+ if(suspended && !value.data?.operation)return {state:'NoRecord',suspended:true,
+  uid:value.metadata.uid,resourceVersion:value.metadata.resourceVersion};
  let operation;try{operation=JSON.parse(value.data?.operation);}catch{return {state:'Conflict'};}
  if(operation?.itemId!=='crossplane-core'||!uuid.test(operation.id||''))return {state:'Conflict'};
  return {state:active.has(operation.phase)?'ActiveOrUncertain':terminal.has(operation.phase)?'Terminal':'Conflict',
-  uid:value.metadata.uid,resourceVersion:value.metadata.resourceVersion};
+  suspended,uid:value.metadata.uid,resourceVersion:value.metadata.resourceVersion};
 }
 function bindingState(row,value){
  if(value===null)return {state:'Missing'};
@@ -128,7 +132,7 @@ function coreState(values){
 export async function observePsssCrossplaneHandoff(client){
  if(!client||!['observeModule','readOperation','readBinding','readCore'].every(name=>
   typeof client[name]==='function'))throw Error('Read-only handoff client required');
- const [modules,operation,bindings,core,drain]=await Promise.all([
+ const [modules,operation,bindings,core]=await Promise.all([
   Promise.all(MODULES.map(async module=>{
    try{return {id:module.id,...moduleState(module,await client.observeModule(module))};}
    catch{return {id:module.id,state:'ObservationUnavailable'};}
@@ -141,10 +145,10 @@ export async function observePsssCrossplaneHandoff(client){
    catch{return {kind:row.kind,namespace:row.namespace,name:row.name,state:'ObservationUnavailable'};}
   })),
   Promise.resolve().then(()=>client.readCore()).then(coreState,()=> 'ObservationUnavailable'),
-  Promise.resolve().then(()=>client.observeDrain?.()).then(value=>
-   value?.state==='Ready'?{state:'Ready',uid:value.uid,resourceVersion:value.resourceVersion}
-    :{state:'Unverified'},()=>({state:'Unverified'})),
  ]);
+ const drain=operation.suspended===true && ['NoRecord','Terminal'].includes(operation.state)
+  ?{state:'Ready',uid:operation.uid,resourceVersion:operation.resourceVersion}
+  :{state:'Unverified'};
  const blockers=[
   ...modules.filter(row=>row.state!=='Verified').map(row=>row.id+':'+row.state),
   ...(['NoRecord','Terminal'].includes(operation.state)?[]:['CoreOperation:'+operation.state]),
@@ -196,8 +200,5 @@ export function createPsssCrossplaneHandoffClient({context,kubectl='kubectl',kub
    get('deployment','crossplane','crossplane-system'),
    get('deployment','crossplane-rbac-manager','crossplane-system'),
   ];},
-  // No live freeze contract is installed yet. A vacant operation record is
-  // not a barrier to the next CM request; never infer exclusive drain from it.
-  async observeDrain(){return {state:'Unverified'};},
  };
 }

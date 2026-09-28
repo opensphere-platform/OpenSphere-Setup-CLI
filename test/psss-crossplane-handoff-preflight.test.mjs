@@ -43,12 +43,15 @@ function binding(row,i){
 function fixture(){
  const modules=new Map(MODULES.map(row=>[row.id,moduleRecord(row)]));
  const bindings=new Map(BINDINGS.map((row,i)=>[row.name,binding(row,i)]));
- return {modules,bindings,operation:null,core:[null,null,null],
+ return {modules,bindings,operation:{kind:'ConfigMap',metadata:{
+   name:'opensphere-his-operation-crossplane-core',namespace:'opensphere-console',
+   uid:'drain-uid',resourceVersion:'7',labels:{
+    'opensphere.io/platform-core-operation':'crossplane-core',
+    'opensphere.io/platform-core-handoff':'suspended'}},data:{}},core:[null,null,null],
   async observeModule(row){return structuredClone(modules.get(row.id));},
   async readOperation(){return structuredClone(this.operation);},
   async readBinding(row){return structuredClone(bindings.get(row.name));},
   async readCore(){return structuredClone(this.core);},
-  async observeDrain(){return {state:this.drainState||'Ready',uid:'drain-uid',resourceVersion:'7'};},
  };
 }
 test('reviewed live images, guard bytes, drained work and exact CM bindings make the fence stage ready',async()=>{
@@ -64,7 +67,8 @@ test('a missing guard, active operation and mixed writer cannot be treated as a 
  f.modules.get('cluster-manager').hashes['cluster-manager-0']=null;
  f.operation={kind:'ConfigMap',metadata:{name:'opensphere-his-operation-crossplane-core',
   namespace:'opensphere-console',uid:'operation',resourceVersion:'1',
-  labels:{'opensphere.io/platform-core-operation':'crossplane-core'}},
+  labels:{'opensphere.io/platform-core-operation':'crossplane-core',
+   'opensphere.io/platform-core-handoff':'suspended'}},
   data:{operation:JSON.stringify({itemId:'crossplane-core',id:'11111111-1111-4111-8111-111111111111',
    phase:'Installing'})}};
  f.bindings.get(BINDINGS[0].name).subjects[0].name='opensphere-platform-support-runtime';
@@ -97,7 +101,7 @@ test('a failed signed registration or a package digest mismatch cannot authorize
   ['RegistrationUnverified','RegistrationUnverified']);
 });
 test('an empty CM operation is insufficient without an exclusive new-work drain',async()=>{
- const f=fixture();f.drainState='Unverified';
+ const f=fixture();f.operation=null;
  const result=await observePsssCrossplaneHandoff(f);
  assert.equal(result.operation.state,'NoRecord');
  assert.equal(result.state,'Unverified');
