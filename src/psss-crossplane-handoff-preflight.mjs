@@ -9,7 +9,7 @@ export const MODULES=Object.freeze([
  {id:'platform-support',repository:'ghcr.io/opensphere-platform/opensphere-platform-support',
   signatureIdentity:'opensphere-platform-support-local-v1',
   path:'/app/owner/crossplane-writer-handoff.cjs',
-  sha256:'c94f6427b7124fbd25699f6a83469f49dfcbc5dee840d7364f225a489adc49ba'},
+  sha256:'87d72484be55fd4289faf6e24955ce800cb0f9dcac05cfaef816f6c2359a96a3'},
 ]);
 const cm={kind:'ServiceAccount',name:'opensphere-cluster-manager-runtime',namespace:'opensphere-console'};
 export const BINDINGS=Object.freeze([

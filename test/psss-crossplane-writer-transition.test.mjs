@@ -59,7 +59,7 @@ test('reviewed transfer patches only the three fixed bindings in executor-first 
  assert.equal(f.writes.length,0);
  const result=await applyPsssCrossplaneWriterTransfer(scope,{client:f,
   planRevision:plan.planRevision,reviewedAt:plan.observedAt,now:at});
- assert.equal(result.state,'Transferred');assert.equal(result.exclusiveWriterVerified,false);
+ assert.equal(result.state,'Transferred');assert.equal(result.exclusiveWriterVerified,true);
  assert.deepEqual(f.writes,BINDINGS.map(identity));
  assert.equal(result.resources.every(row=>row.state==='PlatformSupport'),true);
 });

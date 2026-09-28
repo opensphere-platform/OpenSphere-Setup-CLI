@@ -143,7 +143,9 @@ export async function applyPsssCrossplaneWriterTransfer(scope,{client,planRevisi
   throw fail('OUTCOME_UNKNOWN','Writer transfer final state unverified',changed);
  const {fixed,records,...result}=final;
  return {...result,changed:changed.length>0,updated:changed,
-  exclusiveWriterVerified:false};
+  // snapshot re-runs the CM deny/HISS allow server-dryrun after all CAS writes.
+  // PSSS independently rechecks the persisted exact fence, drain and bindings.
+  exclusiveWriterVerified:true};
 }
 
 const probeName='opensphere-psss-writer-fence-probe';
