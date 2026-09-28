@@ -76,7 +76,7 @@ test('a missing guard, active operation and mixed writer cannot be treated as a 
  assert.equal(result.state,'Unverified');
  assert.ok(result.blockers.includes('cluster-manager:GuardNotDeployed'));
  assert.ok(result.blockers.includes('CoreOperation:ActiveOrUncertain'));
- assert.ok(result.blockers.includes(BINDINGS[0].name+':Other'));
+ assert.ok(result.blockers.includes(BINDINGS[0].name+':PlatformSupport'));
 });
 test('a stale image, extra pod, present Core or denied read stays unverified',async()=>{
  const f=fixture();

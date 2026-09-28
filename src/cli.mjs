@@ -4,6 +4,8 @@ import {prepareCephExecutionProfile} from './ceph-prerequisites.mjs';
 import {planPsssArgoRbac,applyPsssArgoRbac,createPsssArgoRbacClient} from './psss-argocd-rbac-transition.mjs';
 import {planPsssCrossplaneFence,applyPsssCrossplaneFence,createPsssCrossplaneFenceClient} from './psss-crossplane-fence-transition.mjs';
 import {planPsssCrossplaneDrain,applyPsssCrossplaneDrain,createPsssCrossplaneDrainClient} from './psss-crossplane-drain-transition.mjs';
+import {planPsssCrossplaneWriterTransfer,applyPsssCrossplaneWriterTransfer,
+  createPsssCrossplaneWriterTransferClient} from './psss-crossplane-writer-transition.mjs';
 import {createGitHubRegistryAuth} from './github-registry-auth.mjs';
 import {GITHUB_OAUTH_CLIENT_ID} from './github-oauth-app.mjs';
 import './portable-runtime.mjs';
@@ -153,6 +155,9 @@ Usage:
   opensphere-setup prepare-psss-crossplane-drain --context <kube-context> --cluster-uid <kube-system-uid>
       --console <https-origin> --channel edge [--kubectl-bin <path> --kubeconfig <path>]
       [--apply --plan-revision <sha256> --reviewed-at <ISO-8601> --reason <text>]
+  opensphere-setup transfer-psss-crossplane-writer --context <kube-context> --cluster-uid <kube-system-uid>
+      --console <https-origin> --channel edge [--kubectl-bin <path> --kubeconfig <path>]
+      [--apply --plan-revision <sha256> --reviewed-at <ISO-8601> --reason <text>]
   opensphere-setup upgrade --release <edge|candidate|stable> [--lock <verified-lock-file>]
       [--context <kube-context>] [--storage-class <name>] [--console <https-origin>]
       [--registry-username <github-login> --registry-token-stdin]
@@ -275,6 +280,26 @@ async function main() {
       throw new Error('PSSS Crossplane drain requires an 8–500 character reason');
     const result=await applyPsssCrossplaneDrain(scope,{client,planRevision:option('--plan-revision',''),
       reviewedAt:option('--reviewed-at','')});
+    console.log(JSON.stringify({...result,reason},null,2));return;
+  }
+  if (command === 'transfer-psss-crossplane-writer') {
+    if(!context||!suppliedConsoleUrl||!hasOption('--cluster-uid'))
+      throw new Error('PSSS writer transfer requires explicit --context, --cluster-uid and --console');
+    const scope={context,clusterUid:option('--cluster-uid',''),consoleUrl:suppliedConsoleUrl,
+      channel:option('--channel','edge')};
+    const client=createPsssCrossplaneWriterTransferClient({context,
+      kubectl:option('--kubectl-bin','kubectl'),kubeconfig:option('--kubeconfig','')});
+    if(!hasOption('--apply')){
+      if(['--plan-revision','--reviewed-at','--reason'].some(hasOption))
+        throw new Error('Apply review options require --apply');
+      console.log(JSON.stringify(await planPsssCrossplaneWriterTransfer(scope,{client}),null,2));return;
+    }
+    const reason=option('--reason','');
+    if(reason.trim().length<8||reason.length>500)
+      throw new Error('PSSS writer transfer requires an 8–500 character reason');
+    const result=await applyPsssCrossplaneWriterTransfer(scope,{client,
+      planRevision:option('--plan-revision',''),reviewedAt:option('--reviewed-at',''),
+      onProgress:item=>console.error(`[이전] ${item.resource} ${item.state}`)});
     console.log(JSON.stringify({...result,reason},null,2));return;
   }
   if (['--registry-auth','--github-client-id'].some(hasOption) && !['resolve','doctor','bootstrap','upgrade'].includes(command)) {

@@ -120,7 +120,9 @@ function bindingState(row,value){
   value.subjects?.length!==1)return {state:'Conflict'};
  const subject=value.subjects[0];
  return {state:subject.kind===cm.kind&&subject.name===cm.name&&subject.namespace===cm.namespace
-  ?'ClusterManager':'Other',
+  ?'ClusterManager':subject.kind==='ServiceAccount'&&
+   subject.name==='opensphere-platform-support-runtime'&&subject.namespace==='opensphere-console'
+   ?'PlatformSupport':'Other',
   uid:value.metadata.uid,resourceVersion:value.metadata.resourceVersion};
 }
 function coreState(values){
