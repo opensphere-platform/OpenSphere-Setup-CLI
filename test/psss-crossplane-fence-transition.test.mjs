@@ -15,7 +15,7 @@ function fixture(){
  const rows=new Map(),creates=[],f={
   rows,creates,clusterUid:uid,
   async readClusterUid(){return this.clusterUid;},
-  async preflightHandoff(){return this.handoffReadiness||'Ready';},
+  async preflightHandoff(){return {state:this.handoffReadiness||'Ready',blockers:[]};},
   async read(row){return structuredClone(rows.get(key(row))??null);},
   async admit(row){if(this.denyAdmission)throw Error('denied');return installed(row,9);},
   async create(row){
@@ -84,6 +84,18 @@ test('admission failure or a concurrent object creation stops safely',async()=>{
   reviewedAt:plan.observedAt,now:at}),{code:'PLAN_CHANGED'});
  assert.equal(f.creates.length,0);
 });
+test('a CM guard rollout during admission stops before any policy is installed',async()=>{
+ const f=fixture(),plan=await planPsssCrossplaneFence(scope,{client:f,now:at});
+ const admit=f.admit;
+ f.admit=async row=>{
+  const result=await admit.call(f,row);
+  if(row.kind===BINDING.kind)f.handoffReadiness='Unverified';
+  return result;
+ };
+ await assert.rejects(applyPsssCrossplaneFence(scope,{client:f,planRevision:plan.planRevision,
+  reviewedAt:plan.observedAt,now:at}),{code:'PLAN_CHANGED'});
+ assert.equal(f.creates.length,0);
+});
 test('unknown create outcome requires a new review and never duplicates the first resource',async()=>{
  const f=fixture(),plan=await planPsssCrossplaneFence(scope,{client:f,now:at});
  f.loseResponse=true;
@@ -105,7 +117,6 @@ test('kubectl adapter sends fixed stdin to server dry-run and create',async()=>{
    return JSON.stringify(installed(JSON.parse(options.input),0));
   }});
  await client.admit(POLICY);await client.create(BINDING);
- assert.equal(await client.preflightHandoff(),'Unverified');
  assert.equal(calls[0].args.includes('--dry-run=server'),true);
  assert.equal(calls[1].args.includes('--dry-run=server'),false);
  assert.equal(calls.every(row=>row.args.includes('--context')&&row.args.includes('default')),true);

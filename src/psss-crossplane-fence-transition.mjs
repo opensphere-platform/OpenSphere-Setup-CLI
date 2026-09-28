@@ -1,6 +1,7 @@
 import {createHash} from 'node:crypto';
 import {run} from './process.mjs';
 import {POLICY,BINDING,matchesWriterFence} from './psss-crossplane-writer-fence.mjs';
+import {observePsssCrossplaneHandoff,createPsssCrossplaneHandoffClient} from './psss-crossplane-handoff-preflight.mjs';
 
 const PINNED_SHA='ec055d3d18d1371117d772dce0d8cdb52d267ab093de0849ff83fda76b4f9fef';
 const resources=[POLICY,BINDING];
@@ -41,7 +42,9 @@ async function snapshot(client,scope,observedAt){
   uid=await client.readClusterUid();
   if(uid!==scope.clusterUid)throw fail('WRONG_CLUSTER','kube-system UID differs from reviewed RKE2 cluster');
   actual=await Promise.all(resources.map(row=>client.read(row)));
-  handoff=typeof client.preflightHandoff==='function'?await client.preflightHandoff():'Unverified';
+  try{handoff=typeof client.preflightHandoff==='function'?await client.preflightHandoff():
+   {state:'Unverified',blockers:['HandoffClientUnavailable']};}
+  catch{handoff={state:'Unverified',blockers:['HandoffObservationUnavailable']};}
  }catch(error){
   if(error.code==='WRONG_CLUSTER')throw error;
   throw fail('OBSERVATION_UNAVAILABLE','Writer fence observation failed; absence was not inferred');
@@ -51,11 +54,11 @@ async function snapshot(client,scope,observedAt){
   resourceVersion:actual[i]?.metadata?.resourceVersion||null}));
  const state=rows.some(row=>row.state==='Conflict')?'Blocked':
   rows.every(row=>row.state==='Prepared')?'Prepared':'NeedsPreparation';
- const handoffReadiness=handoff==='Ready'?'Ready':'Unverified';
- const planRevision=sha({contractSha256:PINNED_SHA,scope,observedAt,rows,handoffReadiness});
+ const handoffReadiness=handoff?.state==='Ready'?'Ready':'Unverified';
+ const planRevision=sha({contractSha256:PINNED_SHA,scope,observedAt,rows,handoff});
  return {schema:'opensphere.psss-crossplane-fence-plan/v1',owner:'platform-support',
   scope,contractSha256:'sha256:'+PINNED_SHA,observedAt,planRevision,state,
-  handoffReadiness,applicable:state==='NeedsPreparation'&&handoffReadiness==='Ready',
+  handoffReadiness,handoff,applicable:state==='NeedsPreparation'&&handoffReadiness==='Ready',
   changed:false,resources:rows,actual};
 }
 export async function planPsssCrossplaneFence(scope,{client,now=()=>new Date()}={}){
@@ -87,6 +90,12 @@ export async function applyPsssCrossplaneFence(scope,{client,planRevision,review
  }
  const changed=[];
  for(const row of missing){
+  let currentHandoff;
+  try{currentHandoff=await client.preflightHandoff();}catch{
+   throw fail('OUTCOME_UNKNOWN','Handoff observation failed; inspect before resuming',{changed});
+  }
+  if(currentHandoff?.state!=='Ready'||canonical(currentHandoff)!==canonical(initial.handoff))
+   throw fail('PLAN_CHANGED','CM/PSSS handoff evidence changed; no further writes',{changed});
   let before;
   try{before=await client.read(row);}catch{
    throw fail('OUTCOME_UNKNOWN','Writer fence reinspection failed; inspect before resuming',{changed});
@@ -117,6 +126,7 @@ export function createPsssCrossplaneFenceClient({context,kubectl='kubectl',kubec
    !kubectl||typeof kubectl!=='string'||(kubeconfig&&typeof kubeconfig!=='string'))
   throw fail('INVALID_SCOPE','Explicit kubectl context and executable required');
  const base=[...(kubeconfig?['--kubeconfig',kubeconfig]:[]),'--context',context];
+ const handoffClient=createPsssCrossplaneHandoffClient({context,kubectl,kubeconfig,runner});
  const execute=(args,input)=>runner(kubectl,[...base,...args,'--request-timeout=10s','-o','json'],
   {capture:true,input,spawn:{maxBuffer:2*1024*1024,timeout:30000}});
  return {
@@ -131,9 +141,7 @@ export function createPsssCrossplaneFenceClient({context,kubectl='kubectl',kubec
   async admit(row){
    return JSON.parse(execute(['create','--dry-run=server','-f','-'],JSON.stringify(row)));
   },
-  // The admission objects alone do not prove a safe live CM -> PSSS cutover.
-  // Replace this only with a reviewed, live operation/guard/authority preflight.
-  async preflightHandoff(){return 'Unverified';},
+  async preflightHandoff(){return observePsssCrossplaneHandoff(handoffClient);},
  };
 }
 
