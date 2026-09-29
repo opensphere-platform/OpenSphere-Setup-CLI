@@ -114,8 +114,8 @@ export function createPsssArgoRbacClient({context,kubectl='kubectl',kubeconfig='
    !kubectl||typeof kubectl!=='string'||(kubeconfig&&typeof kubeconfig!=='string'))
    throw fail('INVALID_SCOPE','Explicit kubectl context and executable required');
  const base=[...(kubeconfig?['--kubeconfig',kubeconfig]:[]),'--context',context];
- const execute=(args)=>runner(kubectl,[...base,...args,'--request-timeout=10s','-o','json'],
-   {capture:true,spawn:{maxBuffer:2*1024*1024,timeout:30000}});
+ const execute=(args,input)=>runner(kubectl,[...base,...args,'--request-timeout=10s','-o','json'],
+   {capture:true,...(input===undefined?{}:{input}),spawn:{maxBuffer:2*1024*1024,timeout:30000}});
  return {
   async readClusterUid(){const v=JSON.parse(execute(['get','namespace','kube-system']));return v?.metadata?.uid;},
   async read(row){const args=['get',row.kind.toLowerCase(),row.name];if(row.namespace)args.push('-n',row.namespace);
@@ -127,6 +127,10 @@ export function createPsssArgoRbacClient({context,kubectl='kubectl',kubeconfig='
     '--field-manager=opensphere-setup-psss-argocd-v1']));
   },
   async admit(row,current){return this.patch(row,current,{dryRun:true});},
+  async admitCreate(manifest){return JSON.parse(execute(['create','-f','-','--dry-run=server',
+    '--field-manager=opensphere-setup-psss-argocd-v1'],JSON.stringify(manifest)));},
+  async create(manifest){return JSON.parse(execute(['create','-f','-',
+    '--field-manager=opensphere-setup-psss-argocd-v1'],JSON.stringify(manifest)));},
  };
 }
 

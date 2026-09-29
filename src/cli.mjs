@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import setupPackage from '../package.json' with { type: 'json' };
 import {prepareCephExecutionProfile} from './ceph-prerequisites.mjs';
-import {planPsssArgoRbac,applyPsssArgoRbac,createPsssArgoRbacClient} from './psss-argocd-rbac-transition.mjs';
+import {createPsssArgoRbacClient} from './psss-argocd-rbac-transition.mjs';
+import {planPsssArgoPreparation,applyPsssArgoPreparation} from './psss-argocd-preparation.mjs';
 import {planPsssCrossplaneFence,applyPsssCrossplaneFence,createPsssCrossplaneFenceClient} from './psss-crossplane-fence-transition.mjs';
 import {planPsssCrossplaneDrain,applyPsssCrossplaneDrain,createPsssCrossplaneDrainClient} from './psss-crossplane-drain-transition.mjs';
 import {planPsssCrossplaneWriterTransfer,applyPsssCrossplaneWriterTransfer,
@@ -235,11 +236,11 @@ async function main() {
     if(!hasOption('--apply')){
       if(['--plan-revision','--reviewed-at','--reason'].some(hasOption))
         throw new Error('Apply review options require --apply');
-      console.log(JSON.stringify(await planPsssArgoRbac(scope,{client}),null,2));return;
+      console.log(JSON.stringify(await planPsssArgoPreparation(scope,{client}),null,2));return;
     }
     const reason=option('--reason','');
     if(reason.trim().length<8||reason.length>500)throw new Error('PSSS Argo authority change requires an 8–500 character reason');
-    const result=await applyPsssArgoRbac(scope,{client,planRevision:option('--plan-revision',''),
+    const result=await applyPsssArgoPreparation(scope,{client,planRevision:option('--plan-revision',''),
       reviewedAt:option('--reviewed-at',''),onProgress:item=>console.error(`[준비] ${item.resource} ${item.state}`)});
     console.log(JSON.stringify({...result,reason},null,2));return;
   }
