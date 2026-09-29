@@ -3,8 +3,10 @@ import {installTarget,profileChannel} from './install-target.mjs';
 // Explicitly approved 2026-09-07. Setup prepares fixed authority only;
 // actual Core workload installation remains 22 -> OS Shell -> existing owner.
 // The bytes stay pinned; since 2026-09-23 the target cluster is not (install-target.mjs).
+// 2026-09-29: the reviewed Console profile adds PSSS read-only observation of the Crossplane writer fence
+// (Codex 0368b2c); its exact bytes ship with this Setup build. The target stays chosen at run time.
 export const PLATFORM_CORE_ARTIFACT='deploy/installation-profiles/platform-core.json';
-export const PLATFORM_CORE_SHA256='91f1797854df91116ea8f9f77f8c406d741291f1472ea8e8a0d65087554ce099';
+export const PLATFORM_CORE_SHA256='10cb06f04f64c5cf3a5294650f79ff5214b8fa7ee4f2265514373666cc92caf3';
 const canonical=v=>JSON.stringify(order(v));
 function order(v){return Array.isArray(v)?v.map(order):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,order(v[k])])):v;}
 const id=r=>`${r.apiVersion}/${r.kind}/${r.metadata.namespace||''}/${r.metadata.name}`;
