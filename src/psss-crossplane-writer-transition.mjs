@@ -42,11 +42,22 @@ function bindingState(row,value){
 }
 const fenceIdentity=value=>value?{uid:value.metadata?.uid||null,
  resourceVersion:value.metadata?.resourceVersion||null}:null;
-function fixedEvidence(handoff,policy,binding,enforcement){
- return {modules:handoff.modules,operation:handoff.operation,
+// localhost 2026-09-29: every status write changes a Pod's resourceVersion, and one changed right after
+// the first binding moved. The module identity is its verified image, registration, package, deployment
+// and Pod UIDs; a replaced Pod still stops the transfer.
+const moduleIdentity=modules=>Array.isArray(modules)?modules.map(({pods,...row})=>({...row,
+ pods:Array.isArray(pods)?pods.map(pod=>({uid:pod?.uid??null})):pods})):modules;
+function fixedEvidence(handoff,policy,binding){
+ return {modules:moduleIdentity(handoff.modules),operation:handoff.operation,
   drain:handoff.drain,core:handoff.core,
-  policy:fenceIdentity(policy),binding:fenceIdentity(binding),enforcement};
+  policy:fenceIdentity(policy),binding:fenceIdentity(binding)};
 }
+// The executor binding (BINDINGS[0]) is CM's only Crossplane write grant here. While CM holds it, the fence
+// must be seen denying a write RBAC allows. Once it moved, RBAC itself denies CM, so the policy denial can
+// no longer be observed: that is accepted only with the executor already transferred (localhost
+// 2026-09-29, where the old rule stopped every transfer after its first binding).
+const enforced=(enforcement,resources)=>enforcement==='Verified'||
+ (enforcement==='RbacWithdrawn'&&resources[0]?.state==='PlatformSupport');
 async function snapshot(client,scope,observedAt){
  scope=validate(scope);
  let clusterUid,handoff,policy,binding,records;
@@ -76,11 +87,11 @@ async function snapshot(client,scope,observedAt){
  const prerequisite=handoff.modules?.every(row=>row.state==='Verified')&&
   ['NoRecord','Terminal'].includes(handoff.operation?.state)&&
   handoff.drain?.state==='Ready'&&handoff.core==='Absent'&&
-  fenceReady&&enforcement==='Verified'&&
+  fenceReady&&enforced(enforcement,resources)&&
   bindingReadsAgree&&resources.every(row=>['ClusterManager','PlatformSupport'].includes(row.state));
  const state=!prerequisite?'Blocked':resources.every(row=>row.state==='PlatformSupport')
   ?'Transferred':'NeedsTransfer';
- const fixed=fixedEvidence(handoff,policy,binding,enforcement);
+ const fixed=fixedEvidence(handoff,policy,binding);
  const planRevision=sha({scope,observedAt,state,fixed,resources});
  return {schema:'opensphere.psss-crossplane-writer-transfer/v1',scope,observedAt,
   planRevision,state,applicable:state==='NeedsTransfer',
@@ -118,7 +129,7 @@ export async function applyPsssCrossplaneWriterTransfer(scope,{client,planRevisi
   resourceVersion:row.resourceVersion}));
  for(const {row} of pending){
   const before=await snapshot(client,scope,reviewedAt);
-  if(canonical(before.fixed)!==canonical(initial.fixed)||
+  if(before.state!=='NeedsTransfer'||canonical(before.fixed)!==canonical(initial.fixed)||
    before.resources.some((value,i)=>value.state!==expected[i].state||
     value.uid!==expected[i].uid||value.resourceVersion!==expected[i].resourceVersion))
    throw fail('PLAN_CHANGED','Writer evidence changed during transfer',changed);
@@ -143,8 +154,8 @@ export async function applyPsssCrossplaneWriterTransfer(scope,{client,planRevisi
   throw fail('OUTCOME_UNKNOWN','Writer transfer final state unverified',changed);
  const {fixed,records,...result}=final;
  return {...result,changed:changed.length>0,updated:changed,
-  // snapshot re-runs the CM deny/HISS allow server-dryrun after all CAS writes.
-  // PSSS independently rechecks the persisted exact fence, drain and bindings.
+  // snapshot re-runs the CM server dry-runs after all CAS writes: HISS still allowed, Crossplane denied
+  // (by RBAC now that the executor moved). PSSS independently rechecks the exact fence, drain and bindings.
   exclusiveWriterVerified:true};
 }
 
@@ -181,24 +192,26 @@ export function createPsssCrossplaneWriterTransferClient({context,kubectl='kubec
    get('validatingadmissionpolicybinding',BINDING.metadata.name)];},
   async readBinding(row){return handoff.readBinding(row);},
   async verifyFence(){
-   // The subject already has this RBAC grant. A policy denial, not RBAC denial,
-   // proves that the exact CM identity is fenced. The HISS path must still work.
-   for(const namespace of ['crossplane-system','cert-manager']){
-    const can=runner(kubectl,[...base,'auth','can-i','create','deployments','-n',namespace,
-     '--as='+CM_USERNAME,'--request-timeout=10s'],{capture:true}).trim();
-    if(can!=='yes'||get('deployment',probeName,namespace)!==null)return 'Unverified';
-   }
-   let denied=false;
+   // Server dry-runs as the exact CM identity; `auth can-i` is not evidence. The HISS path must still
+   // work. In crossplane-system either the fence denies a write RBAC allowed (Verified), or, once the
+   // executor binding moved, RBAC denies it first (RbacWithdrawn; the snapshot accepts that only then).
+   // An admitted Crossplane write is never fenced.
+   for(const namespace of ['crossplane-system','cert-manager'])
+    if(get('deployment',probeName,namespace)!==null)return 'Unverified';
+   let allowed;
+   try{allowed=JSON.parse(execute(['create','--dry-run=server','--as='+CM_USERNAME,
+    '-f','-'],JSON.stringify(probe('cert-manager'))));}catch{return 'Unverified';}
+   if(allowed?.kind!=='Deployment'||allowed.metadata?.name!==probeName||
+    allowed.metadata?.namespace!=='cert-manager')return 'Unverified';
    try{execute(['create','--dry-run=server','--as='+CM_USERNAME,'-f','-'],
     JSON.stringify(probe('crossplane-system')));}catch(error){
-    denied=String(error.message||'').includes(`ValidatingAdmissionPolicy '${POLICY.metadata.name}'`)
-     &&String(error.message||'').includes('denied request');
+    const message=String(error.message||'');
+    if(message.includes(`ValidatingAdmissionPolicy '${POLICY.metadata.name}'`)&&message.includes('denied request'))
+     return 'Verified';
+    if(message.includes(`User "${CM_USERNAME}" cannot create resource "deployments" in API group "apps" in the namespace "crossplane-system"`))
+     return 'RbacWithdrawn';
    }
-   if(!denied)return 'Unverified';
-   const allowed=JSON.parse(execute(['create','--dry-run=server','--as='+CM_USERNAME,
-    '-f','-'],JSON.stringify(probe('cert-manager'))));
-   return allowed.kind==='Deployment'&&allowed.metadata?.name===probeName&&
-    allowed.metadata?.namespace==='cert-manager'?'Verified':'Unverified';
+   return 'Unverified';
   },
   async admit(row,current){return mutate(row,current,true);},
   async patch(row,current){return mutate(row,current,false);},

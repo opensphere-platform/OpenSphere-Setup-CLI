@@ -25,7 +25,9 @@ function fixture(subjects=[CM,CM,CM]){
  const binding={...structuredClone(BINDING),metadata:{...BINDING.metadata,uid:'fence-binding',resourceVersion:'4'}};
  const f={bindings,policy,binding,clusterUid:uid,writes:[],
   async readClusterUid(){return this.clusterUid;},
-  async preflightHandoff(){return {modules:[{id:'cluster-manager',state:'Verified'},
+  podVersion:1,podUid:'cm-pod',
+  async preflightHandoff(){return {modules:[{id:'cluster-manager',state:'Verified',
+    pods:[{uid:this.podUid,resourceVersion:String(this.podVersion++)}]},
    {id:'platform-support',state:'Verified'}],
    operation:{state:'NoRecord',suspended:true,uid:'drain',resourceVersion:'2'},
    drain:{state:'Ready',uid:'drain',resourceVersion:'2'},core:'Absent',
@@ -35,7 +37,10 @@ function fixture(subjects=[CM,CM,CM]){
      uid:value.metadata.uid,resourceVersion:value.metadata.resourceVersion};})};},
   async readFence(){return [structuredClone(this.policy),structuredClone(this.binding)];},
   async readBinding(row){return structuredClone(this.bindings.get(identity(row)));},
-  async verifyFence(){return this.enforcement||'Verified';},
+  // Like the real cluster: the executor binding is CM's Crossplane write grant. Without it RBAC,
+  // not the fence, denies CM (localhost 2026-09-29). The old fake always answered Verified.
+  async verifyFence(){if(this.enforcement)return this.enforcement;
+   return this.bindings.get(identity(BINDINGS[0])).subjects[0].name===CM.name?'Verified':'RbacWithdrawn';},
   async admit(row,value){
    if(this.denyAdmission)throw Error('denied');
    if(this.concurrentChange){this.bindings.get(identity(row)).metadata.resourceVersion='2';
@@ -76,6 +81,8 @@ test('missing or ineffective fence, active Core, or foreign binding blocks befor
  for(const change of [
   f=>{f.policy=null;},
   f=>{f.enforcement='Unverified';},
+  // RBAC withdrawal only counts once the executor moved; with CM still bound it is inconsistent.
+  f=>{f.enforcement='RbacWithdrawn';},
   f=>{const previous=f.preflightHandoff.bind(f);
    f.preflightHandoff=async()=>({...await previous(),
     operation:{state:'ActiveOrUncertain'},drain:{state:'Unverified'}});},
@@ -90,6 +97,17 @@ test('missing or ineffective fence, active Core, or foreign binding blocks befor
   assert.equal(f.writes.length,0);
  }
 });
+test('a Pod status write between bindings does not stop the transfer, a replaced Pod does',async()=>{
+ const f=fixture(),plan=await planPsssCrossplaneWriterTransfer(scope,{client:f,now:at});
+ const result=await applyPsssCrossplaneWriterTransfer(scope,{client:f,
+  planRevision:plan.planRevision,reviewedAt:plan.observedAt,now:at});
+ assert.equal(result.state,'Transferred');assert.ok(f.podVersion>4);
+ const g=fixture(),second=await planPsssCrossplaneWriterTransfer(scope,{client:g,now:at});
+ const patch=g.patch.bind(g);g.patch=async(row,value)=>{const out=await patch(row,value);g.podUid='replaced';return out;};
+ await assert.rejects(applyPsssCrossplaneWriterTransfer(scope,{client:g,
+  planRevision:second.planRevision,reviewedAt:second.observedAt,now:at}),{code:'PLAN_CHANGED'});
+ assert.equal(g.writes.length,1);
+});
 test('admission conflict, concurrent change and lost response do not continue to a second binding',async()=>{
  for(const failure of ['denyAdmission','concurrentChange','loseResponse']){
   const f=fixture(),plan=await planPsssCrossplaneWriterTransfer(scope,{client:f,now:at});
@@ -101,16 +119,19 @@ test('admission conflict, concurrent change and lost response do not continue to
   assert.equal(f.writes.length,failure==='loseResponse'?1:0);
  }
 });
-test('adapter proves deny and HISS allow only through server dry-run and patches with CAS tests',async()=>{
+function adapter(crossplaneAnswer,{hissAllowed=true}={}){
  const calls=[];
  const client=createPsssCrossplaneWriterTransferClient({context:'default',runner:(_exe,args,options)=>{
   calls.push({args,options});
-  if(args.includes('can-i'))return 'yes';
+  if(args.includes('can-i'))throw Error('auth can-i is not evidence');
   if(args.includes('get'))return '';
   if(args.includes('create')){
    const value=JSON.parse(options.input);
-   if(value.metadata.namespace==='crossplane-system')
-    throw Error("ValidatingAdmissionPolicy 'opensphere-psss-crossplane-writer-fence' denied request");
+   if(value.metadata.namespace==='crossplane-system'){
+    if(crossplaneAnswer==='admitted')return JSON.stringify(value);
+    throw Error(crossplaneAnswer);
+   }
+   if(!hissAllowed)throw Error('cert-manager denied');
    return JSON.stringify(value);
   }
   if(args.includes('patch')){
@@ -118,14 +139,27 @@ test('adapter proves deny and HISS allow only through server dry-run and patches
   }
   throw Error('unexpected');
  }});
+ return {client,calls};
+}
+const policyDenial="ValidatingAdmissionPolicy 'opensphere-psss-crossplane-writer-fence' with binding 'opensphere-psss-crossplane-writer-fence' denied request";
+// Observed on localhost 2026-09-29 after the executor binding moved.
+const rbacDenial='Error from server (Forbidden): error when creating "STDIN": deployments.apps is forbidden: User "system:serviceaccount:opensphere-console:opensphere-cluster-manager-runtime" cannot create resource "deployments" in API group "apps" in the namespace "crossplane-system"';
+test('adapter proves deny and HISS allow only through server dry-run and patches with CAS tests',async()=>{
+ const {client,calls}=adapter(policyDenial);
  assert.equal(await client.verifyFence(),'Verified');
- const dryruns=calls.filter(call=>call.args.includes('create')&&!call.args.includes('can-i'));
+ const dryruns=calls.filter(call=>call.args.includes('create'));
  assert.equal(dryruns.length,2);
- assert.equal(dryruns.every(call=>
-  call.args.includes('--dry-run=server')),true);
+ assert.equal(dryruns.every(call=>call.args.includes('--dry-run=server')),true);
  await client.admit(BINDINGS[0],record(BINDINGS[0],0));
  const patchCall=calls.at(-1),ops=JSON.parse(patchCall.args[patchCall.args.indexOf('--patch')+1]);
  assert.deepEqual(ops.map(row=>row.path),
   ['/metadata/uid','/metadata/resourceVersion','/roleRef','/subjects','/subjects']);
  assert.equal(patchCall.args.includes('--dry-run=server'),true);
+});
+test('adapter reports RBAC withdrawal, and never calls an admitted Crossplane write or a blocked HISS path fenced',async()=>{
+ assert.equal(await adapter(rbacDenial).client.verifyFence(),'RbacWithdrawn');
+ assert.equal(await adapter('admitted').client.verifyFence(),'Unverified');
+ assert.equal(await adapter('connection refused').client.verifyFence(),'Unverified');
+ assert.equal(await adapter(policyDenial,{hissAllowed:false}).client.verifyFence(),'Unverified');
+ assert.equal(await adapter(rbacDenial,{hissAllowed:false}).client.verifyFence(),'Unverified');
 });
