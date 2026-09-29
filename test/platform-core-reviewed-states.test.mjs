@@ -73,17 +73,29 @@ test('an unreviewed reader, a missing patch client, or an unknown patch outcome 
  await assert.rejects(preparePlatformCorePrerequisites(newRaw,scope,{client:lost,apply:true}),{code:'PREPARATION_INCOMPLETE'});
  assert.equal(lost.patches.length,1);assert.equal(bare.creates.length+c.creates.length+lost.creates.length,0);
 });
-test('the Core adapter patches only the reviewed reader with the four guarded operations',async()=>{
+test('the Core adapter patches only the reviewed reader between the two reviewed rule sets',async()=>{
  const {createPlatformCoreClient,coreRulesPatch}=await import('../src/platform-core-prerequisites.mjs');
- const calls=[],reader={apiVersion:'rbac.authorization.k8s.io/v1',kind:'ClusterRole',metadata:{name:'opensphere-platform-support-core-reader',uid:'u',resourceVersion:'7'},rules:[]};
+ const without=JSON.parse(oldRaw).resources.find(r=>id(r)===READER).rules;
+ const fenceRead={apiGroups:['admissionregistration.k8s.io'],resources:['validatingadmissionpolicies','validatingadmissionpolicybindings'],verbs:['get'],resourceNames:['opensphere-psss-crossplane-writer-fence']};
+ const withFence=[...without.slice(0,3),fenceRead,...without.slice(3)];
+ const calls=[],reader={apiVersion:'rbac.authorization.k8s.io/v1',kind:'ClusterRole',metadata:{name:'opensphere-platform-support-core-reader',uid:'u',resourceVersion:'7'},rules:without};
  const c=createPlatformCoreClient(scope,(command,args,options)=>{calls.push(args);return args.includes('kube-system')?JSON.stringify({metadata:{uid:'cluster'}}):JSON.stringify(reader);});
  assert.deepEqual(Object.keys(c).sort(),['create','patchRules','read']);
- await c.patchRules(reader,coreRulesPatch(reader,[],[{apiGroups:[''],resources:['namespaces'],verbs:['get']}]));
+ await c.patchRules(reader,coreRulesPatch(reader,without,withFence));
  const patch=calls.find(args=>args.includes('patch'));
  assert.deepEqual(patch.slice(0,5),['--context','docker-desktop','patch','clusterrole.rbac.authorization.k8s.io','opensphere-platform-support-core-reader']);
  assert.ok(patch.includes('--type=json'));
  const other={...reader,metadata:{...reader.metadata,name:'argocd-server'}};
- await assert.rejects(c.patchRules(other,coreRulesPatch(other,[],[])),{code:'PRECONDITION_FAILED'});
- await assert.rejects(c.patchRules(reader,[{op:'replace',path:'/rules',value:[]}]),{code:'PRECONDITION_FAILED'});
+ const broad=[...withFence,{apiGroups:[''],resources:['secrets'],verbs:['get']}];
+ for(const [label,target,ops] of [
+  ['other object',other,coreRulesPatch(other,without,withFence)],
+  ['operation shape',reader,[{op:'replace',path:'/rules',value:withFence}]],
+  ['arbitrary next rules',reader,coreRulesPatch(reader,without,broad)],
+  ['arbitrary previous rules',reader,coreRulesPatch(reader,[],withFence)],
+  ['reverse direction',reader,coreRulesPatch(reader,withFence,without)],
+  ['foreign uid',reader,coreRulesPatch({metadata:{uid:'x',resourceVersion:'7'}},without,withFence)],
+  ['foreign resourceVersion',reader,coreRulesPatch({metadata:{uid:'u',resourceVersion:'6'}},without,withFence)],
+  ['missing resourceVersion',{...reader,metadata:{...reader.metadata,resourceVersion:''}},coreRulesPatch({metadata:{uid:'u',resourceVersion:''}},without,withFence)],
+ ])await assert.rejects(c.patchRules(target,ops),{code:'PRECONDITION_FAILED'},label);
  assert.equal(calls.filter(args=>args.includes('patch')).length,1);
 });

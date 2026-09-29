@@ -95,8 +95,13 @@ export function createPlatformCoreClient(scope,runner=run){
  if(!clusterUid)throw fail('OBSERVATION_UNAVAILABLE','Cluster UID could not be verified');
  return {read:base.read,create:base.create,
   patchRules:async(resource,operations)=>{
+   // Codex review 2026-09-29: the adapter itself admits only the two reviewed rule sets, in that direction,
+   // bound to the object's own uid and resourceVersion; it does not rely on the caller having checked them.
    if(id(resource)!==READER_ID||!Array.isArray(operations)||operations.length!==4||
-     canonical(operations.map(op=>[op.op,op.path]))!==canonical([['test','/metadata/uid'],['test','/metadata/resourceVersion'],['test','/rules'],['replace','/rules']]))
+     canonical(operations.map(op=>[op.op,op.path]))!==canonical([['test','/metadata/uid'],['test','/metadata/resourceVersion'],['test','/rules'],['replace','/rules']])||
+     typeof resource.metadata.uid!=='string'||!resource.metadata.uid||typeof resource.metadata.resourceVersion!=='string'||!resource.metadata.resourceVersion||
+     operations[0].value!==resource.metadata.uid||operations[1].value!==resource.metadata.resourceVersion||
+     sha(operations[2].value)!==READER_RULES_SHA256.withoutFence||sha(operations[3].value)!==READER_RULES_SHA256.withFence)
     throw fail('PRECONDITION_FAILED','Only the reviewed Core reader rules replacement is allowed');
    if(clusterIdentity()!==clusterUid)throw fail('PRECONDITION_FAILED','Kubernetes context now points at a different cluster');
    return execute(['patch','clusterrole.rbac.authorization.k8s.io',resource.metadata.name,'--type=json',
