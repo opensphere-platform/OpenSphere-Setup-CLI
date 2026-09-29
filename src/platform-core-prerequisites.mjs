@@ -7,13 +7,19 @@ import {installTarget,profileChannel} from './install-target.mjs';
 // (Codex 0368b2c); its exact bytes ship with this Setup build. The target stays chosen at run time.
 export const PLATFORM_CORE_ARTIFACT='deploy/installation-profiles/platform-core.json';
 export const PLATFORM_CORE_SHA256='10cb06f04f64c5cf3a5294650f79ff5214b8fa7ee4f2265514373666cc92caf3';
+// An upgrade also prepares the previous release for rollback, and that release carries its own reviewed
+// profile. Every reviewed profile is named here; any other bytes are refused.
+export const PLATFORM_CORE_APPROVED_SHA256=Object.freeze({
+ '10cb06f04f64c5cf3a5294650f79ff5214b8fa7ee4f2265514373666cc92caf3':'2026-09-29 PSSS Crossplane writer fence reads (Console 7aa06cba)',
+ '91f1797854df91116ea8f9f77f8c406d741291f1472ea8e8a0d65087554ce099':'2026-09-07 approved original (Console d13a6885 and earlier)',
+});
 const canonical=v=>JSON.stringify(order(v));
 function order(v){return Array.isArray(v)?v.map(order):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,order(v[k])])):v;}
 const id=r=>`${r.apiVersion}/${r.kind}/${r.metadata.namespace||''}/${r.metadata.name}`;
 const fail=(code,message,evidence)=>Object.assign(Error(message),{code,...(evidence?{evidence}:{})});
 export function verifyPlatformCoreProfile(raw,scope){
  installTarget(scope);
- if(typeof raw!=='string'||Buffer.byteLength(raw)>4*1024*1024||createHash('sha256').update(raw).digest('hex')!==PLATFORM_CORE_SHA256)throw fail('UNTRUSTED_PROFILE','Core preparation bytes differ from the explicitly approved artifact');
+ if(typeof raw!=='string'||Buffer.byteLength(raw)>4*1024*1024||!Object.hasOwn(PLATFORM_CORE_APPROVED_SHA256,createHash('sha256').update(raw).digest('hex')))throw fail('UNTRUSTED_PROFILE','Core preparation bytes differ from the explicitly approved artifact');
  const p=JSON.parse(raw);if(p.schema!=='opensphere.platform-core-preparation/v1'||profileChannel(p.scope)!=='edge'||p.resources.length!==53)throw fail('UNTRUSTED_PROFILE','Unexpected Core envelope');return p;
 }
 const ref=(kind,name,namespace)=>({apiVersion:['Namespace','ServiceAccount'].includes(kind)?'v1':'rbac.authorization.k8s.io/v1',kind,metadata:{name,...(namespace?{namespace}:{})}});
@@ -35,7 +41,7 @@ export async function preparePlatformCorePrerequisites(raw,scope,{client,apply=f
  async function observe(items){try{return index(await client.read(items),items);}catch{throw fail('OBSERVATION_UNAVAILABLE','Core observation failed; absence was not inferred');}}
  const initial=await observe(all),conflicts=resources.filter(r=>initial.has(id(r))&&!matches(r,initial.get(id(r)))).map(id),missingDependencies=deps.filter(r=>!initial.get(id(r))?.metadata?.uid||initial.get(id(r)).metadata.deletionTimestamp).map(id);
  const created=[],preserved=[],uids=new Map([...initial].map(([k,r])=>[k,r.metadata.uid]));
- const evidence=()=>({profileSha256:PLATFORM_CORE_SHA256,created:[...created],preserved:[...preserved],installationComplete:false});
+ const evidence=()=>({profileSha256:createHash('sha256').update(raw).digest('hex'),created:[...created],preserved:[...preserved],installationComplete:false});
  const blocked=conflicts.length||missingDependencies.length;
  if(!apply)return {...evidence(),status:blocked?'Blocked':resources.every(r=>initial.has(id(r)))?'Prepared':'NeedsPreparation',conflicts,missingDependencies,applied:false};
  if(blocked)throw fail('PRECONDITION_FAILED','Core authority conflict or missing dependency; no write performed',{conflicts,missingDependencies});
