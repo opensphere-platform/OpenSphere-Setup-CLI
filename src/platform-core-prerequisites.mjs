@@ -33,11 +33,18 @@ export function verifyPlatformCoreProfile(raw,scope){
 //  - Console 7aa06cba adds one read of the fixed Crossplane writer fence to the PSSS Core reader. A reader
 //    prepared earlier lacks that rule; Core preparation replaces exactly that previous rule set under a
 //    uid/resourceVersion/rules test. An older profile (rollback) accepts the newer superset unchanged.
+//  - `transfer-psss-crossplane-writer` moves the executor and recorder bindings from CM to PSSS: same roleRef,
+//    the single subject becomes the PSSS runtime account. Core preparation keeps them and never moves them back
+//    (localhost 2026-09-29: the first Console upgrade after the transfer stopped here).
 // Anything else stays a conflict.
 const PSSS_ARGO_AUTHORITY_SHA256='b2ae3e74b70bd617f08cab5ef2a7e555bc0d586d0e9feefa4520e922488fa012';
 const READER_ID='rbac.authorization.k8s.io/v1/ClusterRole//opensphere-platform-support-core-reader';
 const FENCE_READ={apiGroups:['admissionregistration.k8s.io'],resources:['validatingadmissionpolicies','validatingadmissionpolicybindings'],
  verbs:['get'],resourceNames:['opensphere-psss-crossplane-writer-fence']};
+const TRANSFERRED_BINDINGS=['rbac.authorization.k8s.io/v1/RoleBinding/crossplane-system/opensphere-platform-support-crossplane-executor',
+ 'rbac.authorization.k8s.io/v1/RoleBinding/opensphere-console/opensphere-platform-support-core-recorder'];
+const CM_SUBJECT={kind:'ServiceAccount',name:'opensphere-cluster-manager-runtime',namespace:'opensphere-console'};
+const PSSS_SUBJECT={kind:'ServiceAccount',name:'opensphere-platform-support-runtime',namespace:'opensphere-console'};
 const READER_RULES_SHA256={withoutFence:'ca4cb150bac3556674ac438b19bcd4aead8253f8f901a2b6aa4018bfc95a03e3',
  withFence:'3a2d5fe91b31812aeea50fa1994bfb968d163fec5a813b9bc18b5b128cb8817c'};
 function reviewedStates(resources){
@@ -45,15 +52,17 @@ function reviewedStates(resources){
  const states=new Map(),byId=new Map(resources.map(r=>[id(r),r]));
  for(const row of PSSS_ARGO_AUTHORITY.resources){
   const key=`rbac.authorization.k8s.io/v1/${row.kind}/${row.namespace||''}/${row.name}`;
-  if(canonical(byId.get(key)?.rules)===canonical(row.previous))states.set(key,{successor:row.next});
+  if(canonical(byId.get(key)?.rules)===canonical(row.previous))states.set(key,{successor:{rules:row.next}});
  }
+ for(const key of TRANSFERRED_BINDINGS)
+  if(canonical(byId.get(key)?.subjects)===canonical([CM_SUBJECT]))states.set(key,{successor:{subjects:[PSSS_SUBJECT]}});
  const reader=byId.get(READER_ID);
  if(reader){
   const withoutFence=reader.rules.filter(rule=>canonical(rule)!==canonical(FENCE_READ));
   const withFence=[...withoutFence.slice(0,3),FENCE_READ,...withoutFence.slice(3)];
   if(sha(withoutFence)!==READER_RULES_SHA256.withoutFence||sha(withFence)!==READER_RULES_SHA256.withFence)
    throw fail('UNTRUSTED_PROFILE','Unexpected PSSS Core reader definition');
-  states.set(READER_ID,withoutFence.length===reader.rules.length?{successor:withFence}:{update:withoutFence});
+  states.set(READER_ID,withoutFence.length===reader.rules.length?{successor:{rules:withFence}}:{update:withoutFence});
  }
  return states;
 }
@@ -71,7 +80,7 @@ function matches(e,a){return !!a?.metadata?.uid&&!a.metadata.deletionTimestamp&&
 function assess(e,a,states){
  if(matches(e,a))return 'Exact';
  const s=states.get(id(e));
- if(s?.successor&&matches({...e,rules:s.successor},a))return 'ReviewedSuccessor';
+ if(s?.successor&&matches({...e,...s.successor},a))return 'ReviewedSuccessor';
  if(s?.update&&matches({...e,rules:s.update},a))return 'ReviewedUpdate';
  return null;
 }

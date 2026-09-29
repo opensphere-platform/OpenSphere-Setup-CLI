@@ -99,3 +99,18 @@ test('the Core adapter patches only the reviewed reader between the two reviewed
  ])await assert.rejects(c.patchRules(target,ops),{code:'PRECONDITION_FAILED'},label);
  assert.equal(calls.filter(args=>args.includes('patch')).length,1);
 });
+test('bindings moved to PSSS by the reviewed writer transfer are kept, any other subject still conflicts',async()=>{
+ const psss={kind:'ServiceAccount',name:'opensphere-platform-support-runtime',namespace:'opensphere-console'};
+ const moved=new Set(['rbac.authorization.k8s.io/v1/RoleBinding/crossplane-system/opensphere-platform-support-crossplane-executor',
+  'rbac.authorization.k8s.io/v1/RoleBinding/opensphere-console/opensphere-platform-support-core-recorder']);
+ const live=narrowed(JSON.parse(oldRaw)).map(r=>moved.has(id(r))?{...r,subjects:[psss]}:r);
+ const c=client(live);
+ const plan=await preparePlatformCorePrerequisites(oldRaw,scope,{client:c});
+ assert.equal(plan.status,'Prepared');assert.deepEqual(plan.conflicts,[]);
+ assert.equal(plan.reviewedSuccessors.length,8);
+ const done=await preparePlatformCorePrerequisites(oldRaw,scope,{client:c,apply:true});
+ assert.equal(done.preserved.length,53);assert.equal(c.creates.length+c.patches.length,0);
+ for(const key of moved)assert.deepEqual(c.state.get(key).subjects,[psss]);
+ const foreign=live.map(r=>id(r)===[...moved][0]?{...r,subjects:[{...psss,name:'someone-else'}]}:r);
+ assert.deepEqual((await preparePlatformCorePrerequisites(oldRaw,scope,{client:client(foreign)})).conflicts,[[...moved][0]]);
+});
