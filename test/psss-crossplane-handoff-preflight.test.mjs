@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {MODULES,BINDINGS,observePsssCrossplaneHandoff,
- createPsssCrossplaneHandoffClient} from '../src/psss-crossplane-handoff-preflight.mjs';
+ createPsssCrossplaneHandoffClient,knownOperationId} from '../src/psss-crossplane-handoff-preflight.mjs';
 
 const digest='sha256:'+'a'.repeat(64);
 function moduleRecord(module){
@@ -120,4 +120,11 @@ test('kubectl adapter never uses a mutating verb and places timeout before exec 
  assert.equal(calls.every(args=>!['create','apply','patch','delete'].some(verb=>args.includes(verb))),true);
  const exec=calls.find(args=>args.includes('exec'));
  assert.ok(exec.indexOf('--request-timeout=10s')<exec.indexOf('--'));
+});
+
+test('retained CM operation ids: UUIDs and the exact pre-2026-09-09 legacy shape only',()=>{
+ assert.equal(knownOperationId('11111111-1111-4111-8111-111111111111'),true);
+ assert.equal(knownOperationId('mtqo42en-353622ea'),true);
+ for(const id of ['mtqo42en-353622ea1','mtqo42en-XYZ','zzzzzzzz-1','11111111-1','',undefined,'mtqo42en_353622ea'])
+  assert.equal(knownOperationId(id),false,String(id));
 });

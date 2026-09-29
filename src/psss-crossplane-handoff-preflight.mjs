@@ -9,7 +9,7 @@ export const MODULES=Object.freeze([
  {id:'platform-support',repository:'ghcr.io/opensphere-platform/opensphere-platform-support',
   signatureIdentity:'opensphere-platform-support-local-v1',
   path:'/app/owner/crossplane-writer-handoff.cjs',
-  sha256:'87d72484be55fd4289faf6e24955ce800cb0f9dcac05cfaef816f6c2359a96a3'},
+  sha256:'788f3e4a460c48047e76bff96a06ddc191ff57bb2ef8d2a79a236f1e644d21f2'},
 ]);
 const cm={kind:'ServiceAccount',name:'opensphere-cluster-manager-runtime',namespace:'opensphere-console'};
 export const BINDINGS=Object.freeze([
@@ -26,6 +26,18 @@ const terminal=new Set(['Ready','Removed','Failed','RollbackStalled']);
 const digest=/^sha256:[a-f0-9]{64}$/;
 const revision=/^[a-f0-9]{40}$/;
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// CM wrote `${Date.now().toString(36)}-${Math.random().toString(16).slice(2,10)}` ids until 111e7dd
+// (2026-09-09); a retained record in that exact shape (localhost `mtqo42en-353622ea`) is a legitimate
+// finished operation. Same rule as PSSS owner/crossplane-writer-handoff.cjs knownOperationId.
+const legacyOperationId=/^([0-9a-z]{8})-[0-9a-f]{1,8}$/;
+const legacyOperationWindow=[Date.UTC(2026,0,1),Date.UTC(2026,8,10)];
+export function knownOperationId(id){
+ if(typeof id!=='string')return false;
+ if(uuid.test(id))return true;
+ const legacy=legacyOperationId.exec(id);if(!legacy)return false;
+ const at=parseInt(legacy[1],36);
+ return at>=legacyOperationWindow[0]&&at<legacyOperationWindow[1];
+}
 
 function moduleState(module,record){
  const pkg=record?.package,registration=record?.registration,
@@ -106,7 +118,7 @@ function operationState(value){
  if(suspended && !value.data?.operation)return {state:'NoRecord',suspended:true,
   uid:value.metadata.uid,resourceVersion:value.metadata.resourceVersion};
  let operation;try{operation=JSON.parse(value.data?.operation);}catch{return {state:'Conflict'};}
- if(operation?.itemId!=='crossplane-core'||!uuid.test(operation.id||''))return {state:'Conflict'};
+ if(operation?.itemId!=='crossplane-core'||!knownOperationId(operation.id))return {state:'Conflict'};
  return {state:active.has(operation.phase)?'ActiveOrUncertain':terminal.has(operation.phase)?'Terminal':'Conflict',
   suspended,uid:value.metadata.uid,resourceVersion:value.metadata.resourceVersion};
 }

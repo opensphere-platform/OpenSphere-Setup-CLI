@@ -26,7 +26,7 @@ function fixture(record=null){
    return {state:suspended?'Ready':'Unverified',
     modules:[{id:'cluster-manager',state:'Verified'},{id:'platform-support',state:'Verified'}],
     bindings:[{state:'ClusterManager'},{state:'ClusterManager'},{state:'ClusterManager'}],
-    core:'Absent',operation,drain:{state:suspended?'Ready':'Unverified'}};
+    core:this.core||'Absent',operation,drain:{state:suspended?'Ready':'Unverified'}};
   },
   async admit(record){
    if(this.deny)throw Error('denied');
@@ -118,4 +118,18 @@ test('adapter uses server dry-run and UID/RV/operation JSON Patch tests',async()
  assert.deepEqual(patch.slice(0,3).map(row=>row.path),
   ['/metadata/uid','/metadata/resourceVersion','/data/operation']);
  assert.equal(patch[3].value,'suspended');
+});
+
+test('new CM Core work is suspended while the existing Core still runs (Codex 2026-09-29 order)',async()=>{
+ // localhost 2026-09-29: Core 2.3.3 installed by CM, retained legacy-id operation Ready.
+ const legacy=terminal();legacy.data.operation=JSON.stringify({itemId:'crossplane-core',id:'mtqo42en-353622ea',phase:'Ready'});
+ const f=fixture(legacy);f.core='PresentOrPartial';
+ const before=f.record.data.operation;
+ const plan=await planPsssCrossplaneDrain(scope,{client:f,now:at});
+ assert.equal(plan.prerequisites,true);assert.equal(plan.applicable,true);
+ const result=await applyPsssCrossplaneDrain(scope,{client:f,planRevision:plan.planRevision,
+  reviewedAt:plan.observedAt,now:at});
+ assert.equal(result.state,'Suspended');
+ assert.equal(f.record.data.operation,before,'the retained receipt is not rewritten');
+ assert.equal(f.record.metadata.labels['opensphere.io/platform-core-handoff'],'suspended');
 });

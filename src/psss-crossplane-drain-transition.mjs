@@ -51,8 +51,10 @@ async function snapshot(client,scope,observedAt){
   throw fail('OBSERVATION_UNAVAILABLE','Crossplane drain observation failed');
  }
  const state=classify(record,handoff);
+ // Codex 2026-09-29: new CM Core work must be suspendable while the existing Core still runs, so that
+ // removing it cannot race a new CM request. Core absence is required later, by the writer transfer.
  const prerequisites=handoff.modules.every(row=>row.state==='Verified')&&
-  handoff.bindings.every(row=>row.state==='ClusterManager')&&handoff.core==='Absent';
+  handoff.bindings.every(row=>row.state==='ClusterManager');
  const recordIdentity=record?{uid:record.metadata?.uid||null,
   resourceVersion:record.metadata?.resourceVersion||null,
   operationSha256:sha(record.data?.operation??null)}:null;
