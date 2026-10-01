@@ -5,7 +5,7 @@ function parseArtifactVersion(value) {
   let match, year, month, day, hour, minute, build = null, format;
   if ((match = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(value))) {
     [, year, month, day, hour, minute] = match; format = 'legacy';
-  } else if ((match = /^(\d{2})\.([1-9]|1[0-2])(\d{2})\.(\d{2})(\d{2})\.(0|[1-9]\d{0,19})$/.exec(value))) {
+  } else if ((match = /^(\d{2})\.([1-9]|1[0-2])(\d{2})\.(\d{2})(\d{2})\.([1-9]\d{0,19})$/.exec(value))) {
     [, year, month, day, hour, minute, build] = match; year = 2000 + Number(year); format = 'build';
   } else return null;
   if (match[0] !== value) return null;

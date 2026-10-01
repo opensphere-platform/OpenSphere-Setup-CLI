@@ -1476,3 +1476,13 @@ test('the Gateway image declaration of its Skill manifest is kept in the lock an
     verifyBom() { throw new Error('not signed'); }, verifyImage() { throw new Error('not signed'); }, verifySbom() { throw new Error('not signed'); } }),
   /declares an invalid official Skill manifest/);
 });
+
+// New official versions start at BUILD1; legacy reads remain supported.
+
+test('release lock rejects BUILD0 at package boundaries and keeps legacy lock valid',()=>{
+ const good=validLock();assert.doesNotThrow(()=>validateLock(good));
+ for(const name of ['console','consoleApi']){
+  const bad=structuredClone(good);bad.components[name].artifactVersion='26.1001.1412.0';
+  assert.throws(()=>validateLock(bad),/artifactVersion is invalid/);
+ }
+});
