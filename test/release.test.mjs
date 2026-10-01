@@ -213,6 +213,31 @@ function bomVerifier(bom = validBom()) {
   return async (subject) => ({ bom, digest: calculateReleaseBomDigest(bom), subject });
 }
 
+test('new-format attested BOM preserves package versions and legacy reused images', async () => {
+  const bom=validBom();bom.releaseTag='26.1001.1200.1';
+  let number=1;
+  for(const component of Object.values(bom.components)) component.artifactVersion=`26.1001.1200.${number++}`;
+  bom.components.registry.artifactVersion=RELEASE_TAG;
+  const attested=verifyReleaseBomAttestation(bom.components.console.image,{
+    execFile(){return JSON.stringify([{verificationResult:{statement:{predicate:bom}}}]);}
+  });
+  assert.equal(attested.digest,calculateReleaseBomDigest(bom));
+  const versionFor=repository=>Object.values(bom.components).find(c=>c.repository===repository)?.artifactVersion||bom.releaseTag;
+  const resolved=await resolveChannel('edge',{
+    resolveImageFn:async(repository)=>signedArtifact(repository,`ghcr.io/opensphere-platform/${repository}@${DIGEST}`,{releaseTag:versionFor(repository)}),
+    inspectImageFn:async(repository,image)=>signedArtifact(repository,image,{releaseTag:versionFor(repository)}),
+    verifyBom:bomVerifier(bom),verifyImage(){},verifySbom(){}
+  });
+  for(const [name,component] of Object.entries(bom.components)) assert.equal(resolved.components[name].artifactVersion,component.artifactVersion);
+  assert.equal(resolved.releaseBom.releaseTag,bom.releaseTag);
+  await assert.doesNotReject(verifyReleaseLock(resolved,{
+    verifyBom:bomVerifier(bom),verifyImage(){},verifySbom(){},
+    inspectImageFn:async(repository,image)=>signedArtifact(repository,image,{releaseTag:versionFor(repository)})
+  }));
+  const invalid=structuredClone(bom);invalid.components.registry.artifactVersion='26.1001.1200.01';
+  assert.throws(()=>validateReleaseBom(invalid),/artifact version differs/);
+});
+
 test('canonical release set contains the full target Console distribution', () => {
   assert.deepEqual(Object.values(COMPONENTS), [
     'opensphere-console',
@@ -1025,6 +1050,24 @@ test('localhost edge resolves one target platform through immutable local tags w
   assert.doesNotThrow(() => validateLock(resolved));
 });
 
+test('localhost edge source-set aliases retain separately issued package versions',async()=>{
+ const versions=new Map(Object.values({...COMPONENTS,...AUXILIARY_ARTIFACTS}).map((repository,index)=>[repository,`26.1001.1200.${index+1}`]));
+ const calls=[];
+ const resolved=await resolveChannel('edge',{
+  requiredPlatforms:['linux/amd64'],
+  resolveImageFn:async(repository,reference)=>{
+   calls.push(reference);
+   return inspectedArtifact(repository,`ghcr.io/opensphere-platform/${repository}@${DIGEST}`,{releaseTag:versions.get(repository)});
+  },
+  verifyBom(){throw Error('Local edge does not claim GitHub attestation');},verifyImage(){},verifySbom(){}
+ });
+ for(const component of Object.values({...resolved.components,...resolved.auxiliaryArtifacts}))assert.equal(component.artifactVersion,versions.get(component.repository));
+ assert.equal(calls[0],'edge');assert.ok(calls.slice(1).every(reference=>reference===`local-${REVISION.slice(0,12)}`));
+ await assert.doesNotReject(verifyReleaseLock(resolved,{
+  requiredPlatforms:['linux/amd64'],inspectImageFn:async(repository,image)=>inspectedArtifact(repository,image,{releaseTag:versions.get(repository)})
+ }));
+});
+
 test('auxiliary-only edge updates verify the entire changed Shell bundle and reject mixed dates', async () => {
   for (const changedComponents of [[], ['osdst']]) {
     const {base,target}=validComponentTransition(changedComponents);
@@ -1432,4 +1475,14 @@ test('the Gateway image declaration of its Skill manifest is kept in the lock an
     async resolveImageFn(repository) { return inspectedArtifact(repository, `ghcr.io/opensphere-platform/${repository}@${DIGEST}`, { overrides: { 'io.opensphere.official-skills': SKILLS } }); },
     verifyBom() { throw new Error('not signed'); }, verifyImage() { throw new Error('not signed'); }, verifySbom() { throw new Error('not signed'); } }),
   /declares an invalid official Skill manifest/);
+});
+
+// New official versions start at BUILD1; legacy reads remain supported.
+
+test('release lock rejects BUILD0 at package boundaries and keeps legacy lock valid',()=>{
+ const good=validLock();assert.doesNotThrow(()=>validateLock(good));
+ for(const name of ['console','consoleApi']){
+  const bad=structuredClone(good);bad.components[name].artifactVersion='26.1001.1412.0';
+  assert.throws(()=>validateLock(bad),/artifactVersion is invalid/);
+ }
 });
