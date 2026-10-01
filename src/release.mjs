@@ -1,3 +1,5 @@
+import artifactVersions from './artifact-version.cjs';
+const {parseArtifactVersion} = artifactVersions;
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { fetchWithRetry } from './http.mjs';
@@ -651,7 +653,7 @@ export function validateReleaseBom(bom, {
     throw new Error(`Signed release BOM status differs from ${bom.channel} policy: ${bom.status ?? 'missing status'}`);
   }
   if (bom.source !== SOURCE || !/^[a-f0-9]{40}$/.test(bom.sourceRevision ?? '')
-      || !/^\d{12}$/u.test(bom.releaseTag ?? '')) {
+      || !parseArtifactVersion(bom.releaseTag ?? '')) {
     throw new Error('Signed release BOM source identity or immutable release tag is invalid');
   }
   const platforms = Array.isArray(bom.supportedPlatforms) ? [...new Set(bom.supportedPlatforms)] : [];
@@ -688,7 +690,7 @@ export function validateReleaseBom(bom, {
     if (component.sourceRevision !== bom.sourceRevision) {
       throw new Error(`Signed release BOM component ${name} source revision differs`);
     }
-    if (component.artifactVersion !== undefined && component.artifactVersion !== bom.releaseTag) {
+    if (component.artifactVersion !== undefined && (!parseArtifactVersion(component.artifactVersion) || (parseArtifactVersion(bom.releaseTag)?.format === 'legacy' && component.artifactVersion !== bom.releaseTag))) {
       throw new Error(`Signed release BOM component ${name} artifact version differs`);
     }
   }
@@ -726,7 +728,7 @@ export function assertSignedReleaseBom(lock) {
   if (pointer?.predicateType !== RELEASE_BOM_PREDICATE
       || pointer?.subject !== consoleImage
       || !/^sha256:[a-f0-9]{64}$/.test(pointer?.digest ?? '')
-      || !/^\d{12}$/u.test(pointer?.releaseTag ?? '')) {
+      || !parseArtifactVersion(pointer?.releaseTag ?? '')) {
     throw new Error('Release lock has no governed signed Release BOM');
   }
   return pointer;
@@ -819,7 +821,7 @@ export function assertReleaseArtifactMetadata(image, {
       || labels['io.opensphere.source-revision'] !== sourceRevision) {
     throw new Error(`Release image ${repository ?? 'artifact'} source revision differs from the signed release`);
   }
-  if (!/^\d{12}$/u.test(releaseTag ?? '')
+  if (!parseArtifactVersion(releaseTag ?? '')
       || labels['io.opensphere.release-tag'] !== releaseTag) {
     throw new Error(`Release image ${repository ?? 'artifact'} release tag differs from the signed release`);
   }
@@ -830,7 +832,7 @@ export function assertReleaseArtifactMetadata(image, {
 export function assertArtifactIdentity(image, expectedVersion) {
   const labels=image?.labels ?? {};
   const version=labels['org.opencontainers.image.version'];
-  if (typeof version !== 'string' || !/^[0-9]{12}$/.test(version)
+  if (typeof version !== 'string' || !parseArtifactVersion(version)
       || labels['io.opensphere.release-tag'] !== version
       || (expectedVersion !== undefined && expectedVersion !== version)) {
     throw new Error('Artifact version differs from the exact image official version');
@@ -863,7 +865,7 @@ export function assertLocalEdgeImage(image, {
     throw new Error(`Local edge image ${repository ?? 'component'} has invalid source revision labels`);
   }
   const observedReleaseTag = labels['io.opensphere.release-tag'];
-  if (!/^\d{12}$/.test(observedReleaseTag ?? '')) {
+  if (!parseArtifactVersion(observedReleaseTag ?? '')) {
     throw new Error(`Local edge image ${repository ?? 'component'} has invalid date release tag`);
   }
   if (sourceRevision && image.sourceRevision !== sourceRevision) {
@@ -924,7 +926,7 @@ async function verifyLocalEdgeLock(lock, {
   const comparable = releaseScope === RELEASE_SCOPE_COMPONENT
     ? metadata.filter(({ name }) => changedArtifacts.has(name))
     : metadata;
-  if (new Set(comparable.map(({ releaseTag }) => releaseTag)).size !== 1) {
+  if (comparable.every(({releaseTag}) => parseArtifactVersion(releaseTag)?.format === 'legacy') && new Set(comparable.map(({ releaseTag }) => releaseTag)).size !== 1) {
     throw new Error(
       releaseScope === RELEASE_SCOPE_COMPONENT
         ? 'Changed local edge component release tags differ'
@@ -1037,8 +1039,7 @@ export async function verifyReleaseLock(lock, {
     const expected = bom.components[name];
     const actual = validated.components[name];
     if (actual.repository !== expected.repository || actual.image !== expected.image || actual.sourceRevision !== expected.sourceRevision
-      || (actual.artifactVersion !== undefined && actual.artifactVersion !== bom.releaseTag)
-      || (expected.artifactVersion !== undefined && expected.artifactVersion !== bom.releaseTag)) {
+      || actual.artifactVersion !== expected.artifactVersion) {
       throw new Error(`Release lock component ${name} differs from the signed Release BOM`);
     }
     const inspected = await inspectImageFn(actual.repository, actual.image, { registryCredentials, requiredPlatforms });
@@ -1046,7 +1047,7 @@ export async function verifyReleaseLock(lock, {
     assertOfficialSkillsLabel(inspected, actual, name);
     assertReleaseArtifactMetadata(inspected, {
       repository: actual.repository, sourceRevision: actual.sourceRevision,
-      releaseTag: bom.releaseTag, artifactScope: 'canonical'
+      releaseTag: expected.artifactVersion ?? bom.releaseTag, artifactScope: 'canonical'
     });
   }
   for (const [name, actual] of Object.entries(validated.auxiliaryArtifacts ?? {})) {
@@ -1060,7 +1061,7 @@ export async function verifyReleaseLock(lock, {
     assertReleaseArtifactMetadata(inspected, {
       repository: actual.repository,
       sourceRevision: validated.sourceRevision,
-      releaseTag: pointer.releaseTag,
+      releaseTag: actual.artifactVersion ?? pointer.releaseTag,
       artifactScope: 'auxiliary'
     });
     if (actual.artifactVersion !== undefined) assertArtifactIdentity(inspected, actual.artifactVersion);
@@ -1196,7 +1197,7 @@ export function validateLock(lock, {
       throw new Error(`Component ${name} source revision is invalid`);
     }
     if (component.artifactVersion !== undefined
-        && (typeof component.artifactVersion !== 'string' || !/^[0-9]{12}$/.test(component.artifactVersion))) {
+        && (typeof component.artifactVersion !== 'string' || !parseArtifactVersion(component.artifactVersion))) {
       throw new Error(`Component ${name} artifactVersion is invalid`);
     }
     if (releaseScope === RELEASE_SCOPE_INTEGRATED && component.sourceRevision !== lock.sourceRevision) {
@@ -1239,7 +1240,7 @@ export function validateLock(lock, {
         throw new Error(`Auxiliary artifact ${name} source revision is invalid`);
       }
       if (artifact.artifactVersion !== undefined
-          && (typeof artifact.artifactVersion !== 'string' || !/^[0-9]{12}$/.test(artifact.artifactVersion))) {
+          && (typeof artifact.artifactVersion !== 'string' || !parseArtifactVersion(artifact.artifactVersion))) {
         throw new Error(`Auxiliary artifact ${name} artifactVersion is invalid`);
       }
       if (releaseScope === RELEASE_SCOPE_INTEGRATED
@@ -1574,7 +1575,7 @@ async function resolveSignedRelease(reference, channel, {
     assertReleaseArtifactMetadata(inspected, {
       repository,
       sourceRevision: bom.sourceRevision,
-      releaseTag: bom.releaseTag,
+      releaseTag: signed.artifactVersion ?? bom.releaseTag,
       artifactScope: 'canonical'
     });
     report(onProgress, { type: 'component-complete', component: name, image: inspected.image });

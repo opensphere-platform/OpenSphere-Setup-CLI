@@ -213,6 +213,31 @@ function bomVerifier(bom = validBom()) {
   return async (subject) => ({ bom, digest: calculateReleaseBomDigest(bom), subject });
 }
 
+test('new-format attested BOM preserves package versions and legacy reused images', async () => {
+  const bom=validBom();bom.releaseTag='26.1001.1200.1';
+  let number=1;
+  for(const component of Object.values(bom.components)) component.artifactVersion=`26.1001.1200.${number++}`;
+  bom.components.registry.artifactVersion=RELEASE_TAG;
+  const attested=verifyReleaseBomAttestation(bom.components.console.image,{
+    execFile(){return JSON.stringify([{verificationResult:{statement:{predicate:bom}}}]);}
+  });
+  assert.equal(attested.digest,calculateReleaseBomDigest(bom));
+  const versionFor=repository=>Object.values(bom.components).find(c=>c.repository===repository)?.artifactVersion||bom.releaseTag;
+  const resolved=await resolveChannel('edge',{
+    resolveImageFn:async(repository)=>signedArtifact(repository,`ghcr.io/opensphere-platform/${repository}@${DIGEST}`,{releaseTag:versionFor(repository)}),
+    inspectImageFn:async(repository,image)=>signedArtifact(repository,image,{releaseTag:versionFor(repository)}),
+    verifyBom:bomVerifier(bom),verifyImage(){},verifySbom(){}
+  });
+  for(const [name,component] of Object.entries(bom.components)) assert.equal(resolved.components[name].artifactVersion,component.artifactVersion);
+  assert.equal(resolved.releaseBom.releaseTag,bom.releaseTag);
+  await assert.doesNotReject(verifyReleaseLock(resolved,{
+    verifyBom:bomVerifier(bom),verifyImage(){},verifySbom(){},
+    inspectImageFn:async(repository,image)=>signedArtifact(repository,image,{releaseTag:versionFor(repository)})
+  }));
+  const invalid=structuredClone(bom);invalid.components.registry.artifactVersion='26.1001.1200.01';
+  assert.throws(()=>validateReleaseBom(invalid),/artifact version differs/);
+});
+
 test('canonical release set contains the full target Console distribution', () => {
   assert.deepEqual(Object.values(COMPONENTS), [
     'opensphere-console',

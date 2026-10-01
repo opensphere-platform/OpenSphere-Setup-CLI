@@ -1,3 +1,5 @@
+import artifactVersions from './artifact-version.cjs';
+const {parseArtifactVersion} = artifactVersions;
 // Read-only live evidence required before the CM Crossplane writer is fenced.
 // The pinned hashes are of reviewed source bytes copied into the two images.
 import {run} from './process.mjs';
@@ -66,7 +68,7 @@ function moduleState(module,record){
   status.currentSignatureIdentity!==module.signatureIdentity||
   status.currentManifestSha256!==pkg.spec.manifest?.sha256||
   status.serving.manifestSha256!==pkg.spec.manifest?.sha256||
-  !/^[0-9]{12}$/.test(status.currentArtifactVersion||''))
+  !parseArtifactVersion(status.currentArtifactVersion||''))
   return {state:'RegistrationUnverified'};
  if(deployments.length!==1)return {state:'DeploymentUnverified'};
  const deployment=deployments[0],name=deployment.metadata?.name,

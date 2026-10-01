@@ -1,3 +1,5 @@
+import artifactVersions from './artifact-version.cjs';
+const {parseArtifactVersion} = artifactVersions;
 // CON-FR-007/018. Shared data-only OCI parser. Does not confer trust, authenticate,
 // extract paths, execute an image or contact a provider. Callers own admission.
 import {createHash} from 'node:crypto';
@@ -51,7 +53,7 @@ export async function decodeKnowledgeImage(image,{readObject,createExtract,expec
  const config=JSON.parse(await object('blobs',manifest.config,262144)),labels=config.config?.Labels;
  if(labels?.['org.opencontainers.image.source']!==contract.SOURCE||!/^[a-f0-9]{40}$/.test(labels?.['org.opencontainers.image.revision']||'')
   ||labels?.['io.opensphere.source-revision']!==labels['org.opencontainers.image.revision']
-  ||!/^\d{12}$/.test(labels?.['org.opencontainers.image.version']||'')||labels?.['io.opensphere.release-tag']!==labels['org.opencontainers.image.version']
+  ||!parseArtifactVersion(labels?.['org.opencontainers.image.version']||'')||labels?.['io.opensphere.release-tag']!==labels['org.opencontainers.image.version']
   ||config.config?.Entrypoint?.length||config.config?.Cmd?.length||!Array.isArray(config.rootfs?.diff_ids)||config.rootfs.diff_ids.length!==1
   ||config.os!=='linux'||config.architecture!=='amd64')fail('Knowledge OCI source or data-only contract differs');
  if(labels['io.opensphere.channel']!=='edge'||labels['opensphere.io/build-authority']!=='localhost'||labels['opensphere.io/release-class']!=='pre-ga'||labels['opensphere.io/ga-eligible']!=='false')fail('Knowledge edge artifact metadata differs');
