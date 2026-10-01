@@ -1458,7 +1458,7 @@ async function resolveLocalEdgeRelease(reference, anchor, {
     assertLocalEdgeImage(inspected, {
       repository,
       sourceRevision: anchorMetadata.sourceRevision,
-      releaseTag: anchorMetadata.releaseTag,
+      releaseTag: parseArtifactVersion(anchorMetadata.releaseTag)?.format === 'legacy' ? anchorMetadata.releaseTag : undefined,
       artifactScope: 'canonical'
     });
     report(onProgress, { type: 'local-component-complete', component: name, image: inspected.image });
@@ -1479,7 +1479,7 @@ async function resolveLocalEdgeRelease(reference, anchor, {
     assertLocalEdgeImage(inspected, {
       repository,
       sourceRevision: anchorMetadata.sourceRevision,
-      releaseTag: anchorMetadata.releaseTag,
+      releaseTag: parseArtifactVersion(anchorMetadata.releaseTag)?.format === 'legacy' ? anchorMetadata.releaseTag : undefined,
       artifactScope: 'auxiliary'
     });
     report(onProgress, { type: 'local-auxiliary-complete', component: name, image: inspected.image });

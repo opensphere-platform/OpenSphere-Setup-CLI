@@ -1050,6 +1050,24 @@ test('localhost edge resolves one target platform through immutable local tags w
   assert.doesNotThrow(() => validateLock(resolved));
 });
 
+test('localhost edge source-set aliases retain separately issued package versions',async()=>{
+ const versions=new Map(Object.values({...COMPONENTS,...AUXILIARY_ARTIFACTS}).map((repository,index)=>[repository,`26.1001.1200.${index+1}`]));
+ const calls=[];
+ const resolved=await resolveChannel('edge',{
+  requiredPlatforms:['linux/amd64'],
+  resolveImageFn:async(repository,reference)=>{
+   calls.push(reference);
+   return inspectedArtifact(repository,`ghcr.io/opensphere-platform/${repository}@${DIGEST}`,{releaseTag:versions.get(repository)});
+  },
+  verifyBom(){throw Error('Local edge does not claim GitHub attestation');},verifyImage(){},verifySbom(){}
+ });
+ for(const component of Object.values({...resolved.components,...resolved.auxiliaryArtifacts}))assert.equal(component.artifactVersion,versions.get(component.repository));
+ assert.equal(calls[0],'edge');assert.ok(calls.slice(1).every(reference=>reference===`local-${REVISION.slice(0,12)}`));
+ await assert.doesNotReject(verifyReleaseLock(resolved,{
+  requiredPlatforms:['linux/amd64'],inspectImageFn:async(repository,image)=>inspectedArtifact(repository,image,{releaseTag:versions.get(repository)})
+ }));
+});
+
 test('auxiliary-only edge updates verify the entire changed Shell bundle and reject mixed dates', async () => {
   for (const changedComponents of [[], ['osdst']]) {
     const {base,target}=validComponentTransition(changedComponents);
