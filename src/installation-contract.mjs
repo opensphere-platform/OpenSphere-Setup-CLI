@@ -13,7 +13,10 @@ export const MANAGED_NAMESPACES = Object.freeze([
   'opensphere-system',
   'opensphere-foundation',
   // Cluster Manager Kubernetes operation records (Console extension-controller manifest, 2026-09-27).
-  'opensphere-kubernetes-operations'
+  'opensphere-kubernetes-operations',
+  // Foundation secure owner input custody: draft ConfigMaps and immutable credential Secrets entered through
+  // Console's PFSS Provider secure-input route (Console foundation-bootstrap.json and deploy.yaml, 2026-10-02).
+  'opensphere-foundation-secure-input'
 ]);
 
 export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
