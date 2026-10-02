@@ -50,6 +50,9 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     "clusterrolebinding/opensphere-foundation-profile-reader",
     "clusterrole/opensphere-foundation-contract-controller",
     "clusterrolebinding/opensphere-foundation-contract-controller",
+    // Console-group grant for Foundation owner-API impersonation (Console 69bd666e, 2026-10-02).
+    "clusterrole/opensphere-foundation-console-admins",
+    "clusterrolebinding/opensphere-foundation-console-admins",
     'clusterrolebinding/opensphere-extension-controller-cli-downloads',
     'clusterrolebinding/opensphere-registry',
     'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
