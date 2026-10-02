@@ -29,6 +29,9 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     "foundationbindings.foundation.opensphere.io",
     "identitydirectoryclaims.foundation.opensphere.io",
     "identitydirectorybindings.foundation.opensphere.io",
+    // External directory connection and authority (Foundation PR #26; Console foundation-bootstrap.json, 2026-10-02).
+    "directoryconnections.foundation.opensphere.io",
+    "directoryauthorities.foundation.opensphere.io",
     "postgresclaims.provisioning.opensphere.io",
     "addoncapabilities.catalog.opensphere.io",
     "addonofferings.catalog.opensphere.io",
