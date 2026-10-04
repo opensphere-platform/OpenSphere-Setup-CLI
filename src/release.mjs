@@ -970,6 +970,7 @@ export async function verifyReleaseProvenance(lock, {
 
 export async function verifyReleaseLock(lock, {
   verifyBom = verifyReleaseBomAttestation,
+  onVerifiedBom,
   verifyImage = verifyImageProvenance,
   verifySbom = verifyImageSbom,
   inspectImageFn = inspectImageReference,
@@ -1066,7 +1067,7 @@ export async function verifyReleaseLock(lock, {
     });
     if (actual.artifactVersion !== undefined) assertArtifactIdentity(inspected, actual.artifactVersion);
   }
-  return verifyReleaseProvenance(validated, {
+  const verified = await verifyReleaseProvenance(validated, {
     verifyImage,
     verifySbom,
     registryCredentials,
@@ -1074,6 +1075,8 @@ export async function verifyReleaseLock(lock, {
     allowLegacyComponentSet,
     allowInstalledAgentIdentityCutover
   });
+  if(onVerifiedBom) onVerifiedBom({bom:structuredClone(bom),digest:verifiedBom.digest,subject:pointer.subject});
+  return verified;
 }
 
 // Legacy locks must never be accepted merely because they predate the trust

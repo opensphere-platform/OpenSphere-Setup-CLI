@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { kubectl, run } from './process.mjs';
 import { ensureInstallationIdentity } from './installation-identity.mjs';
+import {captureControllerSource,controllerSourceData,CONTROLLER_SOURCE_KEY} from './controller-source.mjs';
 import { CLUSTER_SCOPED_MANAGED_CRDS, listManagedClusterResiduals, assertNoManagedClusterResiduals, assertManagedAdmissionParameters } from './installation-residuals.mjs';
 import {purgeBeszelHostState,purgeExternalConsoleRbac} from './uninstall-residuals.mjs';
 import { preflight } from './preflight.mjs';
@@ -1106,11 +1107,11 @@ export async function fetchManifest(
   storageClass,
   consoleUrl = defaultConsoleUrl('edge', 'development'),
   authEnvironment = 'development',
-  { sourceRevision = lock.sourceRevision, sourceArtifactCredential = null, registryCredentials } = {}
+  { sourceRevision = lock.sourceRevision, sourceArtifactCredential = null, registryCredentials, onControllerSource, verifiedBom, fetchFn = fetchWithRetry } = {}
 ) {
   let sourceYaml = await fetchReleaseArtifact(lock, spec.path, {
     sourceRevision,
-    sourceArtifactCredential
+    sourceArtifactCredential,fetchFn
   });
   if (spec.path === 'apps/osaa-gateway/deploy.yaml') {
     sourceYaml = await renderKnowledgeManifest(sourceYaml, {
@@ -1122,16 +1123,21 @@ export async function fetchManifest(
   const runtimeTemplateSource = spec.path === OS_SHELL_MANIFEST.path
     ? await fetchReleaseArtifact(lock, 'apps/os-shell-control/runtime-template.js', { sourceRevision, sourceArtifactCredential })
     : undefined;
-  return renderManifest(
+  const kubernetesApiEgress = sourceYaml.includes(KUBERNETES_EGRESS_SLOT) ? discoverRegistryKubernetesEgress(kubectl) : undefined;
+  const rendered = renderManifest(
     lock,
     spec,
     sourceYaml,
     storageClass,
     consoleUrl,
     authEnvironment,
-    { sourceRevision, runtimeTemplateSource, kubernetesApiEgress: sourceYaml.includes(KUBERNETES_EGRESS_SLOT)
-      ? discoverRegistryKubernetesEgress(kubectl) : undefined }
+    { sourceRevision, runtimeTemplateSource, kubernetesApiEgress }
   );
+  if(spec.path===EXTENSION_CONTROLLER_MANIFEST.path && onControllerSource)
+    onControllerSource(captureControllerSource({lock,sourceRevision,sourceYaml,renderedYaml:rendered,
+      renderInputs:{storageClass,consoleUrl:normalizeConsoleUrl(consoleUrl),authEnvironment:validateAuthEnvironment(authEnvironment),
+        ...(kubernetesApiEgress?{kubernetesApiEgress}:{})},verifiedBom}));
+  return rendered;
 }
 
 async function writeReleaseArtifact(root, path, contents) {
@@ -1221,7 +1227,8 @@ async function materializeFoundationInstallers(
     migrationSourceRevision = lock.sourceRevision,
     migrationEvidence = lock.releaseBom?.migrationManifest,
     sourceArtifactCredential = null,
-    registryCredentials
+    registryCredentials,
+    verifiedBom
   } = {}
 ) {
   const target = isTargetConsoleRelease(lock);
@@ -1243,7 +1250,10 @@ async function materializeFoundationInstallers(
     // PowerShell owns image/origin substitution; Setup owns API discovery.
     // Persist the same discovered egress that passed preflight rendering.
     const installerTemplate = renderRegistryKubernetesEgress(raw, kubernetesApiEgress)+ciliumPolicy;
-    return { spec, installerTemplate, rendered:rendered+ciliumPolicy };
+    const controllerSource = spec.path === EXTENSION_CONTROLLER_MANIFEST.path
+      ? captureControllerSource({lock,sourceYaml:raw,renderedYaml:rendered+ciliumPolicy,
+        renderInputs:{storageClass,consoleUrl,authEnvironment,...(kubernetesApiEgress?{kubernetesApiEgress}:{})},verifiedBom}) : undefined;
+    return { spec, installerTemplate, rendered:rendered+ciliumPolicy, controllerSource };
   }));
   const artifacts = (await fetchFoundationInstallerArtifacts(lock, path => fetchReleaseArtifact(lock, path, {
       optional404: optionalArtifacts.has(path),
@@ -1303,6 +1313,7 @@ async function materializeFoundationInstallers(
     installerArtifactPaths: artifacts.map(artifact => artifact.path),
     hissScope: prepareHiss ? hissScope : null,
     migration,
+    controllerSource: manifestArtifacts.find(a=>a.controllerSource)?.controllerSource,
     release: manifestArtifacts.map(({ spec, rendered }) => ({
       path: spec.path,
       yaml: rendered
@@ -2130,7 +2141,8 @@ export function recordInstallationState(
   authEnvironment,
   shellTlsSecret,
   phase = 'Preparing',
-  stateOptions = {}
+  stateOptions = {},
+  {kubectlFn=kubectl} = {}
 ) {
   // The persistent installation identity is created once and lives outside this lock, so every
   // rewrite of the lock (install, upgrade, verification, repair) carries the same installationId.
@@ -2154,6 +2166,15 @@ export function recordInstallationState(
     initialAdmin
   };
   const state = installationStateDocument(phase, lock, stateOptions);
+  // Preserve the captured component through lifecycle rewrites. A different
+  // image/source cannot inherit the prior source, and legacy records stay missing.
+  const previous = kubectlFn(['-n','opensphere-console','get','configmap','opensphere-installation-lock','--ignore-not-found','-o','json'],{capture:true});
+  const previousRecord = previous ? JSON.parse(previous) : null;
+  if(stateOptions.recordPrecondition && (previousRecord?.metadata?.uid!==stateOptions.recordPrecondition.uid
+      ||previousRecord?.metadata?.resourceVersion!==stateOptions.recordPrecondition.resourceVersion)) throw Error('Installation record precondition changed');
+  const controllerData=controllerSourceData({existingData:previousRecord?.data,source:stateOptions.controllerSource,
+    installationId:identity.installationId,lock,deployment:stateOptions.controllerDeployment,
+    pendingSource:stateOptions.pendingControllerSource,pendingLock:stateOptions.pendingControllerLock,phase,transition:stateOptions.transition});
   const record = {
     apiVersion: 'v1',
     kind: 'ConfigMap',
@@ -2162,6 +2183,7 @@ export function recordInstallationState(
       'release.json': JSON.stringify(lock),
       'config.json': JSON.stringify(config),
       'state.json': JSON.stringify(state),
+      ...controllerData,
       ...(stateOptions.forwardRepair ? {'repair.json': JSON.stringify(stateOptions.forwardRepair)} : {})
     }
   };
@@ -2174,7 +2196,7 @@ export function recordInstallationState(
     // data it wrote. A later GET may already show another writer's version and is never adopted.
     let output;
     try {
-      output = kubectl(['-n','opensphere-console','patch','configmap','opensphere-installation-lock','--type=json','-o','json','-p',JSON.stringify([
+      output = kubectlFn(['-n','opensphere-console','patch','configmap','opensphere-installation-lock','--type=json','-o','json','-p',JSON.stringify([
         {op:'test',path:'/metadata/uid',value:uid},
         {op:'test',path:'/metadata/resourceVersion',value:resourceVersion},
         {op:'replace',path:'/data',value:record.data},
@@ -2184,7 +2206,7 @@ export function recordInstallationState(
       throw Error(`installation record PATCH failed: ${recordWriteFailure(error)}`);
     }
     return { config, state, record: confirmRecordWrite(output, uid, resourceVersion, record.data) };
-  } else applyYaml(`${JSON.stringify(record)}\n`);
+  } else kubectlFn(['apply','-f','-'],{capture:true,input:`${JSON.stringify(record)}\n`});
   return { config, state };
 }
 
@@ -2217,10 +2239,14 @@ export function readInstallationRecord() {
 
 // Resume only verification of the already installed canonical target. This
 // neither selects/applies images nor repeats registry authentication or migrations.
+function readControllerDeployment(){
+  return JSON.parse(kubectl(['-n','opensphere-console','get','deployment','opensphere-extension-controller','-o','json'],{capture:true}));
+}
+
 export async function completeInstallationVerification(lock, {consoleUrl, requireZeroRestarts=false, runtime={}}={}) {
   // The recorded release, as readInstallationLock() admits it; it may predate the worker.
   validateLock(lock, { allowLegacyComponentSet: true, allowInstalledAgentIdentityCutover: true });
-  const ops={readInstallationRecord,readReleaseInventory,recordInstallationState,verifyInstallation,readMigrationLedger,readBeszelBootstrapHistory,...runtime};
+  const ops={readInstallationRecord,readReleaseInventory,recordInstallationState,verifyInstallation,readMigrationLedger,readBeszelBootstrapHistory,readControllerDeployment,...runtime};
   const original=ops.readInstallationRecord();
   const config=JSON.parse(original.data['config.json']),state=JSON.parse(original.data['state.json']);
   if (JSON.parse(original.data['release.json']).releaseDigest!==lock.releaseDigest
@@ -2263,7 +2289,8 @@ export async function completeInstallationVerification(lock, {consoleUrl, requir
   try {
     const evidence=await ops.verifyInstallation(lock,{consoleUrl:config.consoleUrl,requireZeroRestarts,mode:'installed',bootstrapHistory});
     if(evidence.releaseDigest!==lock.releaseDigest||!evidence.verifiedAt) throw Error('Verification returned a different release');
-    write('Ready',{verification:{evidenceConfigMap:'opensphere-installation-evidence',verifiedAt:evidence.verifiedAt}});
+    write('Ready',{verification:{evidenceConfigMap:'opensphere-installation-evidence',verifiedAt:evidence.verifiedAt},
+      ...(original.data[CONTROLLER_SOURCE_KEY]?{controllerDeployment:ops.readControllerDeployment()}:{})});
     return evidence;
   } catch(error) {
     write('Failed',{...kept,failureCode:'installation-verification-incomplete'});
@@ -2578,10 +2605,12 @@ export async function prepareComponentRelease(
     changedComponents = componentReleaseWorkloadComponents(lock),
     includeMigrations = true,
     sourceArtifactCredential = null,
-    registryCredentials
+    registryCredentials,
+    verifiedBom
   } = {}
 ) {
   const specs = componentReleaseManifestSpecs(lock, changedComponents);
+  let controllerSource;
   const migrationSourceRevision = componentMigrationSourceRevision(lock, changedComponents, includeMigrations);
   const [foundationRelease, base] = await Promise.all([
     Promise.all(specs.foundation.map(async (spec) => ({
@@ -2592,7 +2621,8 @@ export async function prepareComponentRelease(
         storageClass,
         consoleUrl,
         authEnvironment,
-        { sourceRevision: spec.artifactSourceRevision, sourceArtifactCredential, registryCredentials }
+        { sourceRevision: spec.artifactSourceRevision, sourceArtifactCredential, registryCredentials,verifiedBom,
+          onControllerSource:source=>{if(controllerSource)throw Error('DuplicateControllerSource');controllerSource=source;} }
       )
     }))),
     Promise.all(specs.base.map(async (spec) => ({
@@ -2623,7 +2653,7 @@ export async function prepareComponentRelease(
       { sourceArtifactCredential }
     );
   }
-  const foundation = { root, release: foundationRelease, migration };
+  const foundation = { root, release: foundationRelease, migration,controllerSource };
   return { foundation, base, all: [...foundationRelease, ...base] };
 }
 
@@ -2716,10 +2746,11 @@ export async function bootstrap(lock, {
   if (lock.releaseScope === RELEASE_SCOPE_COMPONENT) {
     throw new Error('Component release locks are upgrade-only and cannot bootstrap a cluster');
   }
+  let verifiedBom;
   await verifyReleaseLock(lock, {
     registryCredentials,
     requiredPlatforms,
-    onProgress: (event) => reportReleaseProgress(progress, event)
+    onProgress: (event) => reportReleaseProgress(progress, event),onVerifiedBom:value=>{verifiedBom=value;}
   });
   promotionBlocked(lock.channel);
   progress?.done(`release=${lock.releaseDigest}`);
@@ -2809,7 +2840,7 @@ export async function bootstrap(lock, {
       cluster.storageClass,
       effectiveConsoleUrl,
       effectiveAuthEnvironment,
-      { sourceArtifactCredential, registryCredentials }
+      { sourceArtifactCredential, registryCredentials,verifiedBom }
     );
     progress?.done(`${installArtifactCount(lock, prepared.foundation?.installerArtifactPaths) + Number(prepared.foundation?.migration?.manifest?.migrationCount || 0)} artifacts, ${prepared.all.length} manifest groups`);
 
@@ -2829,7 +2860,7 @@ export async function bootstrap(lock, {
       effectiveAuthEnvironment,
       shellTlsSecretRefText(effectiveShellTls),
       'Preparing',
-      { baselineObservabilitySecurity: cluster.baselineObservabilitySecurity }
+      { baselineObservabilitySecurity: cluster.baselineObservabilitySecurity, controllerSource:prepared.foundation.controllerSource }
     );
     installationStateRecorded = true;
     progress?.deliverJournal?.((document)=>publishSetupJournal(document,{apply:kubectl}));
@@ -2945,6 +2976,7 @@ export async function bootstrap(lock, {
       requireRecoveryDrill: false,
       onProgress: message => progress?.item('외부 접속',message)
     });
+    const controllerDeployment=prepared.foundation.controllerSource ? readControllerDeployment() : undefined;
     recordReleaseInventory(lock, releaseResourceInventory(prepared.all));
     recordInstallationState(
       lock,
@@ -2959,7 +2991,8 @@ export async function bootstrap(lock, {
           evidenceConfigMap: 'opensphere-installation-evidence',
           verifiedAt: evidence.verifiedAt
         },
-        baselineObservabilitySecurity: cluster.baselineObservabilitySecurity
+        baselineObservabilitySecurity: cluster.baselineObservabilitySecurity,
+        controllerSource:prepared.foundation.controllerSource,controllerDeployment
       }
     );
     installationReady = true;
@@ -3026,6 +3059,7 @@ export async function upgrade(
   promotionBlocked(targetLock.channel);
   const operations = {
     readInstallationRecord,
+    readControllerDeployment,
     currentKubeContext,
     readInstallationLock,
     readInstallationConfig,
@@ -3068,6 +3102,7 @@ export async function upgrade(
     previous: previousLock, target: targetLock, record: operations.readInstallationRecord(),
     expectedRecordDigest: forwardRepairRecordDigest, context: operations.currentKubeContext()
   });
+  let targetVerifiedBom;
   await Promise.all([
     // Forward repair and one-way recovery never install the previous release, so it is not fetched.
     repair || recovery ? Promise.resolve() : operations.verifyReleaseLock(previousLock, {
@@ -3077,7 +3112,7 @@ export async function upgrade(
       allowInstalledAgentIdentityCutover: true,
       allowRetiredEdgeRollback: true
     }),
-    operations.verifyReleaseLock(targetLock, { registryCredentials, requiredPlatforms })
+    operations.verifyReleaseLock(targetLock, { registryCredentials, requiredPlatforms,onVerifiedBom:value=>{targetVerifiedBom=value;} })
   ]);
   const installed = operations.readInstallationLock();
   if (!installed || installed.releaseDigest !== previousLock.releaseDigest) {
@@ -3165,7 +3200,7 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           config.authEnvironment,
-          { changedComponents: changedWorkloadComponents, includeMigrations: true, sourceArtifactCredential, registryCredentials }
+          { changedComponents: changedWorkloadComponents, includeMigrations: true, sourceArtifactCredential, registryCredentials, verifiedBom:targetVerifiedBom }
         ),
         rollbackChangedComponents.length > 0
           ? operations.prepareComponentRelease(
@@ -3194,7 +3229,7 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           config.authEnvironment,
-          { sourceArtifactCredential, registryCredentials }
+          { sourceArtifactCredential, registryCredentials,verifiedBom:targetVerifiedBom }
         ),
         recovery ? Promise.resolve({ foundation: { root: rollbackWork, release: [], migration: null }, base: [], all: [] }) : operations.prepareRelease(
           previousLock,
@@ -3344,7 +3379,8 @@ export async function upgrade(
       try {
         written = operations.recordInstallationState(lock, config.storageClass, initialAdmin, effectiveConsoleUrl,
           config.authEnvironment, config.shellTlsSecret, phase,
-          { ...extra, recordPrecondition: { uid: owner.uid, resourceVersion: owner.resourceVersion } });
+          { ...(lock.releaseDigest===targetLock.releaseDigest&&target.foundation?.controllerSource?{controllerSource:target.foundation.controllerSource}:{}),
+            ...extra, recordPrecondition: { uid: owner.uid, resourceVersion: owner.resourceVersion } });
       } catch (error) {
         throw unknownOwnership(`The ${phase} record write did not confirm its outcome (${error.message})`);
       }
@@ -3361,7 +3397,8 @@ export async function upgrade(
     // Claim before the first change: a crash or a concurrent run now finds a non-Ready record that
     // names this transition, so neither an ordinary upgrade nor another run proceeds silently.
     if (!repair) {
-      ownedWrite(previousLock, 'Installing', { transition });
+      ownedWrite(previousLock, 'Installing', { transition,
+        ...(target.foundation?.controllerSource?{pendingControllerSource:target.foundation.controllerSource,pendingControllerLock:targetLock}:{}) });
       assertOwned('before installing the target');
     }
     let agentIdentityMigrationCommitted = false;
@@ -3385,7 +3422,8 @@ export async function upgrade(
         assertForwardRepair({previous:previousLock,target:targetLock,record:operations.readInstallationRecord(),
           expectedRecordDigest:forwardRepairRecordDigest,context:operations.currentKubeContext()});
         operations.recordInstallationState(targetLock,config.storageClass,initialAdmin,effectiveConsoleUrl,
-          config.authEnvironment,config.shellTlsSecret,'Installing',{recordPrecondition:repair,forwardRepair:repair});
+          config.authEnvironment,config.shellTlsSecret,'Installing',{recordPrecondition:repair,forwardRepair:repair,
+            ...(target.foundation?.controllerSource?{controllerSource:target.foundation.controllerSource}:{})});
         forwardRepairStarted = true;
         repair.bootstrap=operations.runForwardRepairBootstrap(targetLock,repairResources);
       }
@@ -3438,7 +3476,9 @@ export async function upgrade(
       if (!repair) { effects.push('pruned resources the target no longer declares'); assertOwned('after pruning'); }
       operations.recordReleaseInventory(targetLock, targetInventory);
       if (!repair) effects.push('recorded the target inventory');
-      writeState(targetLock, 'Ready', { verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: evidence.verifiedAt } });
+      writeState(targetLock, 'Ready', { verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: evidence.verifiedAt },
+        ...(target.foundation?.controllerSource?{controllerSource:target.foundation.controllerSource,
+          controllerDeployment:operations.readControllerDeployment()}: {}) });
       return {
         changed: true,
         lock: targetLock,
@@ -3576,7 +3616,8 @@ export async function upgrade(
         assertOwned('after the rollback prune');
         operations.recordReleaseInventory(previousLock, previousInventory);
         effects.push('recorded the previous inventory');
-        writeState(previousLock, 'Ready', { verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: rollbackEvidence.verifiedAt } });
+        writeState(previousLock, 'Ready', { verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: rollbackEvidence.verifiedAt },
+          ...(startRecord?.data?.[CONTROLLER_SOURCE_KEY]?{controllerDeployment:operations.readControllerDeployment()}:{}) });
       } catch (rollbackError) {
         throw new Error(`Upgrade failed (${upgradeError.message}); rollback also failed (${rollbackError.message})`);
       }

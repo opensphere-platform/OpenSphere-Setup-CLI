@@ -894,6 +894,17 @@ test('a release lock is accepted only when its canonical set, auxiliary set and 
   }), /migration manifest evidence differs/u);
 });
 
+test('BOM custody callback runs only after all provenance checks and returns an independent public predicate',async()=>{
+  const bom=validBom(),lock=validLock();lock.releaseBom=releaseBomPointer(bom);
+  lock.releaseDigest=calculateReleaseDigest(lock.channel,lock.components,lock.trust,lock.releaseBom,{auxiliaryArtifacts:lock.auxiliaryArtifacts});
+  const received=[];
+  const options={verifyBom:bomVerifier(bom),verifyImage(){},verifySbom(){},inspectImageFn:async(repository,image)=>signedArtifact(repository,image),onVerifiedBom:value=>received.push(value)};
+  await verifyReleaseLock(lock,options);assert.equal(received.length,1);assert.deepEqual(received[0].bom,bom);assert.equal(received[0].digest,lock.releaseBom.digest);
+  received[0].bom.channel='changed';assert.equal(bom.channel,'edge');
+  await assert.rejects(verifyReleaseLock(lock,{...options,verifySbom(){throw Error('InvalidSbom');}}),/InvalidSbom/);
+  assert.equal(received.length,1,'failed provenance cannot produce custody evidence');
+});
+
 test('an explicit private-package token is passed to gh only through its subprocess environment', () => {
   const image = `ghcr.io/opensphere-platform/opensphere-console@${DIGEST}`;
   let invocation;
