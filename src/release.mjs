@@ -1,3 +1,5 @@
+import releaseBomBundle from './release-bom-bundle.cjs';
+const {retainReleaseBomBundle}=releaseBomBundle;
 import artifactVersions from './artifact-version.cjs';
 const {parseArtifactVersion} = artifactVersions;
 import { createHash } from 'node:crypto';
@@ -767,7 +769,10 @@ export function verifyReleaseBomAttestation(subject, {
       if (boms.length === 0) throw new Error(`no signed Release BOM exists for channel ${channel ?? 'any'}`);
       const digests = new Set(boms.map(calculateReleaseBomDigest));
       if (digests.size !== 1) throw new Error('multiple different signed Release BOMs exist for one immutable subject');
-      return { bom: boms[0], digest: [...digests][0], subject };
+      const digest=[...digests][0];
+      const matching=entries.find(entry=>calculateReleaseBomDigest(entry?.verificationResult?.statement?.predicate)===digest);
+      const signature=retainReleaseBomBundle(matching,subject,digest);
+      return { bom: boms[0], digest, subject, signature };
     } catch (error) {
       lastError = error;
       const detail = String(error?.stderr ?? error?.message ?? 'unknown failure').trim();
@@ -1075,7 +1080,7 @@ export async function verifyReleaseLock(lock, {
     allowLegacyComponentSet,
     allowInstalledAgentIdentityCutover
   });
-  if(onVerifiedBom) onVerifiedBom({bom:structuredClone(bom),digest:verifiedBom.digest,subject:pointer.subject});
+  if(onVerifiedBom) onVerifiedBom({bom:structuredClone(bom),digest:verifiedBom.digest,subject:pointer.subject,signature:structuredClone(verifiedBom.signature??null)});
   return verified;
 }
 
