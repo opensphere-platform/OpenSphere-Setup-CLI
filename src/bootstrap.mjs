@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { kubectl, run } from './process.mjs';
+import { ensureInstallationIdentity } from './installation-identity.mjs';
 import { CLUSTER_SCOPED_MANAGED_CRDS, listManagedClusterResiduals, assertNoManagedClusterResiduals, assertManagedAdmissionParameters } from './installation-residuals.mjs';
 import {purgeBeszelHostState,purgeExternalConsoleRbac} from './uninstall-residuals.mjs';
 import { preflight } from './preflight.mjs';
@@ -2131,9 +2132,13 @@ export function recordInstallationState(
   phase = 'Preparing',
   stateOptions = {}
 ) {
+  // The persistent installation identity is created once and lives outside this lock, so every
+  // rewrite of the lock (install, upgrade, verification, repair) carries the same installationId.
+  const identity = stateOptions.installationIdentity ?? ensureInstallationIdentity({ adoptInstallationId: recordedInstallationId() });
   const config = {
     apiVersion: 'bootstrap.opensphere.io/v1alpha1',
     kind: 'OpenSphereInstallationConfig',
+    installationId: identity.installationId,
     architecture: 'supabase-data-identity+gitea-change-authority',
     channel: lock.channel,
     releaseDigest: lock.releaseDigest,
@@ -2195,6 +2200,15 @@ function recordInitialAdmin(initialAdmin, state = 'required') {
       state
     }
   })}\n`);
+}
+
+// An installationId an earlier lock already carried (kept when the identity record is first created).
+function recordedInstallationId() {
+  try {
+    const text = kubectl(['-n','opensphere-console','get','configmap','opensphere-installation-lock','--ignore-not-found','-o','json'],{capture:true});
+    if (!text) return undefined;
+    return JSON.parse(JSON.parse(text).data?.['config.json'] ?? 'null')?.installationId ?? undefined;
+  } catch { return undefined; }
 }
 
 export function readInstallationRecord() {
