@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import bundleReplay from '../src/release-bom-bundle.cjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -39,6 +41,7 @@ import {
   requiredPlatformDescriptors
 } from '../src/release.mjs';
 import { LEGACY_INSTALLED_AGENT_COMPONENTS } from '../src/release-agent-identity-cutover.mjs';
+import { readinessProfile } from '../src/release-readiness-profile.mjs';
 
 const REVISION = '1'.repeat(40);
 const DIGEST = `sha256:${'a'.repeat(64)}`;
@@ -213,13 +216,75 @@ function bomVerifier(bom = validBom()) {
   return async (subject) => ({ bom, digest: calculateReleaseBomDigest(bom), subject });
 }
 
+function profiledBomFixture() {
+  const bom = validBom();
+  let build = 0;
+  bom.auxiliaryArtifacts = artifactEntries(AUXILIARY_ARTIFACTS);
+  // Unit fixtures only: no official BUILD is reserved by these tests.
+  for (const artifact of Object.values({ ...bom.components, ...bom.auxiliaryArtifacts })) {
+    artifact.artifactVersion = `26.1005.1400.${++build}`;
+  }
+  bom.releaseTag = bom.components.console.artifactVersion;
+  bom.readinessProfile = readinessProfile('bootstrap-core', REVISION);
+  const versionFor = repository => Object.values({ ...bom.components, ...bom.auxiliaryArtifacts })
+    .find(artifact => artifact.repository === repository).artifactVersion;
+  const inspectImageFn = async (repository, image) => signedArtifact(repository, image, { releaseTag: versionFor(repository) });
+  return { bom, inspectImageFn };
+}
+
+test('profiled resolution reads every signed auxiliary digest at its own package BUILD', async () => {
+  const { bom, inspectImageFn } = profiledBomFixture();
+  const calls = [];
+  const resolved = await resolveChannel('edge', {
+    resolveImageFn: async (repository, reference) => {
+      calls.push([repository, reference]);
+      assert.equal(repository, COMPONENTS.console, 'only Console channel anchor may resolve a mutable tag');
+      return inspectImageFn(repository, bom.components.console.image);
+    }, inspectImageFn, verifyBom: bomVerifier(bom), verifyImage() {}, verifySbom() {}
+  });
+  assert.equal(calls.length, 1);
+  for (const [name, artifact] of Object.entries(bom.auxiliaryArtifacts)) {
+    assert.equal(resolved.auxiliaryArtifacts[name].image, artifact.image);
+    assert.equal(resolved.auxiliaryArtifacts[name].artifactVersion, artifact.artifactVersion);
+  }
+  await verifyReleaseLock(resolved, { inspectImageFn, verifyBom: bomVerifier(bom), verifyImage() {}, verifySbom() {} });
+});
+
+test('verified lock refuses readiness and auxiliary substitution before custody callback', async () => {
+  const { bom, inspectImageFn } = profiledBomFixture();
+  const original = validLock();
+  original.components = structuredClone(bom.components);
+  original.auxiliaryArtifacts = structuredClone(bom.auxiliaryArtifacts);
+  original.releaseBom = releaseBomPointer(bom);
+  for (const substitute of ['predicate', 'auxiliary']) {
+    const changed = structuredClone(original);
+    if (substitute === 'predicate') changed.releaseBom.readinessProfile = readinessProfile('full', REVISION);
+    else changed.auxiliaryArtifacts.osShellControl.image = changed.auxiliaryArtifacts.osShellControl.image.replace(/a{64}$/, 'f'.repeat(64));
+    changed.releaseDigest = calculateReleaseDigest(changed.channel, changed.components, changed.trust,
+      changed.releaseBom, { auxiliaryArtifacts: changed.auxiliaryArtifacts });
+    let custody = false;
+    await assert.rejects(verifyReleaseLock(changed, { inspectImageFn, verifyBom: bomVerifier(bom),
+      verifyImage() {}, verifySbom() {}, onVerifiedBom() { custody = true; } }), /differs from the signed Release BOM/);
+    assert.equal(custody, false);
+  }
+});
+
+test('profiled BOM refuses incomplete auxiliary catalog and unreviewed predicate fields', () => {
+  const { bom } = profiledBomFixture();
+  assert.doesNotThrow(() => validateReleaseBom(bom));
+  const missing = structuredClone(bom); delete missing.auxiliaryArtifacts.osShellRuntime;
+  assert.throws(() => validateReleaseBom(missing), /auxiliary/);
+  const changed = structuredClone(bom); changed.readinessProfile.deactivations = ['osdst'];
+  assert.throws(() => validateReleaseBom(changed), /exact versioned contract/);
+});
+
 test('new-format attested BOM preserves package versions and legacy reused images', async () => {
   const bom=validBom();bom.releaseTag='26.1001.1200.1';
   let number=1;
   for(const component of Object.values(bom.components)) component.artifactVersion=`26.1001.1200.${number++}`;
   bom.components.registry.artifactVersion=RELEASE_TAG;
   const attested=verifyReleaseBomAttestation(bom.components.console.image,{
-    execFile(){return JSON.stringify([{verificationResult:{statement:{predicate:bom}}}]);}
+    execFile(){return JSON.stringify([bomVerificationEntry(bom)]);}
   });
   assert.equal(attested.digest,calculateReleaseBomDigest(bom));
   const versionFor=repository=>Object.values(bom.components).find(c=>c.repository===repository)?.artifactVersion||bom.releaseTag;
@@ -837,7 +902,7 @@ test('Release BOM attestation is verified against the governed workflow and immu
   const verified = verifyReleaseBomAttestation(subject, {
     execFile(command, args, options) {
       invocation = { command, args, options };
-      return JSON.stringify([{ verificationResult: { statement: { predicate: bom } } }]);
+      return JSON.stringify([bomVerificationEntry(bom)]);
     }
   });
   assert.equal(verified.digest, calculateReleaseBomDigest(bom));
@@ -892,6 +957,19 @@ test('a release lock is accepted only when its canonical set, auxiliary set and 
   await assert.rejects(verifyReleaseLock(substitutedManifest, {
     verifyBom: bomVerifier(bom), verifyImage() {}, verifySbom() {}, inspectImageFn
   }), /migration manifest evidence differs/u);
+});
+
+test('BOM custody callback runs only after all provenance checks and returns an independent public predicate',async()=>{
+  const bom=validBom(),lock=validLock();lock.releaseBom=releaseBomPointer(bom);
+  lock.releaseDigest=calculateReleaseDigest(lock.channel,lock.components,lock.trust,lock.releaseBom,{auxiliaryArtifacts:lock.auxiliaryArtifacts});
+  const received=[];
+  const signature=bundleReplay.retainReleaseBomBundle(bomVerificationEntry(bom),lock.releaseBom.subject,lock.releaseBom.digest);
+  const options={verifyBom:async subject=>({bom,digest:calculateReleaseBomDigest(bom),subject,signature}),verifyImage(){},verifySbom(){},inspectImageFn:async(repository,image)=>signedArtifact(repository,image),onVerifiedBom:value=>received.push(value)};
+  await verifyReleaseLock(lock,options);assert.equal(received.length,1);assert.deepEqual(received[0].bom,bom);assert.equal(received[0].digest,lock.releaseBom.digest);
+  assert.deepEqual(received[0].signature,signature);received[0].signature.bundle.verificationMaterial.fixture='changed';assert.equal(signature.bundle.verificationMaterial.fixture,true);
+  received[0].bom.channel='changed';assert.equal(bom.channel,'edge');
+  await assert.rejects(verifyReleaseLock(lock,{...options,verifySbom(){throw Error('InvalidSbom');}}),/InvalidSbom/);
+  assert.equal(received.length,1,'failed provenance cannot produce custody evidence');
 });
 
 test('an explicit private-package token is passed to gh only through its subprocess environment', () => {
@@ -1485,4 +1563,27 @@ test('release lock rejects BUILD0 at package boundaries and keeps legacy lock va
   const bad=structuredClone(good);bad.components[name].artifactVersion='26.1001.1412.0';
   assert.throws(()=>validateLock(bad),/artifactVersion is invalid/);
  }
+});
+
+function bomVerificationEntry(bom) {
+ const subject=bom.components.console.image;
+ const statement={_type:'https://in-toto.io/Statement/v1',predicateType:RELEASE_BOM_PREDICATE,subject:[{name:subject,digest:{sha256:subject.split('@sha256:')[1]}}],predicate:bom};
+ return {attestation:{bundle:{mediaType:'application/vnd.dev.sigstore.bundle.v0.3+json',verificationMaterial:{fixture:true},dsseEnvelope:{payload:Buffer.from(JSON.stringify(statement)).toString('base64'),signatures:[{sig:'fixture-only'}]}}},verificationResult:{statement}};
+}
+
+
+test('retained BOM replay uses original bundle bytes and compiled release trust, never predicate alone',()=>{
+ const bom=validBom(),entry=bomVerificationEntry(bom),subject=bom.components.console.image,digest=calculateReleaseBomDigest(bom);
+ const e=bundleReplay.retainReleaseBomBundle(entry,subject,digest);
+ assert.deepEqual(bundleReplay.RELEASE_BOM_BUNDLE_TRUST,RELEASE_TRUST);
+ let calls=0,file;
+ const verified=bundleReplay.verifyRetainedReleaseBom(e,{execFile(cmd,args){calls++;file=args[args.indexOf('--bundle')+1];
+  assert.equal(cmd,'gh');assert.equal(args.includes('--bundle-from-oci'),false);assert.ok(args.includes(RELEASE_TRUST.signerWorkflow));
+  assert.deepEqual(JSON.parse(fs.readFileSync(file,'utf8')),entry.attestation.bundle);return JSON.stringify([entry]);}});
+ assert.equal(verified.digest,digest);assert.equal(calls,1);assert.equal(fs.existsSync(file),false);
+ assert.throws(()=>bundleReplay.verifyRetainedReleaseBom(e,{execFile(){throw Error('fixture private output');}}),/ReleaseBomBundleUnavailable/);
+ assert.throws(()=>bundleReplay.verifyRetainedReleaseBom({...e,trust:{...e.trust,sourceRef:'refs/heads/other'}}),/ReleaseBomBundleUnavailable/);
+ assert.throws(()=>bundleReplay.retainReleaseBomBundle({verificationResult:entry.verificationResult},subject,digest),/ReleaseBomBundleUnavailable/);
+ const forged=structuredClone(entry);forged.verificationResult.statement.predicate.channel='stable';
+ assert.throws(()=>bundleReplay.retainReleaseBomBundle(forged,subject,calculateReleaseBomDigest(forged.verificationResult.statement.predicate)),/ReleaseBomBundleUnavailable/);
 });

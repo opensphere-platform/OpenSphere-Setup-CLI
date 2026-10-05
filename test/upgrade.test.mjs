@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { readinessProfile } from '../src/release-readiness-profile.mjs';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {assertForwardRepair,installationRecordDigest} from '../src/forward-repair.mjs';
@@ -323,6 +324,132 @@ function runtime(previous, events, {
       return { releaseDigest: release.releaseDigest };
     }
   };
+}
+
+// Official-looking versions below are isolated unit fixtures, never BUILD reservations.
+function profiledUpgradeFixture() {
+  const previous = lock('a'.repeat(40), 'a'), target = lock('b'.repeat(40), 'b');
+  let build = 0;
+  for (const artifact of Object.values({ ...target.components, ...target.auxiliaryArtifacts })) {
+    artifact.artifactVersion = `26.1005.1400.${++build}`;
+  }
+  const bom = {
+    apiVersion: RELEASE_API_VERSION, kind: 'OpenSphereReleaseBOM', channel: target.channel,
+    status: 'Active', source: SOURCE, sourceRevision: target.sourceRevision,
+    releaseTag: target.components.console.artifactVersion,
+    supportedPlatforms: ['linux/amd64', 'linux/arm64'],
+    artifacts: { supabaseMigrationManifest: { ...MIGRATION_MANIFEST } },
+    components: structuredClone(target.components), auxiliaryArtifacts: structuredClone(target.auxiliaryArtifacts),
+    readinessProfile: readinessProfile('bootstrap-core', target.sourceRevision)
+  };
+  target.releaseBom = releaseBomPointer(bom);
+  target.releaseDigest = calculateReleaseDigest(target.channel, target.components, target.trust,
+    target.releaseBom, { auxiliaryArtifacts: target.auxiliaryArtifacts });
+  const workload = (name, components) => ({
+    apiVersion: 'apps/v1', kind: 'Deployment',
+    metadata: { namespace: 'opensphere-console', name, uid: `uid-${name}`, resourceVersion: '7' },
+    spec: { replicas: 2, selector: { matchLabels: { app: name } },
+      template: { metadata: { labels: { app: name } }, spec: { containers: components.map(component => ({
+        name: component, image: previous.components[component].image,
+        ...(component === 'osaaGateway' ? { env: [{ name: 'R2D2_HERMES_ENABLED', value: 'true' }] } : {})
+      })) } } }
+  });
+  const live = [workload('c-ai', ['osaaGateway', 'r2d2HermesWorker']),
+    workload('c-dst', ['osdst']), workload('c-shell', ['osaaGovernedAdapter'])];
+  const rendered = structuredClone(live);
+  for (const w of rendered) {
+    delete w.metadata.uid; delete w.metadata.resourceVersion;
+    for (const c of w.spec.template.spec.containers) c.image = target.components[c.name].image;
+  }
+  const events = [], operations = runtime(previous, events);
+  let verifiedBom = { bom, digest: target.releaseBom.digest };
+  operations.verifyReleaseLock = async (release, options) => {
+    events.push(`supply:${release.sourceRevision}`);
+    if (release === target) options.onVerifiedBom(verifiedBom);
+  };
+  operations.prepareRelease = async release => {
+    events.push(`prepare:${release.sourceRevision}`);
+    return { foundation: { root: release.sourceRevision }, base: [],
+      all: (release === target ? rendered : live).map(w => ({ path: `${w.metadata.name}.yaml`, yaml: JSON.stringify(w) })) };
+  };
+  operations.installPreparedRelease = (_release, _prepared, _sc, _url, label) => events.push(`install:${label}`);
+  operations.releaseResourceInventory = () => [{ apiVersion: 'apps/v1', kind: 'Deployment',
+    namespace: 'opensphere-console', name: 'c-ai' }];
+  operations.ownerPreservationClient = (args, options) => {
+    if (args[0] === 'get') {
+      return JSON.stringify(args[1] === 'configmap' ? operations.store.read() : { kind: 'List', items: live });
+    }
+    assert.deepEqual(args, ['apply', '--dry-run=server', '--validate=true', '-f', '-', '-o', 'json']);
+    events.push('owner-server-dry-run');
+    const request = JSON.parse(options.input);
+    return JSON.stringify({ kind: 'List', items: request.items.map(w => ({ ...w,
+      metadata: { ...w.metadata, uid: live.find(old => old.metadata.name === w.metadata.name).metadata.uid,
+        resourceVersion: live.find(old => old.metadata.name === w.metadata.name).metadata.resourceVersion } })) });
+  };
+  return { previous, target, bom, live, rendered, events, operations,
+    setVerifiedBom: value => { verifiedBom = value; } };
+}
+
+test('profiled upgrade compares verified rendered active Owners before its first mutation', async () => {
+  const f = profiledUpgradeFixture();
+  await upgrade(f.previous, f.target, { runtime: f.operations });
+  const comparison = f.events.indexOf('owner-server-dry-run');
+  assert.ok(comparison > f.events.indexOf(`supply:${f.target.sourceRevision}`));
+  assert.ok(comparison > f.events.indexOf(`prepare:${f.target.sourceRevision}`));
+  for (const event of ['namespaces', 'registry', `record:${f.target.sourceRevision}`]) {
+    assert.ok(f.events.indexOf(event) > comparison, `comparison must precede ${event}`);
+  }
+  assert.ok(f.events.findIndex(e => e.startsWith('install:')) > comparison);
+  assert.equal(f.operations.store.state.phase, 'Ready');
+});
+
+const refusedProfilePlans = {
+  'failed supply-chain verification': f => {
+    f.operations.verifyReleaseLock = async release => {
+      if (release === f.target) throw new Error('InvalidSignature');
+    };
+  },
+  'missing verified BOM': f => f.setVerifiedBom(null),
+  'tampered signed BOM bytes': f => { f.bom.status = 'Changed'; },
+  'active Owner deleted from render': f => { f.rendered.pop(); },
+  'active replica count reduced': f => { f.rendered[0].spec.replicas = 1; },
+  'Hermes container removed': f => { f.rendered[0].spec.template.spec.containers.pop(); },
+  'Hermes feature disabled': f => { f.rendered[0].spec.template.spec.containers[0].env[0].value = 'false'; },
+  'unverified image digest substituted': f => {
+    f.rendered[0].spec.template.spec.containers[0].image = f.target.components.osaaGateway.image.replace(/b{64}$/, 'c'.repeat(64));
+  },
+  'Owner changed during server dry-run': f => {
+    const client = f.operations.ownerPreservationClient;
+    f.operations.ownerPreservationClient = (args, options) => {
+      const result = client(args, options);
+      if (args[0] === 'apply') f.live[0].metadata.resourceVersion = '8';
+      return result;
+    };
+  },
+  'admission rejection with a private payload': f => {
+    const client = f.operations.ownerPreservationClient;
+    f.operations.ownerPreservationClient = (args, options) => {
+      if (args[0] === 'apply') throw new Error('private-manifest-fixture');
+      return client(args, options);
+    };
+  },
+  'new formal lock missing readiness predicate': f => {
+    delete f.target.releaseBom.readinessProfile;
+    f.target.releaseDigest = calculateReleaseDigest(f.target.channel, f.target.components, f.target.trust,
+      f.target.releaseBom, { auxiliaryArtifacts: f.target.auxiliaryArtifacts });
+  }
+};
+for (const [reason, change] of Object.entries(refusedProfilePlans)) {
+  test(`profiled upgrade refuses ${reason} before writes or rollback`, async () => {
+    const f = profiledUpgradeFixture(); change(f);
+    await assert.rejects(upgrade(f.previous, f.target, { runtime: f.operations }), error => {
+      assert.equal(error.message.includes('private-manifest-fixture'), false);
+      return true;
+    });
+    assert.equal(f.events.some(e => /^(namespaces|registry|record:|install:|inventory:|prune:)/.test(e)), false);
+    assert.equal(f.operations.store.rv, 1);
+    assert.equal(f.operations.store.release, f.previous);
+  });
 }
 
 function repairFixture() {

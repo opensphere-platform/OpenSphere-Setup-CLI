@@ -3,6 +3,21 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {completeInstallationVerification} from '../src/bootstrap.mjs';
 const lock=JSON.parse(readFileSync(new URL('./fixtures/knowledge-release-v1.json',import.meta.url))).base;
+test('verification completion rebinds an existing source to current applied coordinates without capturing observed source',async()=>{
+ const f=fixture();f.record.data['controller-source.json']='retained-source';let reads=0,readyOptions;
+ const deployment={metadata:{uid:'current-uid',generation:2}};
+ f.runtime.readControllerDeployment=()=>{reads++;return deployment;};
+ const original=f.runtime.recordInstallationState;
+ f.runtime.recordInstallationState=(...args)=>{if(args[6]==='Ready')readyOptions=args[7];return original(...args);};
+ await completeInstallationVerification(lock,{runtime:f.runtime});
+ assert.equal(reads,1);assert.equal(readyOptions.controllerDeployment,deployment);assert.equal(readyOptions.controllerSource,undefined);
+});
+test('missing deployment coordinates prevent source-bearing completion from reporting Ready',async()=>{
+ const f=fixture();f.record.data['controller-source.json']='retained-source';
+ f.runtime.readControllerDeployment=()=>{throw Error('CoordinatesUnavailable');};
+ await assert.rejects(completeInstallationVerification(lock,{runtime:f.runtime}),/CoordinatesUnavailable/);
+ assert.deepEqual(f.phases,['Installing','Failed']);
+});
 function fixture(){
  const state={phase:'Failed',releaseDigest:lock.releaseDigest};
  const record={metadata:{uid:'original',resourceVersion:'1'},data:{'release.json':JSON.stringify(lock),

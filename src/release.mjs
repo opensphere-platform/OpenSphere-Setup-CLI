@@ -1,6 +1,9 @@
+import releaseBomBundle from './release-bom-bundle.cjs';
+const {retainReleaseBomBundle}=releaseBomBundle;
 import artifactVersions from './artifact-version.cjs';
 const {parseArtifactVersion} = artifactVersions;
 import { createHash } from 'node:crypto';
+import { validateReadinessProfile } from './release-readiness-profile.mjs';
 import { execFileSync } from 'node:child_process';
 import { fetchWithRetry } from './http.mjs';
 import knowledgeRelease from './knowledge-release.cjs';
@@ -674,6 +677,7 @@ export function validateReleaseBom(bom, {
     }
   }
   const componentProfile = canonicalComponentProfile(bom.components, { allowLegacyComponentSet });
+  if (bom.readinessProfile !== undefined) validateReadinessProfile(bom.readinessProfile, bom.sourceRevision);
   if (!componentProfile) {
     throw new Error('Signed release BOM component set is not canonical');
   }
@@ -697,6 +701,20 @@ export function validateReleaseBom(bom, {
   if (subject && bom.components.console.image !== subject) {
     throw new Error('Signed release BOM subject is not its Console anchor image');
   }
+  if (bom.readinessProfile !== undefined) {
+    const names = Object.keys(bom.auxiliaryArtifacts ?? {}).sort();
+    if (JSON.stringify(names) !== JSON.stringify(Object.keys(AUXILIARY_ARTIFACTS).sort())) {
+      throw new Error('Profiled signed BOM must contain the governed auxiliary artifact catalog');
+    }
+    for (const [name, repository] of Object.entries(AUXILIARY_ARTIFACTS)) {
+      const artifact = bom.auxiliaryArtifacts[name];
+      if (artifact.repository !== repository || artifact.sourceRevision !== bom.sourceRevision
+        || !new RegExp(`^${REGISTRY}/${OWNER}/${repository}@sha256:[a-f0-9]{64}$`).test(artifact.image ?? '')
+        || parseArtifactVersion(artifact.artifactVersion)?.format !== 'build') {
+        throw new Error(`Signed BOM auxiliary artifact ${name} is not a formal package-scoped artifact`);
+      }
+    }
+  }
   const migration = bom.artifacts?.supabaseMigrationManifest;
   const validMigrationEvidence = migration?.path === SUPABASE_MIGRATION_MANIFEST_PATH
     && /^sha256:[a-f0-9]{64}$/.test(migration?.sha256 ?? '')
@@ -716,6 +734,7 @@ export function releaseBomPointer(bom, subject = bom?.components?.console?.image
     subject,
     digest: calculateReleaseBomDigest(validated),
     releaseTag: validated.releaseTag,
+    ...(validated.readinessProfile ? { readinessProfile: structuredClone(validated.readinessProfile) } : {}),
     ...(validated.artifacts?.supabaseMigrationManifest
       ? { migrationManifest: structuredClone(validated.artifacts.supabaseMigrationManifest) }
       : {})
@@ -731,6 +750,7 @@ export function assertSignedReleaseBom(lock) {
       || !parseArtifactVersion(pointer?.releaseTag ?? '')) {
     throw new Error('Release lock has no governed signed Release BOM');
   }
+  if (pointer.readinessProfile !== undefined) validateReadinessProfile(pointer.readinessProfile, lock.sourceRevision);
   return pointer;
 }
 
@@ -767,7 +787,10 @@ export function verifyReleaseBomAttestation(subject, {
       if (boms.length === 0) throw new Error(`no signed Release BOM exists for channel ${channel ?? 'any'}`);
       const digests = new Set(boms.map(calculateReleaseBomDigest));
       if (digests.size !== 1) throw new Error('multiple different signed Release BOMs exist for one immutable subject');
-      return { bom: boms[0], digest: [...digests][0], subject };
+      const digest=[...digests][0];
+      const matching=entries.find(entry=>calculateReleaseBomDigest(entry?.verificationResult?.statement?.predicate)===digest);
+      const signature=retainReleaseBomBundle(matching,subject,digest);
+      return { bom: boms[0], digest, subject, signature };
     } catch (error) {
       lastError = error;
       const detail = String(error?.stderr ?? error?.message ?? 'unknown failure').trim();
@@ -970,6 +993,7 @@ export async function verifyReleaseProvenance(lock, {
 
 export async function verifyReleaseLock(lock, {
   verifyBom = verifyReleaseBomAttestation,
+  onVerifiedBom,
   verifyImage = verifyImageProvenance,
   verifySbom = verifyImageSbom,
   inspectImageFn = inspectImageReference,
@@ -1025,6 +1049,9 @@ export async function verifyReleaseLock(lock, {
     requiredPlatforms
   });
   const expectedMigrationManifest = bom.artifacts?.supabaseMigrationManifest;
+  if (JSON.stringify(stableValue(pointer.readinessProfile)) !== JSON.stringify(stableValue(bom.readinessProfile))) {
+    throw new Error('Release lock readiness predicate differs from the signed Release BOM');
+  }
   if (pointer.releaseTag !== bom.releaseTag) {
     throw new Error('Release lock immutable tag differs from the signed Release BOM');
   }
@@ -1051,6 +1078,13 @@ export async function verifyReleaseLock(lock, {
     });
   }
   for (const [name, actual] of Object.entries(validated.auxiliaryArtifacts ?? {})) {
+    if (bom.readinessProfile) {
+      const expected = bom.auxiliaryArtifacts[name];
+      if (actual.repository !== expected.repository || actual.image !== expected.image
+        || actual.sourceRevision !== expected.sourceRevision || actual.artifactVersion !== expected.artifactVersion) {
+        throw new Error(`Release lock auxiliary artifact ${name} differs from the signed Release BOM`);
+      }
+    }
     const inspected = await inspectImageFn(actual.repository, actual.image, {
       registryCredentials,
       requiredPlatforms
@@ -1066,7 +1100,7 @@ export async function verifyReleaseLock(lock, {
     });
     if (actual.artifactVersion !== undefined) assertArtifactIdentity(inspected, actual.artifactVersion);
   }
-  return verifyReleaseProvenance(validated, {
+  const verified = await verifyReleaseProvenance(validated, {
     verifyImage,
     verifySbom,
     registryCredentials,
@@ -1074,6 +1108,8 @@ export async function verifyReleaseLock(lock, {
     allowLegacyComponentSet,
     allowInstalledAgentIdentityCutover
   });
+  if(onVerifiedBom) onVerifiedBom({bom:structuredClone(bom),digest:verifiedBom.digest,subject:pointer.subject,signature:structuredClone(verifiedBom.signature??null)});
+  return verified;
 }
 
 // Legacy locks must never be accepted merely because they predate the trust
@@ -1584,16 +1620,22 @@ async function resolveSignedRelease(reference, channel, {
   const components = Object.fromEntries(resolved);
   const auxiliaryResolved = await Promise.all(Object.entries(auxiliaryCatalogForAnchor(anchor)).map(async ([name, repository]) => {
     report(onProgress, { type: 'auxiliary-start', component: name, repository, reference: bom.releaseTag });
-    const inspected = await resolveImageFn(repository, bom.releaseTag, {
+    const signed = bom.readinessProfile ? bom.auxiliaryArtifacts[name] : null;
+    const inspected = signed ? await inspectImageFn(repository, signed.image, {
+      registryCredentials, requiredPlatforms: targetPlatforms
+    }) : await resolveImageFn(repository, bom.releaseTag, {
       registryCredentials,
       requiredPlatforms: targetPlatforms
     });
     assertReleaseArtifactMetadata(inspected, {
       repository,
       sourceRevision: bom.sourceRevision,
-      releaseTag: bom.releaseTag,
+      releaseTag: signed?.artifactVersion ?? bom.releaseTag,
       artifactScope: 'auxiliary'
     });
+    if (signed && (inspected.image !== signed.image || inspected.sourceRevision !== signed.sourceRevision)) {
+      throw new Error(`Registry auxiliary artifact ${name} differs from the signed Release BOM`);
+    }
     report(onProgress, { type: 'auxiliary-complete', component: name, image: inspected.image });
     return [name, releaseComponent(repository, inspected)];
   }));

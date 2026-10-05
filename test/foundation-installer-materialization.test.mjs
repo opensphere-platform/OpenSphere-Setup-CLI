@@ -4,6 +4,8 @@ import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { join } from 'node:path';
 import { renderRegistryKubernetesEgress, KUBERNETES_EGRESS_SLOT, discoverConsoleApiCiliumPolicy } from '../src/registry-runtime-access.mjs';
+import {EXTENSION_CONTROLLER_MANIFEST} from '../src/bootstrap.mjs';
+import {captureControllerSource} from '../src/controller-source.mjs';
 
 // Execute the actual materialization function with only external I/O isolated.
 // A render-only test missed the old branch that wrote raw instead of verified egress.
@@ -23,7 +25,7 @@ const knowledge={schema:'synthetic-source-package',sha256:'a'.repeat(64),knowled
 function harness(discovered = rules, cilium=false) {
   const writes = []; const knowledgeCalls=[]; let discoveries = 0;
   const context = {
-    Set, Promise, KUBERNETES_EGRESS_SLOT, KNOWLEDGE_LOCK_PATH, join,
+    Set, Promise, KUBERNETES_EGRESS_SLOT, KNOWLEDGE_LOCK_PATH, join, EXTENSION_CONTROLLER_MANIFEST,captureControllerSource,
     isTargetConsoleRelease: () => true,
     foundationManifestSpecs: () => [{path:'apps/console-api/deploy.yaml'}],
     foundationArtifactPaths: () => [KNOWLEDGE_LOCK_PATH],
