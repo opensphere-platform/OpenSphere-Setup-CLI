@@ -16,6 +16,7 @@ import {captureControllerSource,controllerSourceData,CONTROLLER_SOURCE_KEY} from
 import { CLUSTER_SCOPED_MANAGED_CRDS, listManagedClusterResiduals, assertNoManagedClusterResiduals, assertManagedAdmissionParameters } from './installation-residuals.mjs';
 import {purgeBeszelHostState,purgeExternalConsoleRbac} from './uninstall-residuals.mjs';
 import { preflight } from './preflight.mjs';
+import { comparePreparedOwners, requiresOwnerPreservation } from './adoption-owner-preservation.mjs';
 import { fetchWithRetry } from './http.mjs';
 import { sourceArtifactRequest } from './source-artifact-credential.mjs';
 import { renderKnowledgeManifest, materializeKnowledgeDirectory, KNOWLEDGE_LOCK_PATH } from './knowledge-artifact.mjs';
@@ -3056,6 +3057,7 @@ export async function upgrade(
   });
   validateLock(targetLock);
   validateReleaseTransition(previousLock, targetLock);
+  const profiledAdoption = requiresOwnerPreservation(targetLock, previousLock);
   promotionBlocked(targetLock.channel);
   const operations = {
     readInstallationRecord,
@@ -3165,14 +3167,16 @@ export async function upgrade(
     return current?.metadata?.uid === owner.uid && current.metadata.resourceVersion === owner.resourceVersion;
   };
   operations.preflight({ storageClass: config.storageClass, channel: targetLock.channel });
-  operations.ensureManagedNamespaces();
-  // OAuth here authenticates supply-chain reads only. Preserve the installed
-  // owner/pull Secrets; runtime reauthorization remains a Console operation.
-  operations.ensureRegistryPullSecrets(
-    targetLock,
-    registryCredentials?.lifecycle?.mode === 'github-device' ? null : registryCredentials,
-    {requireRuntimeReady: true}
-  );
+  if (!profiledAdoption) {
+    operations.ensureManagedNamespaces();
+    // OAuth here authenticates supply-chain reads only. Preserve the installed
+    // owner/pull Secrets; runtime reauthorization remains a Console operation.
+    operations.ensureRegistryPullSecrets(
+      targetLock,
+      registryCredentials?.lifecycle?.mode === 'github-device' ? null : registryCredentials,
+      {requireRuntimeReady: true}
+    );
+  }
   const initialAdmin = config.initialAdmin;
   const componentTransition = targetLock.releaseScope === RELEASE_SCOPE_COMPONENT;
   const changedComponents = componentTransition ? targetLock.changedComponents : [];
@@ -3246,6 +3250,17 @@ export async function upgrade(
           }
         )
       ]);
+    if (profiledAdoption) {
+      comparePreparedOwners(previousLock, targetLock, target, {
+        verifiedBom: targetVerifiedBom, client: operations.ownerPreservationClient
+      });
+      // No namespace, pull-secret, installation record, installer, apply or
+      // prune write is reached before signed-lock-render-Owner comparison.
+      operations.ensureManagedNamespaces();
+      operations.ensureRegistryPullSecrets(targetLock,
+        registryCredentials?.lifecycle?.mode === 'github-device' ? null : registryCredentials,
+        {requireRuntimeReady: true});
+    }
     const recordedInventory = operations.readReleaseInventory();
     if (componentTransition && !recordedInventory && !repair) {
       throw new Error('Component release requires the existing complete release inventory');

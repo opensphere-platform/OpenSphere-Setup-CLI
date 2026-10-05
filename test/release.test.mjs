@@ -41,6 +41,7 @@ import {
   requiredPlatformDescriptors
 } from '../src/release.mjs';
 import { LEGACY_INSTALLED_AGENT_COMPONENTS } from '../src/release-agent-identity-cutover.mjs';
+import { readinessProfile } from '../src/release-readiness-profile.mjs';
 
 const REVISION = '1'.repeat(40);
 const DIGEST = `sha256:${'a'.repeat(64)}`;
@@ -214,6 +215,68 @@ test('signed release BOM requires exact Supabase migration manifest evidence', (
 function bomVerifier(bom = validBom()) {
   return async (subject) => ({ bom, digest: calculateReleaseBomDigest(bom), subject });
 }
+
+function profiledBomFixture() {
+  const bom = validBom();
+  let build = 0;
+  bom.auxiliaryArtifacts = artifactEntries(AUXILIARY_ARTIFACTS);
+  // Unit fixtures only: no official BUILD is reserved by these tests.
+  for (const artifact of Object.values({ ...bom.components, ...bom.auxiliaryArtifacts })) {
+    artifact.artifactVersion = `26.1005.1400.${++build}`;
+  }
+  bom.releaseTag = bom.components.console.artifactVersion;
+  bom.readinessProfile = readinessProfile('bootstrap-core', REVISION);
+  const versionFor = repository => Object.values({ ...bom.components, ...bom.auxiliaryArtifacts })
+    .find(artifact => artifact.repository === repository).artifactVersion;
+  const inspectImageFn = async (repository, image) => signedArtifact(repository, image, { releaseTag: versionFor(repository) });
+  return { bom, inspectImageFn };
+}
+
+test('profiled resolution reads every signed auxiliary digest at its own package BUILD', async () => {
+  const { bom, inspectImageFn } = profiledBomFixture();
+  const calls = [];
+  const resolved = await resolveChannel('edge', {
+    resolveImageFn: async (repository, reference) => {
+      calls.push([repository, reference]);
+      assert.equal(repository, COMPONENTS.console, 'only Console channel anchor may resolve a mutable tag');
+      return inspectImageFn(repository, bom.components.console.image);
+    }, inspectImageFn, verifyBom: bomVerifier(bom), verifyImage() {}, verifySbom() {}
+  });
+  assert.equal(calls.length, 1);
+  for (const [name, artifact] of Object.entries(bom.auxiliaryArtifacts)) {
+    assert.equal(resolved.auxiliaryArtifacts[name].image, artifact.image);
+    assert.equal(resolved.auxiliaryArtifacts[name].artifactVersion, artifact.artifactVersion);
+  }
+  await verifyReleaseLock(resolved, { inspectImageFn, verifyBom: bomVerifier(bom), verifyImage() {}, verifySbom() {} });
+});
+
+test('verified lock refuses readiness and auxiliary substitution before custody callback', async () => {
+  const { bom, inspectImageFn } = profiledBomFixture();
+  const original = validLock();
+  original.components = structuredClone(bom.components);
+  original.auxiliaryArtifacts = structuredClone(bom.auxiliaryArtifacts);
+  original.releaseBom = releaseBomPointer(bom);
+  for (const substitute of ['predicate', 'auxiliary']) {
+    const changed = structuredClone(original);
+    if (substitute === 'predicate') changed.releaseBom.readinessProfile = readinessProfile('full', REVISION);
+    else changed.auxiliaryArtifacts.osShellControl.image = changed.auxiliaryArtifacts.osShellControl.image.replace(/a{64}$/, 'f'.repeat(64));
+    changed.releaseDigest = calculateReleaseDigest(changed.channel, changed.components, changed.trust,
+      changed.releaseBom, { auxiliaryArtifacts: changed.auxiliaryArtifacts });
+    let custody = false;
+    await assert.rejects(verifyReleaseLock(changed, { inspectImageFn, verifyBom: bomVerifier(bom),
+      verifyImage() {}, verifySbom() {}, onVerifiedBom() { custody = true; } }), /differs from the signed Release BOM/);
+    assert.equal(custody, false);
+  }
+});
+
+test('profiled BOM refuses incomplete auxiliary catalog and unreviewed predicate fields', () => {
+  const { bom } = profiledBomFixture();
+  assert.doesNotThrow(() => validateReleaseBom(bom));
+  const missing = structuredClone(bom); delete missing.auxiliaryArtifacts.osShellRuntime;
+  assert.throws(() => validateReleaseBom(missing), /auxiliary/);
+  const changed = structuredClone(bom); changed.readinessProfile.deactivations = ['osdst'];
+  assert.throws(() => validateReleaseBom(changed), /exact versioned contract/);
+});
 
 test('new-format attested BOM preserves package versions and legacy reused images', async () => {
   const bom=validBom();bom.releaseTag='26.1001.1200.1';
