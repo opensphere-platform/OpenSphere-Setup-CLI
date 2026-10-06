@@ -16,6 +16,23 @@ const stable = v => Array.isArray(v) ? v.map(stable) : v && typeof v === 'object
   ? Object.fromEntries(Object.keys(v).sort().map(k => [k,stable(v[k])])) : v;
 const json = v => JSON.stringify(stable(v));
 const fail = () => {throw Error('ControllerSourceMismatch');};
+// A projected credential's fixed, read-only file reference is safe to capture;
+// credential bytes are not. Only the two reviewed C_EXT audience projections
+// qualify, with their exact mount, path and bounded lifetime.
+const PROVIDER_FILES={
+  CONSOLE_PROVIDER_DISPATCH_TOKEN_FILE:{name:'provider-dispatch',audience:'opensphere-foundation-dispatch'},
+  CONSOLE_PROVIDER_ENGINE_TOKEN_FILE:{name:'provider-engine',audience:'opensphere-provider-engine-evidence'},
+};
+function projectedProviderFile(env,container,pod) {
+  const approved=PROVIDER_FILES[env.name];if(!approved)return false;
+  const mountPath='/var/run/opensphere/'+approved.name;
+  const mounts=(container.volumeMounts||[]).filter(m=>m.name===approved.name);
+  const volumes=(pod.volumes||[]).filter(v=>v.name===approved.name);
+  const source=volumes[0]?.projected?.sources;
+  return env.value===mountPath+'/token'&&mounts.length===1&&mounts[0].mountPath===mountPath
+    &&mounts[0].readOnly===true&&!mounts[0].subPath&&!mounts[0].subPathExpr&&volumes.length===1
+    &&source?.length===1&&json(source[0])===json({serviceAccountToken:{path:'token',audience:approved.audience,expirationSeconds:600}});
+}
 function deploymentDocument(yaml) {
   if(typeof yaml !== 'string' || Buffer.byteLength(yaml)>262144) fail();
   const docs=parseAllDocuments(yaml);
@@ -51,7 +68,8 @@ export function captureControllerSource({lock,sourceRevision=lock?.sourceRevisio
   // This source-owned Deployment uses references for credentials. Refuse a future
   // literal credential rather than putting it in the installation ConfigMap.
   for(const c of [...containers,...(rendered.value.spec.template.spec.initContainers||[])])
-    for(const e of c.env||[]) if(e.value!==undefined&&/password|token|credential|secret|database.*url/i.test(e.name)) fail();
+    for(const e of c.env||[]) if(e.value!==undefined&&/password|token|credential|secret|database.*url/i.test(e.name)
+      &&!projectedProviderFile(e,c,rendered.value.spec.template.spec)) fail();
   const result={schema:'opensphere.controller-source/v1',component:structuredClone(component),
     sourceReleaseDigest:lock.releaseDigest,releaseBom:structuredClone(lock.releaseBom??null),
     trust:structuredClone(lock.trust),verifiedBom:structuredClone(verifiedBom),artifact:{path:PATH,sourceRevision,

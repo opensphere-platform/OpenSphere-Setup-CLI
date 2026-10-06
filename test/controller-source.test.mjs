@@ -102,6 +102,28 @@ test('capture refuses unrelated revision, BOM substitution and literal credentia
  const d=structuredClone(f.deployment);d.spec.template.spec.containers[0].env.push({name:'ACCESS_TOKEN',value:'test-only'});
  assert.throws(()=>captureControllerSource({...args,renderedYaml:stringify(d)}),/ControllerSourceMismatch/);
 });
+test('capture permits fixed projected file references only with their reviewed read-only audience mount',()=>{
+ const f=fixture(),d=structuredClone(f.deployment),pod=d.spec.template.spec,c=pod.containers[0];
+ const names=[['CONSOLE_PROVIDER_DISPATCH_TOKEN_FILE','provider-dispatch','opensphere-foundation-dispatch'],
+   ['CONSOLE_PROVIDER_ENGINE_TOKEN_FILE','provider-engine','opensphere-provider-engine-evidence']];
+ c.volumeMounts=[];pod.volumes=[];
+ for(const [name,volume,audience] of names){
+   c.env.push({name,value:'/var/run/opensphere/'+volume+'/token'});
+   c.volumeMounts.push({name:volume,mountPath:'/var/run/opensphere/'+volume,readOnly:true});
+   pod.volumes.push({name:volume,projected:{defaultMode:420,sources:[{serviceAccountToken:{path:'token',audience,expirationSeconds:600}}]}});
+ }
+ const capture=value=>captureControllerSource({lock:f.lock,sourceYaml:f.sourceYaml,renderedYaml:stringify(value),renderInputs:f.source.renderInputs});
+ assert.doesNotThrow(()=>capture(d));
+ for(const mutate of [
+  p=>p.containers[0].env.at(-1).value='fixture.raw.token',
+  p=>p.containers[0].volumeMounts[0].readOnly=false,
+  p=>p.containers[0].volumeMounts[0].subPath='caller',
+  p=>p.volumes[0].projected.sources[0].serviceAccountToken.audience='kubernetes',
+  p=>p.volumes[0].projected.sources[0].serviceAccountToken.expirationSeconds=86400,
+  p=>p.volumes[0].projected.sources.push({secret:{name:'caller'}}),
+  p=>p.volumes[0]={name:'provider-dispatch',secret:{secretName:'caller'}},
+ ]){const changed=structuredClone(d);mutate(changed.spec.template.spec);assert.throws(()=>capture(changed),/ControllerSourceMismatch/);}
+});
 test('standard Pod service-account injection and scheduling defaults are narrowly accepted',()=>{
  const f=fixture();assert.equal(controllerTemplateMatches(injected(f.source.approvedTemplate),f.source.approvedTemplate,{pod:true}),true);
  const a=structuredClone(f.source.approvedTemplate);a.spec.nodeName='node-a';assert.equal(controllerTemplateMatches(injected(a),a,{pod:true}),true);
