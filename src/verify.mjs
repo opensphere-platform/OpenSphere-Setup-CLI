@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import net from 'node:net';
 import {verifyPublicConsoleEndpoint} from './console-endpoint-verification.mjs';
 import { kubectl } from './process.mjs';
+import { verifyOfficialSkills } from './official-skills-verification.mjs';
 import { verifyKnowledgeDelivery } from './knowledge-delivery.mjs';
 import knowledgeInstallation from './knowledge-installation.cjs';
 import {
@@ -120,6 +121,7 @@ const WORKLOADS = Object.freeze([
   { component: 'consoleApi', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-api', container: 'api' },
   { component: 'extensionController', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-extension-controller', container: 'controller' },
   { component: 'osaaGateway', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-osaa-gateway', container: 'gateway' },
+  { component: 'r2d2HermesWorker', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-osaa-gateway', container: 'hermes-worker' },
   { component: 'osdst', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-osdst', container: 'osdst' },
   { artifact: 'osShellControl', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-shell-api', container: 'api' },
   { artifact: 'osShellControl', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-shell-gateway', container: 'gateway' },
@@ -139,6 +141,12 @@ const WORKLOADS = Object.freeze([
   { component: 'console', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console', container: 'shell' },
   { artifact: 'consoleIndexContent', ownerComponent: 'console', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console', container: 'console-index-content', initContainer: true }
 ]);
+
+// Read-only view of the runtime workload/container that represents each
+// governed release image in verifyWorkloads().
+export function releaseWorkloadSpecs() {
+  return WORKLOADS.map((spec) => ({ ...spec }));
+}
 
 function getJson(args) {
   return JSON.parse(kubectl([...args, '-o', 'json'], { capture: true }));
@@ -204,8 +212,22 @@ export function readBeszelBootstrapHistory(lock) {
     allowLegacyComponentSet: true, allowInstalledAgentIdentityCutover: true
   });
   if (stored.releaseDigest !== lock.releaseDigest) throw new Error('Installation changed before bootstrap evidence capture');
-  return captureBeszelBootstrapHistory(stored, JSON.parse(record.data?.['state.json'] ?? '{}'),
+  return captureBeszelBootstrapHistory(stored, verifiedStateBeforeClaim(JSON.parse(record.data?.['state.json'] ?? '{}'), lock),
     readRecordedInstallationEvidence(), record.metadata.uid);
+}
+
+// 2026-09-27 localhost case 2c: an upgrade claim replaces a Ready state's verification with
+// transition.previousVerifiedAt. The bootstrap Job is deleted a day after it finishes, so completing
+// that same release could no longer prove it and every claim-stage stop older than a day was a dead
+// end. The proof binds through the verification the record held immediately before the claim; the
+// claim changed no workload, and all current runtime checks still run.
+export function verifiedStateBeforeClaim(state, lock) {
+  const transition = state?.transition;
+  if (state?.phase === 'Ready' || !['Installing', 'Failed'].includes(state?.phase) || transition?.previousState !== 'Ready'
+    || state.releaseDigest !== lock.releaseDigest || transition.previousReleaseDigest !== lock.releaseDigest
+    || typeof transition.previousVerifiedAt !== 'string') return state;
+  return { phase: 'Ready', releaseDigest: lock.releaseDigest,
+    verification: { evidenceConfigMap: 'opensphere-installation-evidence', verifiedAt: transition.previousVerifiedAt } };
 }
 
 function readRecordedInstallationEvidence() {
@@ -897,8 +919,12 @@ export async function verifyInstallation(lock, {
   bootstrapHistory = null,
   onProgress = () => {}
 } = {}) {
-  if (!['strict', 'rollback'].includes(mode)) throw new Error(`Unsupported installation verification mode: ${mode}`);
-  const allowLegacyComponentSet = mode === 'rollback';
+  if (!['strict', 'rollback', 'installed'].includes(mode)) throw new Error(`Unsupported installation verification mode: ${mode}`);
+  // 'installed' verifies the release the installation record already names, as recorded (verify,
+  // --complete-installation, a same-release upgrade). Like a rollback baseline it may predate a
+  // component this Setup governs now (2026-09-27: the pre-worker record could not be verified at
+  // all). A newly installed target stays 'strict'.
+  const allowLegacyComponentSet = mode === 'rollback' || mode === 'installed';
   validateLock(lock, { allowLegacyComponentSet });
   if (requireRecoveryDrill) {
     throw new Error('Supabase/Gitea off-backbone integrated recovery drill is not implemented; promotion verification fails closed');
@@ -929,6 +955,7 @@ export async function verifyInstallation(lock, {
   const beszel = await verifyBeszel(lock, config.installationState, recordedEvidence, historicalBootstrapVerified);
   const consoleApi = await verifyConsoleApi();
   const knowledgeDelivery = verifyKnowledgeDelivery(lock);
+  const officialSkills = await verifyOfficialSkills({ withService, expected: lock.components?.osaaGateway?.officialSkills });
   const evidence = {
     channel: lock.channel,
     releaseDigest: lock.releaseDigest,
@@ -946,7 +973,8 @@ export async function verifyInstallation(lock, {
     beszel,
     consoleApi,
     publicEndpoint,
-    knowledgeDelivery
+    knowledgeDelivery,
+    officialSkills
   };
   recordInstallationEvidence(evidence);
   return evidence;

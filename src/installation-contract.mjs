@@ -11,7 +11,12 @@ export const MANAGED_NAMESPACES = Object.freeze([
   'opensphere-shell-sessions',
   'opensphere-hiss-validation',
   'opensphere-system',
-  'opensphere-foundation'
+  'opensphere-foundation',
+  // Cluster Manager Kubernetes operation records (Console extension-controller manifest, 2026-09-27).
+  'opensphere-kubernetes-operations',
+  // Foundation secure owner input custody: draft ConfigMaps and immutable credential Secrets entered through
+  // Console's PFSS Provider secure-input route (Console foundation-bootstrap.json and deploy.yaml, 2026-10-02).
+  'opensphere-foundation-secure-input'
 ]);
 
 export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
@@ -24,6 +29,9 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     "foundationbindings.foundation.opensphere.io",
     "identitydirectoryclaims.foundation.opensphere.io",
     "identitydirectorybindings.foundation.opensphere.io",
+    // External directory connection and authority (Foundation PR #26; Console foundation-bootstrap.json, 2026-10-02).
+    "directoryconnections.foundation.opensphere.io",
+    "directoryauthorities.foundation.opensphere.io",
     "postgresclaims.provisioning.opensphere.io",
     "addoncapabilities.catalog.opensphere.io",
     "addonofferings.catalog.opensphere.io",
@@ -36,6 +44,9 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     'clusterrolebinding/opensphere-cluster-manager-read',
     'clusterrole/opensphere-platform-support-core-observer',
     'clusterrolebinding/opensphere-platform-support-core-observer',
+    // Cluster Manager's reviewed Kubernetes workload operations (Console extension-controller manifest, 2026-09-27).
+    'clusterrole/opensphere-cluster-manager-workload-operator',
+    'clusterrolebinding/opensphere-cluster-manager-workload-operator',
     'clusterrole/opensphere-platform-support-runtime',
     'clusterrolebinding/opensphere-platform-support-runtime',
     ...CEPH_PREPARATION_CLUSTER_RBAC,
@@ -45,6 +56,9 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     "clusterrolebinding/opensphere-foundation-profile-reader",
     "clusterrole/opensphere-foundation-contract-controller",
     "clusterrolebinding/opensphere-foundation-contract-controller",
+    // Console-group grant for Foundation owner-API impersonation (Console 69bd666e, 2026-10-02).
+    "clusterrole/opensphere-foundation-console-admins",
+    "clusterrolebinding/opensphere-foundation-console-admins",
     'clusterrolebinding/opensphere-extension-controller-cli-downloads',
     'clusterrolebinding/opensphere-registry',
     'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
@@ -69,7 +83,9 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     'validatingadmissionpolicybinding/opensphere-console-image-integrity-cronjob',
     'validatingadmissionpolicy/opensphere-console-image-integrity-cronjob',
     'validatingadmissionpolicybinding/opensphere-shell-runtime-template-v1',
-    'validatingadmissionpolicy/opensphere-shell-runtime-template-v1'
+    'validatingadmissionpolicy/opensphere-shell-runtime-template-v1',
+    'validatingadmissionpolicybinding/opensphere-cluster-manager-workload-guard',
+    'validatingadmissionpolicy/opensphere-cluster-manager-workload-guard'
   ])
 });
 

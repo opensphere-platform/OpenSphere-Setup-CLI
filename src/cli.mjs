@@ -2,6 +2,12 @@
 import setupPackage from '../package.json' with { type: 'json' };
 import {prepareInstalledHiss} from './prepare-installed-hiss.mjs';
 import {prepareCephExecutionProfile} from './ceph-prerequisites.mjs';
+import {createPsssArgoRbacClient} from './psss-argocd-rbac-transition.mjs';
+import {planPsssArgoPreparation,applyPsssArgoPreparation} from './psss-argocd-preparation.mjs';
+import {planPsssCrossplaneFence,applyPsssCrossplaneFence,createPsssCrossplaneFenceClient} from './psss-crossplane-fence-transition.mjs';
+import {planPsssCrossplaneDrain,applyPsssCrossplaneDrain,createPsssCrossplaneDrainClient} from './psss-crossplane-drain-transition.mjs';
+import {planPsssCrossplaneWriterTransfer,applyPsssCrossplaneWriterTransfer,
+  createPsssCrossplaneWriterTransferClient} from './psss-crossplane-writer-transition.mjs';
 import {createGitHubRegistryAuth} from './github-registry-auth.mjs';
 import {GITHUB_OAUTH_CLIENT_ID} from './github-oauth-app.mjs';
 import './portable-runtime.mjs';
@@ -15,6 +21,7 @@ import {
   preflightReleaseArtifacts,
   readInstallationLock,
   readInstallationRecord,
+  readMigrationLedger,
   readReleaseInventory,
   uninstallManagedInstallation,
   upgrade
@@ -140,7 +147,7 @@ function help() {
   console.log(`OpenSphere Setup CLI ${setupPackage.version}
 
 Usage:
-  opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>]
+  opensphere-setup resolve --release <edge|candidate|stable> [--lock <file>] [--anchor local-<12 hex>]
       [--registry-username <github-login> --registry-token-stdin]
   opensphere-setup preflight --release <candidate|stable> --console <https-origin>
       --recovery-target-secret <namespace/name> --shell-tls-secret <namespace/name>
@@ -161,10 +168,23 @@ Usage:
        [--registry-username <github-login> --registry-token-stdin]
        [--no-open-browser] [--trust-local-ca]
        [--non-interactive --yes --console <origin> --storage-class <name>]
+  opensphere-setup prepare-psss-argocd --context <kube-context> --cluster-uid <kube-system-uid>
+      --console <https-origin> --channel edge [--kubectl-bin <path> --kubeconfig <path>]
+      [--apply --plan-revision <sha256> --reviewed-at <ISO-8601> --reason <text>]
+  opensphere-setup prepare-psss-crossplane-fence --context <kube-context> --cluster-uid <kube-system-uid>
+      --console <https-origin> --channel edge [--kubectl-bin <path> --kubeconfig <path>]
+      [--apply --plan-revision <sha256> --reviewed-at <ISO-8601> --reason <text>]
+  opensphere-setup prepare-psss-crossplane-drain --context <kube-context> --cluster-uid <kube-system-uid>
+      --console <https-origin> --channel edge [--kubectl-bin <path> --kubeconfig <path>]
+      [--apply --plan-revision <sha256> --reviewed-at <ISO-8601> --reason <text>]
+  opensphere-setup transfer-psss-crossplane-writer --context <kube-context> --cluster-uid <kube-system-uid>
+      --console <https-origin> --channel edge [--kubectl-bin <path> --kubeconfig <path>]
+      [--apply --plan-revision <sha256> --reviewed-at <ISO-8601> --reason <text>]
   opensphere-setup upgrade --release <edge|candidate|stable> [--lock <verified-lock-file>]
       [--context <kube-context>] [--storage-class <name>] [--console <https-origin>]
       [--registry-username <github-login> --registry-token-stdin]
       [--repair-plan | --forward-repair <reviewed-installation-record-sha256>]
+      [--one-way-recovery-plan | --one-way-recovery <reviewed-installation-record-sha256>]
   opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
       [--complete-installation]
   opensphere-setup recovery-drill --component <supabase|gitea> --manifest-key <s3-object-key>
@@ -225,6 +245,15 @@ async function main() {
     && (command !== 'upgrade' || !explicitLock || (repairPlan && forwardRepairRecordDigest !== undefined))) {
     throw Error('Use upgrade --lock with either --repair-plan or --forward-repair <reviewed-record-sha256>');
   }
+  // Re-review F2: a Failed, Installing or stale installation past a one-way migration is recovered
+  // forward only, bound to the installation record the operator reviewed.
+  const oneWayRecoveryPlan = hasOption('--one-way-recovery-plan');
+  const oneWayRecoveryRecordDigest = option('--one-way-recovery', undefined);
+  if ((oneWayRecoveryPlan || oneWayRecoveryRecordDigest !== undefined)
+    && (command !== 'upgrade' || !explicitLock || (oneWayRecoveryPlan && oneWayRecoveryRecordDigest !== undefined)
+      || repairPlan || forwardRepairRecordDigest !== undefined)) {
+    throw Error('Use upgrade --lock with either --one-way-recovery-plan or --one-way-recovery <reviewed-record-sha256>, not with forward repair');
+  }
   const context = option('--context', '');
   const suppliedConsoleUrl = hasOption('--console') ? normalizeConsoleUrl(option('--console', '')) : undefined;
   const authEnvironment = hasOption('--auth-environment') ? option('--auth-environment', '') : undefined;
@@ -258,6 +287,81 @@ async function main() {
     if(!target.consoleUrl)throw new Error(`No installed Console is recorded in context ${target.context}; pass --console-url`);
     const result=prepareCephExecutionProfile(target,{apply:hasOption('--apply')});
     console.log(JSON.stringify(result,null,2));return;
+  }
+  if (command === 'prepare-psss-argocd') {
+    if(!context||!suppliedConsoleUrl||!hasOption('--cluster-uid'))
+      throw new Error('PSSS Argo preparation requires explicit --context, --cluster-uid and --console');
+    const scope={context,clusterUid:option('--cluster-uid',''),consoleUrl:suppliedConsoleUrl,channel:option('--channel','edge')};
+    const client=createPsssArgoRbacClient({context,kubectl:option('--kubectl-bin','kubectl'),kubeconfig:option('--kubeconfig','')});
+    if(!hasOption('--apply')){
+      if(['--plan-revision','--reviewed-at','--reason'].some(hasOption))
+        throw new Error('Apply review options require --apply');
+      console.log(JSON.stringify(await planPsssArgoPreparation(scope,{client}),null,2));return;
+    }
+    const reason=option('--reason','');
+    if(reason.trim().length<8||reason.length>500)throw new Error('PSSS Argo authority change requires an 8–500 character reason');
+    const result=await applyPsssArgoPreparation(scope,{client,planRevision:option('--plan-revision',''),
+      reviewedAt:option('--reviewed-at',''),onProgress:item=>console.error(`[준비] ${item.resource} ${item.state}`)});
+    console.log(JSON.stringify({...result,reason},null,2));return;
+  }
+  if (command === 'prepare-psss-crossplane-fence') {
+    if(!context||!suppliedConsoleUrl||!hasOption('--cluster-uid'))
+      throw new Error('PSSS Crossplane fence preparation requires explicit --context, --cluster-uid and --console');
+    const scope={context,clusterUid:option('--cluster-uid',''),consoleUrl:suppliedConsoleUrl,
+      channel:option('--channel','edge')};
+    const client=createPsssCrossplaneFenceClient({context,kubectl:option('--kubectl-bin','kubectl'),
+      kubeconfig:option('--kubeconfig','')});
+    if(!hasOption('--apply')){
+      if(['--plan-revision','--reviewed-at','--reason'].some(hasOption))
+        throw new Error('Apply review options require --apply');
+      console.log(JSON.stringify(await planPsssCrossplaneFence(scope,{client}),null,2));return;
+    }
+    const reason=option('--reason','');
+    if(reason.trim().length<8||reason.length>500)
+      throw new Error('PSSS Crossplane fence change requires an 8–500 character reason');
+    const result=await applyPsssCrossplaneFence(scope,{client,planRevision:option('--plan-revision',''),
+      reviewedAt:option('--reviewed-at',''),
+      onProgress:item=>console.error(`[준비] ${item.resource} ${item.state}`)});
+    console.log(JSON.stringify({...result,reason},null,2));return;
+  }
+  if (command === 'prepare-psss-crossplane-drain') {
+    if(!context||!suppliedConsoleUrl||!hasOption('--cluster-uid'))
+      throw new Error('PSSS Crossplane drain requires explicit --context, --cluster-uid and --console');
+    const scope={context,clusterUid:option('--cluster-uid',''),consoleUrl:suppliedConsoleUrl,
+      channel:option('--channel','edge')};
+    const client=createPsssCrossplaneDrainClient({context,kubectl:option('--kubectl-bin','kubectl'),
+      kubeconfig:option('--kubeconfig','')});
+    if(!hasOption('--apply')){
+      if(['--plan-revision','--reviewed-at','--reason'].some(hasOption))
+        throw new Error('Apply review options require --apply');
+      console.log(JSON.stringify(await planPsssCrossplaneDrain(scope,{client}),null,2));return;
+    }
+    const reason=option('--reason','');
+    if(reason.trim().length<8||reason.length>500)
+      throw new Error('PSSS Crossplane drain requires an 8–500 character reason');
+    const result=await applyPsssCrossplaneDrain(scope,{client,planRevision:option('--plan-revision',''),
+      reviewedAt:option('--reviewed-at','')});
+    console.log(JSON.stringify({...result,reason},null,2));return;
+  }
+  if (command === 'transfer-psss-crossplane-writer') {
+    if(!context||!suppliedConsoleUrl||!hasOption('--cluster-uid'))
+      throw new Error('PSSS writer transfer requires explicit --context, --cluster-uid and --console');
+    const scope={context,clusterUid:option('--cluster-uid',''),consoleUrl:suppliedConsoleUrl,
+      channel:option('--channel','edge')};
+    const client=createPsssCrossplaneWriterTransferClient({context,
+      kubectl:option('--kubectl-bin','kubectl'),kubeconfig:option('--kubeconfig','')});
+    if(!hasOption('--apply')){
+      if(['--plan-revision','--reviewed-at','--reason'].some(hasOption))
+        throw new Error('Apply review options require --apply');
+      console.log(JSON.stringify(await planPsssCrossplaneWriterTransfer(scope,{client}),null,2));return;
+    }
+    const reason=option('--reason','');
+    if(reason.trim().length<8||reason.length>500)
+      throw new Error('PSSS writer transfer requires an 8–500 character reason');
+    const result=await applyPsssCrossplaneWriterTransfer(scope,{client,
+      planRevision:option('--plan-revision',''),reviewedAt:option('--reviewed-at',''),
+      onProgress:item=>console.error(`[이전] ${item.resource} ${item.state}`)});
+    console.log(JSON.stringify({...result,reason},null,2));return;
   }
   if (['--registry-auth','--github-client-id'].some(hasOption) && !['resolve','doctor','bootstrap','upgrade'].includes(command)) {
     throw new Error('Registry authentication options are accepted only by resolve, doctor, bootstrap and upgrade; status queries Kubernetes only');
@@ -331,7 +435,10 @@ async function main() {
     const sourceArtifactCredential = takeSourceArtifactCredential();
     validateChannel(channel);
     const registryCredentials = await registryCredentialsOption();
-    const lock = await resolveInstallationRelease(channel, { sourceArtifactCredential, registryCredentials });
+    // --anchor local-<12 hex>: resolve a localhost edge build from its immutable tag.
+    const anchorReference = option('--anchor', undefined);
+    const lock = await resolveInstallationRelease(channel, { sourceArtifactCredential, registryCredentials,
+      ...(anchorReference ? { anchorReference } : {}) });
     await writeLock(lockPath, lock);
     console.log(`[완료] ${channel} 채널을 ${lock.releaseDigest}로 잠금`);
     console.log(`Lock: ${lockPath}`);
@@ -536,7 +643,8 @@ async function main() {
     const registryCredentials = await registryCredentialsOption();
     assertKubectl();
     const targetPlatforms = readNodePlatforms();
-    const migrated = (repairPlan || forwardRepairRecordDigest !== undefined) ? false : await migrateLegacyInstallationLock();
+    const recoveryMode = oneWayRecoveryPlan || oneWayRecoveryRecordDigest !== undefined;
+    const migrated = (repairPlan || forwardRepairRecordDigest !== undefined || recoveryMode) ? false : await migrateLegacyInstallationLock();
     if (migrated) console.log(`[마이그레이션] 기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
     const installed = readInstallationLock();
     if (!installed) throw new Error('No managed OpenSphere installation lock was found');
@@ -561,13 +669,28 @@ async function main() {
       console.log('[검토] 조회만 완료. 이전 버전 자동 롤백·자원 삭제 없음. 실행하려면 이 설치 기록 digest로 --forward-repair를 명시하세요.');
       return;
     }
+    if (oneWayRecoveryPlan) {
+      // Read only: the record to review, its state and where the database stands. No change.
+      const record = readInstallationRecord();
+      const state = JSON.parse(record.data?.['state.json'] ?? 'null');
+      let ledger;
+      try { const rows = readMigrationLedger(); ledger = { applied: rows.length, last: rows.at(-1)?.slice(0, 2) ?? null }; }
+      catch (error) { ledger = { unreadable: error.message }; }
+      console.log(JSON.stringify({ mode: 'one-way-recovery', installationRecordSha256: installationRecordDigest(record),
+        installedReleaseDigest: installed.releaseDigest, targetReleaseDigest: target.releaseDigest,
+        state: state ? { phase: state.phase, failureCode: state.failureCode ?? null, transition: state.transition ?? null } : null,
+        ledger }, null, 2));
+      console.log('[검토] 조회만 완료. 복구는 이전 release로 되돌리지 않고 대상으로만 진행합니다. 실행하려면 이 설치 기록 digest로 --one-way-recovery를 명시하세요.');
+      return;
+    }
     const result = await upgrade(installed, target, {
       storageClass: option('--storage-class', undefined),
       consoleUrl: suppliedConsoleUrl,
       registryCredentials,
       sourceArtifactCredential,
       requiredPlatforms: targetPlatforms,
-      forwardRepairRecordDigest
+      forwardRepairRecordDigest,
+      oneWayRecoveryRecordDigest
     });
     console.log(result.changed ? '[완료] release upgrade 트랜잭션 검증' : '[재사용] 이미 요청 release가 설치됨');
     console.log('[안내] 호스트 os CLI는 변경하지 않았습니다. 필요하면 install-cli를 별도로 실행하세요.');
@@ -583,7 +706,8 @@ async function main() {
     if (!lock) throw new Error('No managed OpenSphere installation lock was found');
     const evidence = await (complete ? completeInstallationVerification : verifyInstallation)(lock, {
       requireZeroRestarts: hasOption('--require-zero-restarts'),
-      consoleUrl: suppliedConsoleUrl
+      consoleUrl: suppliedConsoleUrl,
+      ...(complete ? {} : { mode: 'installed' })
     });
     console.log(`[완료] ${evidence.channel} ${evidence.releaseDigest} 검증`);
     console.log(`${evidence.podCount} pods / ${evidence.serviceCount} services / runtime images locked`);

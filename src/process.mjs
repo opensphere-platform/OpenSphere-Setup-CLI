@@ -1,4 +1,7 @@
 import { spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // spawnSync의 maxBuffer 기본값은 1MB다. upgrade 트랜잭션은 전체 release manifest를
 // 한 번에 apply하고 그 출력을 캡처하므로 이 한계를 넘기면 ENOBUFS로 죽는다. 더 나쁜 것은
@@ -22,13 +25,32 @@ export function run(command, args, options = {}) {
   if (result.error) throw result.error;
   if (result.status !== 0) {
     const detail = capture ? `\n${result.stderr || result.stdout}` : '';
-    throw new Error(`${command} ${args.join(' ')} failed with exit code ${result.status}${detail}`);
+    // exitStatus/stderr let a caller report how a call ended without repeating its arguments.
+    throw Object.assign(new Error(`${command} ${args.join(' ')} failed with exit code ${result.status}${detail}`),
+      { exitStatus: result.status, stderr: capture ? result.stderr ?? '' : undefined });
   }
   return capture ? result.stdout.trim() : '';
 }
 
 export function kubectl(args, options) {
   const context = process.env.OPENSPHERE_KUBE_CONTEXT;
+  // Windows CreateProcess limits the complete command line to 32767 characters.
+  // Installation CAS patches contain the full release/BOM and can exceed it.
+  // Transport the identical patch in a private temporary file; retain UID/RV tests
+  // and confirm the response exactly as before. Never retry an ambiguous write.
+  const patchIndex = args.indexOf('-p');
+  if (process.platform === 'win32' && args.includes('patch') && patchIndex >= 0
+      && args[patchIndex + 1]?.length > 8000) {
+    const directory = mkdtempSync(join(tmpdir(), 'opensphere-kubectl-patch-'));
+    const file = join(directory, 'patch.json');
+    try {
+      writeFileSync(file, args[patchIndex + 1], { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      const transported = [...args.slice(0, patchIndex), '--patch-file', file, ...args.slice(patchIndex + 2)];
+      return run('kubectl', context ? ['--context', context, ...transported] : transported, options);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
   return run('kubectl', context ? ['--context', context, ...args] : args, options);
 }
 

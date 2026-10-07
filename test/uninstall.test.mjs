@@ -39,6 +39,8 @@ test('managed cluster RBAC owns every cluster authority installed by Console boo
     'clusterrolebinding/opensphere-cluster-manager-read',
     'clusterrole/opensphere-platform-support-core-observer',
     'clusterrolebinding/opensphere-platform-support-core-observer',
+    'clusterrole/opensphere-cluster-manager-workload-operator',
+    'clusterrolebinding/opensphere-cluster-manager-workload-operator',
     'clusterrole/opensphere-platform-support-runtime',
     'clusterrolebinding/opensphere-platform-support-runtime',
     'clusterrolebinding/opensphere-ceph-preparation-worker',
@@ -51,6 +53,8 @@ test('managed cluster RBAC owns every cluster authority installed by Console boo
     'clusterrolebinding/opensphere-foundation-profile-reader',
     'clusterrole/opensphere-foundation-contract-controller',
     'clusterrolebinding/opensphere-foundation-contract-controller',
+    'clusterrole/opensphere-foundation-console-admins',
+    'clusterrolebinding/opensphere-foundation-console-admins',
     'clusterrolebinding/opensphere-extension-controller-cli-downloads',
     'clusterrolebinding/opensphere-registry',
     'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
@@ -82,7 +86,9 @@ test('managed uninstall owns only Console bootstrap admission policies', () => {
     'validatingadmissionpolicybinding/opensphere-console-image-integrity-cronjob',
     'validatingadmissionpolicy/opensphere-console-image-integrity-cronjob',
     'validatingadmissionpolicybinding/opensphere-shell-runtime-template-v1',
-    'validatingadmissionpolicy/opensphere-shell-runtime-template-v1'
+    'validatingadmissionpolicy/opensphere-shell-runtime-template-v1',
+    'validatingadmissionpolicybinding/opensphere-cluster-manager-workload-guard',
+    'validatingadmissionpolicy/opensphere-cluster-manager-workload-guard'
   ]);
 });
 

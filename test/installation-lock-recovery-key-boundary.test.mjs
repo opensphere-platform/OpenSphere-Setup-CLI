@@ -50,6 +50,19 @@ function protect(path, userProfile) {
   });
 }
 
+function restoreTestFileForCleanup(path) {
+  const script = '$ErrorActionPreference="Stop";'
+    + 'if (-not (Test-Path -LiteralPath $env:RECOVERY_TEST_KEY)) { return };'
+    + '$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User;'
+    + "& icacls.exe $env:RECOVERY_TEST_KEY /grant ('*' + $sid.Value + ':(F)') | Out-Null;"
+    + 'if ($LASTEXITCODE -ne 0) { throw "Failed to restore test-file delete rights" }';
+  execFileSync('pwsh', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script], {
+    windowsHide: true,
+    env: { ...process.env, RECOVERY_TEST_KEY: path },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+}
+
 function mutateDirectoryAcl(path, mode) {
   const script = String.raw`
 $ErrorActionPreference='Stop'
@@ -109,7 +122,11 @@ $current=[Security.Principal.WindowsIdentity]::GetCurrent().User
 test('Windows recovery key helper enforces current-user-only .opensphere/keys custody', async (t) => {
   if (process.platform !== 'win32') return t.skip('Windows-only edge key custody');
   const root = await mkdtemp(join(tmpdir(), 'opensphere-recovery-key-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  const protectedFiles = [];
+  t.after(async () => {
+    for (const path of protectedFiles) restoreTestFileForCleanup(path);
+    await rm(root, { recursive: true, force: true });
+  });
   const keyRoot = join(root, '.opensphere', 'keys');
   const helperSource = readFileSync(helper, 'utf8');
   const prepareSource = readFileSync(prepareModule, 'utf8');
@@ -124,6 +141,7 @@ test('Windows recovery key helper enforces current-user-only .opensphere/keys cu
   const keyPath = join(keyRoot, 'edge-local-v1-p256.pem');
   await writeFile(keyPath, key);
   protect(keyPath, root);
+  protectedFiles.push(keyPath);
   const result = JSON.parse(invoke(keyPath, root));
   assert.equal(result.contract, 'opensphere.installation-lock.recovery-key-boundary/v1');
   assert.equal(result.keyId, 'opensphere-edge-local-v1');
@@ -131,6 +149,7 @@ test('Windows recovery key helper enforces current-user-only .opensphere/keys cu
   const outside = join(root, 'outside.pem');
   await writeFile(outside, key);
   protect(outside, root);
+  protectedFiles.push(outside);
   assert.throws(() => invoke(outside, root), /Command failed/u);
 
   const inherited = join(keyRoot, 'inherited.pem');

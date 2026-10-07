@@ -38,3 +38,18 @@ test('independent Knowledge mutation cannot bypass executor transition validatio
  const mutatedBase=structuredClone(base);mutatedBase.knowledge.sha256='0'.repeat(64);
  assert.throws(()=>validateReleaseTransition(mutatedBase,target),/digest/);
 });
+test('an integrated release cannot replace the installed Knowledge with an older, equal-version or missing package',()=>{
+ // Installed: the component record whose Knowledge a Console Knowledge release promoted (edge.7).
+ const installed=target;
+ const integrated=knowledge=>{const lock=structuredClone(base);if(knowledge)lock.knowledge=knowledge;else delete lock.knowledge;lock.releaseDigest=digest(lock);return lock;};
+ assert.throws(()=>validateReleaseTransition(installed,integrated(base.knowledge)),/Knowledge knowledge-v0\.1\.0-edge\.6, not newer than the installed knowledge-v0\.1\.0-edge\.7/);
+ assert.throws(()=>validateReleaseTransition(installed,integrated({...installed.knowledge,sha256:'8'.repeat(64)})),/not newer/);
+ assert.throws(()=>validateReleaseTransition(installed,integrated(null)),/would remove the installed knowledge-v0\.1\.0-edge\.7/);
+ const same=integrated(structuredClone(installed.knowledge));
+ assert.deepEqual(validateReleaseTransition(installed,same),same);
+ const newer=integrated({...installed.knowledge,version:'knowledge-v0.1.0-edge.8',sha256:'8'.repeat(64)});
+ assert.deepEqual(validateReleaseTransition(installed,newer),newer);
+ // A record without a Knowledge pointer keeps its admitted source baseline; nothing to compare.
+ const legacy=structuredClone(base);delete legacy.knowledge;legacy.releaseDigest=digest(legacy);
+ assert.doesNotThrow(()=>validateReleaseTransition(legacy,integrated(base.knowledge)));
+});

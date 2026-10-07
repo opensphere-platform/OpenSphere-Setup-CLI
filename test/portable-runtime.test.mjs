@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { delimiter, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
-import { activatePortableRuntime } from '../src/portable-runtime.mjs';
+import { activatePortableRuntime, archiver } from '../src/portable-runtime.mjs';
 
 const PACKAGER = resolve(import.meta.dirname, '..', 'scripts', 'package-portable-runtime.mjs');
 
@@ -86,7 +86,7 @@ test('platform packager emits the bundled Windows and Linux runtime layout', asy
       ], { encoding: 'utf8', windowsHide: true });
       assert.equal(packaged.status, 0, packaged.stderr);
 
-      const listed = spawnSync('tar', ['-tf', item.output], {
+      const listed = spawnSync(archiver(), ['-tf', item.output], {
         encoding: 'utf8',
         windowsHide: true
       });

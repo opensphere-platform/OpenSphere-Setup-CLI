@@ -4,9 +4,9 @@ Status: Supabase + Gitea + Beszel backbone, Setup CLI 0.5 target contract
 
 ## 결정
 
-OpenSphere 설치 입력은 mutable tag 목록이 아니라 Console anchor digest에 첨부된 서명 `OpenSphereReleaseBOM`이다. BOM은 한 source revision에서 빌드된 **18개 canonical component**를 하나의 원자적 release로 묶는다. 설치 lock은 같은 release tag와 source revision에 결속된 **3개 auxiliary artifact**도 반드시 보존한다.
+OpenSphere 설치 입력은 mutable tag 목록이 아니라 Console anchor digest에 첨부된 서명 `OpenSphereReleaseBOM`이다. BOM은 한 source revision에서 빌드된 **19개 canonical component**를 하나의 원자적 release로 묶는다(R2D2 worker 이전에 설치된 18개 lock은 upgrade·rollback 기준으로만 받는다). 설치 lock은 같은 release tag와 source revision에 결속된 **4개 auxiliary artifact**도 반드시 보존한다(Console anchor에 index 렌더러 계약 `io.opensphere.console-index-content`가 없는 이전 release는 `consoleIndexContent`를 뺀 3개).
 
-`integrated` lock은 BOM과 동일한 통합 release다. 로컬 `edge`의 영향을 받은 이미지만 다시 빌드하는 경우에는 `component` lock을 사용할 수 있다. 이 lock도 canonical 18개와 auxiliary 3개의 전체 목록을 갖는 완전한 설치 상태이며 부분 목록이 아니다. 다음 전이 증명을 release digest에 결속한다.
+`integrated` lock은 BOM과 동일한 통합 release다. 로컬 `edge`의 영향을 받은 이미지만 다시 빌드하는 경우에는 `component` lock을 사용할 수 있다. 이 lock도 canonical 19개와 auxiliary 4개의 전체 목록을 갖는 완전한 설치 상태이며 부분 목록이 아니다. 다음 전이 증명을 release digest에 결속한다.
 
 - `baseReleaseDigest`: 현재 클러스터에 설치된 직전 lock
 - `changedComponents`: 이번에 실제로 다시 빌드한 canonical component의 정렬된 집합
@@ -16,7 +16,19 @@ OpenSphere 설치 입력은 mutable tag 목록이 아니라 Console anchor diges
 
 component lock은 localhost `edge`의 **upgrade 전용** 계약이다. fresh bootstrap, `candidate`/`stable`, signed Release BOM 승격에는 사용할 수 없다. 실패하면 직전의 완전한 base lock과 사전 확보한 artifact로 rollback한 뒤 그 상태를 다시 검증한다.
 
-Canonical 18개:
+**되돌릴 수 없는 migration(2026-09-26, 검토 R1·재검토 F1–F3):** 한 방향 migration은 semantic key로 정한다(지금은 R2D2 task engine 전환 `console.osdst.task_engine_cutover`). 대상 release의 검증된 migration manifest에 그 key가 있으면 Setup은 갱신 전에 원장을 읽고, 원장이 대상 migration 사슬의 정확한 prefix인지(ID·key·계보·file hash·source revision·set digest·size) 확인한다. 못 읽거나 어긋나거나 대상보다 앞서면 워크로드·migration·설치 기록을 바꾸기 전에 멈춘다(namespace와 pull secret 보장은 그보다 앞서 멱등으로 실행된다).
+
+- **이미 지난 경우:** 원장에 한 방향 migration이 이미 있으면, 이전 release의 migration 소유 구성요소가 빌드된 검증된 manifest에 그 migration이 같은 ID·hash로 들어 있어야 이전 release를 rollback 대상으로 인정한다. 없거나 확인할 수 없으면 일반 갱신은 바꾸기 전에 멈춘다.
+- **일반 갱신의 출발점:** 설치 기록이 이전 release의 `Ready`일 때만 일반 갱신을 한다. `Failed`·`Installing`·알 수 없는 상태는 `verify --complete-installation`(같은 release) 또는 `upgrade --one-way-recovery`로 다룬다. 같은 release를 관측만 하는 갱신은 아무것도 설치하지 않고 `Failed`를 풀지 않는다.
+- **선점 기록:** 첫 변경 전에 설치 기록을 이전 release의 `Installing`과 `transition`(실행 ID, 이전·대상 digest, 이전 검증 시각, 한 방향 migration과 rollback 방침)으로 바꾼다. 이 실행의 모든 기록 쓰기는 uid·resourceVersion을 대조하고, 새 버전은 그 쓰기의 PATCH 응답이 보고한 것만 자기 것으로 삼는다(뒤의 GET으로 본 버전은 채택하지 않는다). 응답이 유실되거나 확인되지 않으면 소유권 불명으로 멈추고 명시적 복구로만 재개한다. 대상 설치, 검증 뒤, 정리(prune) 뒤, inventory 기록, rollback 설치·검증·정리 앞에서 소유권을 다시 확인한다. 다른 쓰기가 끼면 그 자리에서 멈추고 이미 한 일과 하지 않은 일을 오류에 남긴다. 이 대조는 설치 기록 ConfigMap을 지키며, 다른 객체(inventory·workload)가 그와 원자적으로 바뀐다는 뜻은 아니다. Console Knowledge 전달도 같은 규칙을 따른다: 첫 workload 변경 직전에 idle Ready 기록을 선점(Installing + `knowledgeUpdate` + `transition.mode: knowledge`)하고 자기 완료가 Ready를 쓸 때까지 유지하며, 다른 실행이 잡은 기록이면 멈춘다. Setup은 Knowledge 선점 위에서 일반 갱신·one-way 복구·검증 완료·localhost 전진 수선(`--repair-plan`/`--forward-repair`)을 하지 않는다. 전진 수선은 검토한 기록에서, 첫 변경 직전 재확인에서, 그리고 수선 기록 쓰기마다 Knowledge 선점을 거절한다. 검토한 기록 digest는 그 기록을 봤다는 증거일 뿐 Knowledge 작업의 종료나 양도가 아니다. 판정 함수(`claimStatus`, `isKnowledgeClaim`)는 Console의 `knowledge-installation.cjs` 계약에서 받은 사본을 쓴다.
+
+**공급자·소비자 적합성:** Console은 한 방향 migration을 `packages/contracts/runtime/one-way-migrations.json`에 선언하고, manifest의 ID·key·hash를 `test/fixtures/one-way-migrations-v1.json`으로 보낸다(`sync-one-way-migrations.mjs --setup-root`). `test/one-way-conformance.test.mjs`는 Setup이 인식하는 목록이 그 선언과 정확히 같은지 확인한다. 구 설치기가 이 release를 적용하지 못하게 막는 것은 RKE2·edge 전에 따로 닫는다.
+- **실패 뒤:** 원장을 다시 읽는다. 이번 실행이 건너려던 한 방향 migration이 적용됐거나, 원장을 읽을 수 없거나, 사슬과 어긋나거나, 전에 있던 행이 사라졌으면 이전 release를 설치하지 않고 옛 lock을 복원하지 않으며 자원을 정리하지 않는다. 대상 lock·inventory를 두고 기록을 `Failed`(`one-way-migration-recovery-required` 또는 `one-way-migration-state-unknown`)와 `transition.outcome`으로 남긴다. 적용되지 않았음이 확인된 실패만 rollback한다.
+- **통합 rollback의 migration 사슬:** 통합 release의 rollback은 이전 release의 설치기를 다시 돌리고, 그 설치기는 받은 사슬에서 원장에 없는 migration을 모두 적용한다. 대상 사슬을 주면 한 방향 migration 앞의 rollback이 그 migration을 적용해 버린다. 그래서 대상에 아직 적용되지 않은 한 방향 migration이 있으면, 첫 변경 전에 이전 release를 **자기 사슬**로 따로 준비하고 그 사슬이 지금 원장과 정확히 같은지 확인한다. 판정은 한 곳에서 한다: rollback 준비가 쓰는 것과 같은 출처·검증으로 읽은 사슬(`readRollbackMigrationChain`)을 원장과 대조해 `fits`(적용할 것 없음)·`would-apply`(설치기가 더 적용함)·`database-ahead`(그 release가 DB를 받지 못함)·`diverged`로 가른다. `fits`가 아니면 이유를 적고 바꾸기 전에 멈춘다. 준비된 rollback의 사슬이 판정한 사슬과 다르면 역시 멈춘다. 사슬이나 원장을 읽지 못하면 판정이 아니라 별도 오류로 멈춘다. migration 소유 구성요소들의 사슬(`readReleaseMigrationManifests`)은 "이전 release가 이미 지난 한 방향 migration을 포함하는가"라는 다른 질문에만 쓴다. 실패 뒤 원장이 시작 때와 같으면 그 준비로 rollback한다. 설치기는 아무 migration도 적용하지 않는다. 대상 migration 일부가 들어갔지만 한 방향 migration은 들어가지 않았으면, 어느 설치기도 그것을 건너지 않고는 돌아갈 수 없으므로 rollback하지 않는다. 대상을 두고 `Failed`(`partial-migration-recovery-required`, `transition.outcome.appliedMigrations`·`reason`)로 남기며, 복구는 `--one-way-recovery`로 앞으로만 간다. component release의 rollback은 전처럼 migration을 적용하지 않는다(`applyMigrations: false`).
+- **복구:** `upgrade --lock <대상> --one-way-recovery-plan`으로 기록 digest·상태·원장을 조회하고, 검토한 digest로 `--one-way-recovery`를 실행한다. 통합 release만 대상이다. 복구는 이전 release를 가져오거나 설치하지 않고 대상으로만 간다. 다시 실패해도 되돌리지 않고 `Failed`로 남는다. 기록이 `Ready`이고 그 release가 DB와 맞으면 복구를 거부한다(일반 갱신을 쓴다). 예외는 하나다. 대상에 대기 중인 한 방향 migration이 있는데 위의 판정이 `fits`가 아닌 구체적인 이유(`would-apply`·`database-ahead`·`diverged`)를 내면 일반 갱신은 바꾸기 전에 멈춘다. 이때만 `Ready`에서도 앞으로만 가는 복구를 받는다. 일반 갱신과 복구 허용은 같은 판정을 쓰므로 서로 상대 경로를 안내하며 막히지 않는다. 사슬을 읽지 못한 것은 이유가 아니므로 복구도 받지 않는다.
+- **중단된 실행:** 기록의 `transition`이 다른 대상으로 가던 중이고 그 한 방향 migration이 원장에 있거나 확인할 수 없으면 `verify --complete-installation`은 이전 release를 완료로 기록하지 않는다.
+
+Canonical 19개:
 
 ```text
 console
@@ -24,6 +36,7 @@ consoleApi
 extensionController
 registry
 osaaGateway
+r2d2HermesWorker
 osdst
 osaaGovernedAdapter
 notificationDispatcher
@@ -39,12 +52,15 @@ beszelAgent
 beszelBootstrap
 ```
 
-Auxiliary 3개:
+`r2d2HermesWorker`(`opensphere-console-r2d2-hermes-worker`)는 `opensphere-console-osaa-gateway` Deployment의 `hermes-worker` sidecar다. Setup은 Console 원본에 `__OPENSPHERE_R2D2_HERMES_WORKER_IMAGE__` 자리가 있을 때만 이 digest를 렌더링하고, native installer에는 lock에 이 구성요소가 있을 때만 `-R2d2HermesWorkerImage`를 넘긴다. 이 구성요소가 없는 기존 18개 lock은 설치된 upgrade/rollback 기준으로만 받는다. 기존 설치에는 integrated upgrade(`upgrade --release edge` 또는 명시 `--lock`)로 추가하며, component lock으로는 추가할 수 없다.
+
+Auxiliary 4개:
 
 ```text
 cliArtifacts
 osShellControl
 osShellRuntime
+consoleIndexContent
 ```
 
 Setup fresh bootstrap은 canonical 중 13개 bootstrap core와 `cliArtifacts`만 배포한다. `osaaGateway`, `osdst`, `osaaGovernedAdapter`, `notificationDispatcher`, `recovery` 5개는 Console이 설치 후 활성화하는 available module이다. `osShellControl`과 `osShellRuntime`도 Console에서 활성화하지만, Console이 mutable `:edge`를 다시 해석하지 않도록 exact digest를 최초 installation lock에 보존한다.
@@ -74,14 +90,14 @@ Setup은 다음을 모두 만족해야 release lock을 반환한다.
 - Release BOM predicate: `https://opensphere.io/attestations/release-bom/v1`
 - candidate/stable/GA signer workflow와 OIDC issuer가 채널 trust root와 일치
 - source repository와 40자리 source revision 일치
-- canonical component 정확히 18개, 추가나 누락 없음
-- auxiliary artifact 정확히 3개, 추가나 누락 없음
+- canonical component 정확히 19개, 추가나 누락 없음(설치된 18개 lock은 upgrade·rollback 기준으로만)
+- auxiliary artifact 정확히 4개, 추가나 누락 없음(index 렌더러 계약이 없는 이전 release는 3개)
 - 모든 image가 공식 repository의 `@sha256:<64 hex>`
 - candidate/stable/GA canonical component에 provenance와 SPDX SBOM attestation
 - 지원 platform이 `linux/amd64`, `linux/arm64`
 - 계산한 canonical release digest가 BOM/lock과 일치
 
-component upgrade lock은 공통 항목과 함께 base digest, 동일 channel/trust, 동일한 canonical 18개와 auxiliary 3개 집합, 명시된 변경 외 byte-for-byte 계승을 추가 검증한다.
+component upgrade lock은 공통 항목과 함께 base digest, 동일 channel/trust, 동일한 canonical 19개와 auxiliary 4개 집합, 명시된 변경 외 byte-for-byte 계승을 추가 검증한다.
 
 Setup은 그 source revision에서 manifest, installer와 SQL migration을 받는다. manifest의 모든 image는 lock digest로 치환되며 tag-only, upstream registry 또는 미해결 placeholder가 남으면 설치를 중단한다. signed BOM의 migration manifest SHA-256, set digest와 latest global ID도 materialized Console API installer에 전달해 SQL bytes와 lineage를 fail-closed 검증한다.
 

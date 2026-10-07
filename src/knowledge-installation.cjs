@@ -63,4 +63,42 @@ function bootstrapProof(evidence,lock,state){
   images:Object.fromEntries(['beszelHub','beszelAgent','beszelBootstrap'].map(key=>[key,lock.components[key]?.image])),
   bootstrapJobComplete:true,agentPublicKeyPublished:true},lock);
 }
-module.exports={SCHEMA,same,validateBootstrap,validateDelivery,validateObservations,validateComponentEvidence,bootstrapProof};
+// Re-review N3 (2026-09-26): one claim rule for the installation record, shared by Setup and Console
+// Knowledge. A Knowledge release takes the record from an idle Ready base immediately before its
+// first workload change and holds it (Installing + knowledgeUpdate + transition) until its own
+// completion writes Ready. Setup starts an ordinary upgrade only from an idle Ready record, and a
+// Knowledge release refuses a record another run holds. Nothing expires by time.
+const TRANSITION='opensphere.knowledge-installation-transition/v1';
+const evidenceSha256=v=>'sha256:'+require('node:crypto').createHash('sha256').update(JSON.stringify(v)).digest('hex');
+function isKnowledgeClaim(state){return Boolean(state?.knowledgeUpdate)||state?.transition?.mode==='knowledge';}
+function ownsClaim(state,{base,target,operationId}){
+ const u=state?.knowledgeUpdate;
+ return u?.schema===TRANSITION&&u.operationId===operationId&&u.baseReleaseDigest===base.releaseDigest&&u.targetReleaseDigest===target.releaseDigest
+  &&state.transition?.mode==='knowledge'&&state.transition.runId===operationId;
+}
+// 'free': idle Ready base; 'own': this operation's claim (base or promoted target, or its completed Ready); 'busy': anything else.
+function claimStatus({installed,state,base,target,operationId}){
+ const idle=!state?.transition&&!state?.knowledgeUpdate;
+ if(same(installed,base)){
+  if(state?.phase==='Ready'&&state.releaseDigest===base.releaseDigest&&idle)return 'free';
+  return state?.phase==='Installing'&&state.releaseDigest===base.releaseDigest&&ownsClaim(state,{base,target,operationId})?'own':'busy';
+ }
+ if(same(installed,target)){
+  if(state?.phase==='Installing'&&state.releaseDigest===target.releaseDigest&&ownsClaim(state,{base,target,operationId}))return 'own';
+  if(state?.phase==='Ready'&&state.releaseDigest===target.releaseDigest&&idle
+   &&state.verification?.scope==='knowledge-component'&&state.verification.operationId===operationId)return 'own';
+ }
+ return 'busy';
+}
+function claimedState(state,{base,target,operationId,proof,baseEvidence,now}){
+ assert(state?.phase==='Ready'&&UUID.test(operationId||''));
+ const claimed={...state,phase:'Installing',releaseDigest:base.releaseDigest,observedAt:now,
+  knowledgeUpdate:{schema:TRANSITION,operationId,baseReleaseDigest:base.releaseDigest,targetReleaseDigest:target.releaseDigest,
+   historicalBootstrap:proof,baseEvidenceSha256:evidenceSha256(baseEvidence)},
+  transition:{runId:operationId,mode:'knowledge',previousReleaseDigest:base.releaseDigest,targetReleaseDigest:target.releaseDigest,
+   previousState:'Ready',previousVerifiedAt:state.verification?.verifiedAt??null,startedAt:now,rollback:'knowledge-owner'}};
+ delete claimed.verification;delete claimed.failureCode;
+ return claimed;
+}
+module.exports={SCHEMA,TRANSITION,same,validateBootstrap,validateDelivery,validateObservations,validateComponentEvidence,bootstrapProof,
+ evidenceSha256,isKnowledgeClaim,claimStatus,claimedState};

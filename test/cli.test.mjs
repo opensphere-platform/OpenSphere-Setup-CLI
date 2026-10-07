@@ -140,3 +140,18 @@ test('host CA trust option is explicit and restricted to bootstrap', () => {
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /explicit host trust change/);
 });
+
+test('one-way recovery needs an explicit lock and excludes forward repair and its own plan', () => {
+  const digest = `sha256:${'a'.repeat(64)}`;
+  for (const args of [
+    ['upgrade', '--release', 'edge', '--one-way-recovery-plan'],
+    ['upgrade', '--release', 'edge', '--one-way-recovery', digest],
+    ['upgrade', '--release', 'edge', '--lock', 'x.json', '--one-way-recovery-plan', '--one-way-recovery', digest],
+    ['upgrade', '--release', 'edge', '--lock', 'x.json', '--one-way-recovery', digest, '--forward-repair', digest],
+    ['verify', '--one-way-recovery', digest],
+  ]) {
+    const result = spawnSync(process.execPath, [CLI, ...args], { encoding: 'utf8', cwd: ROOT, windowsHide: true });
+    assert.notEqual(result.status, 0, args.join(' '));
+    assert.match(result.stderr, /--one-way-recovery-plan or --one-way-recovery|--repair-plan or --forward-repair/, args.join(' '));
+  }
+});

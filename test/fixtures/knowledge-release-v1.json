@@ -5,7 +5,7 @@
     "apiVersion": "release.opensphere.io/v1alpha1",
     "kind": "OpenSphereReleaseLock",
     "channel": "edge",
-    "releaseDigest": "sha256:1d1adb7d9371c625a3719e77d42b2a250d74b97cc91bf97a26d947212070fb2d",
+    "releaseDigest": "sha256:5a22d7557c987ea815f0d1ed2c28492387b048d920c3d4945f8ab98fe908026e",
     "resolvedAt": "2026-09-10T00:00:00Z",
     "source": "https://github.com/opensphere-platform/OpenSphere-console",
     "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -45,6 +45,12 @@
       "osaaGateway": {
         "repository": "opensphere-console-osaa-gateway",
         "image": "ghcr.io/opensphere-platform/opensphere-console-osaa-gateway@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "r2d2HermesWorker": {
+        "repository": "opensphere-console-r2d2-hermes-worker",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-r2d2-hermes-worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "registryCredentialsRequired": false
       },
@@ -168,7 +174,7 @@
     "apiVersion": "release.opensphere.io/v1alpha1",
     "kind": "OpenSphereReleaseLock",
     "channel": "edge",
-    "releaseDigest": "sha256:93ee509f5f981b2f9bcc60cfd1d3192179f4b35251be5f37d72d1a329bda2093",
+    "releaseDigest": "sha256:ddaa477098559f2b61d674f9e93f5df004757ed1511ec2de28b1b9c3acd904ea",
     "resolvedAt": "2026-09-10T00:00:00.000Z",
     "source": "https://github.com/opensphere-platform/OpenSphere-console",
     "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -181,7 +187,7 @@
       "gaEligible": false
     },
     "releaseScope": "component",
-    "baseReleaseDigest": "sha256:1d1adb7d9371c625a3719e77d42b2a250d74b97cc91bf97a26d947212070fb2d",
+    "baseReleaseDigest": "sha256:5a22d7557c987ea815f0d1ed2c28492387b048d920c3d4945f8ab98fe908026e",
     "changedComponents": [],
     "knowledge": {
       "schema": "opensphere.knowledge-lock/v1",
@@ -246,6 +252,12 @@
       "osaaGateway": {
         "repository": "opensphere-console-osaa-gateway",
         "image": "ghcr.io/opensphere-platform/opensphere-console-osaa-gateway@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "registryCredentialsRequired": false
+      },
+      "r2d2HermesWorker": {
+        "repository": "opensphere-console-r2d2-hermes-worker",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-r2d2-hermes-worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "registryCredentialsRequired": false
       },
