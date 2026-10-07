@@ -11,7 +11,9 @@ export const MODULES=Object.freeze([
  {id:'platform-support',repository:'ghcr.io/opensphere-platform/opensphere-platform-support',
   signatureIdentity:'opensphere-platform-support-local-v1',
   path:'/app/owner/crossplane-writer-handoff.cjs',
-  sha256:'788f3e4a460c48047e76bff96a06ddc191ff57bb2ef8d2a79a236f1e644d21f2'},
+  // Reviewed current PSSS guard (writer fence + suspended operation checks).
+  // Guard identity remains exact; registration/image/Pod verification is unchanged.
+  sha256:'87d72484be55fd4289faf6e24955ce800cb0f9dcac05cfaef816f6c2359a96a3'},
 ]);
 const cm={kind:'ServiceAccount',name:'opensphere-cluster-manager-runtime',namespace:'opensphere-console'};
 export const BINDINGS=Object.freeze([
