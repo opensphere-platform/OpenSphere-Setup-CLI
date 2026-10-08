@@ -102,3 +102,28 @@ test('a newly resolved integrated release still needs exactly its Gateway source
     assert.equal(h.knowledgeCalls.length,0);
   }
 });
+// RKE2 2026-10-08: after a component release (top sourceRevision aa14ba80) that left the extension
+// controller at 2593c607, an integrated upgrade re-materialized the previous release for rollback and
+// failed ControllerSourceMismatch: the controller manifest was fetched and captured at the top revision.
+test('a component release materializes the controller manifest at its own source revision', async () => {
+  const fetched=[],captured=[];
+  const top='b'.repeat(40),own='c'.repeat(40);
+  const src=source.slice(begin,end);
+  const ctx={
+    Set, Promise, KUBERNETES_EGRESS_SLOT, KNOWLEDGE_LOCK_PATH, join, EXTENSION_CONTROLLER_MANIFEST,
+    captureControllerSource:(input)=>{captured.push(input.sourceRevision);return {captured:true};},
+    isTargetConsoleRelease:()=>true,
+    foundationManifestSpecs:()=>[{path:EXTENSION_CONTROLLER_MANIFEST.path},{path:'apps/console-api/deploy.yaml'}],
+    foundationArtifactPaths:()=>[KNOWLEDGE_LOCK_PATH],
+    fetchReleaseArtifact:async(_lock,path,options={})=>{fetched.push([path,options.sourceRevision]);return path===KNOWLEDGE_LOCK_PATH?JSON.stringify(knowledge):'kind: Deployment\n';},
+    materializeKnowledgeDirectory:async()=>{},
+    kubectl:()=>'',discoverRegistryKubernetesEgress:()=>rules,renderRegistryKubernetesEgress,discoverConsoleApiCiliumPolicy,
+    renderManifest:(_l,_s,value)=>value,materializeSupabaseMigrationSet:async()=>({evidence:{}}),writeReleaseArtifact:async()=>{},
+  };
+  ctx.fetchFoundationInstallerArtifacts=vm.runInNewContext('('+dependencyBody+')',ctx);
+  const run=vm.runInNewContext('('+src+')',ctx);
+  await run({sourceRevision:top,knowledge,components:{extensionController:{sourceRevision:own}}},'/unused','standard','https://localhost:1114','development');
+  assert.deepEqual(fetched.find(([p])=>p===EXTENSION_CONTROLLER_MANIFEST.path),[EXTENSION_CONTROLLER_MANIFEST.path,own]);
+  assert.deepEqual(fetched.find(([p])=>p==='apps/console-api/deploy.yaml'),['apps/console-api/deploy.yaml',top]);
+  assert.deepEqual(captured,[own]);
+});

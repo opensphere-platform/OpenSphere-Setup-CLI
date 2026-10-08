@@ -1234,7 +1234,12 @@ async function materializeFoundationInstallers(
 ) {
   const target = isTargetConsoleRelease(lock);
   const manifestArtifacts = await Promise.all(foundationManifestSpecs(lock).map(async (spec) => {
-    const raw = await fetchReleaseArtifact(lock, spec.path, { sourceArtifactCredential });
+    // A component release keeps unchanged components at their own source revision. The extension
+    // controller manifest is fetched and captured at that revision, as the component path does;
+    // for an integrated release it equals lock.sourceRevision.
+    const ownRevision = spec.path === EXTENSION_CONTROLLER_MANIFEST.path ? lock.components?.extensionController?.sourceRevision : undefined;
+    const sourceRevision = /^[a-f0-9]{40}$/u.test(ownRevision ?? '') ? ownRevision : lock.sourceRevision;
+    const raw = await fetchReleaseArtifact(lock, spec.path, { sourceRevision, sourceArtifactCredential });
     const kubernetesApiEgress = raw.includes(KUBERNETES_EGRESS_SLOT)
       ? discoverRegistryKubernetesEgress(kubectl) : undefined;
     const ciliumPolicy=spec.path==='apps/console-api/deploy.yaml' && kubernetesApiEgress
@@ -1252,7 +1257,7 @@ async function materializeFoundationInstallers(
     // Persist the same discovered egress that passed preflight rendering.
     const installerTemplate = renderRegistryKubernetesEgress(raw, kubernetesApiEgress)+ciliumPolicy;
     const controllerSource = spec.path === EXTENSION_CONTROLLER_MANIFEST.path
-      ? captureControllerSource({lock,sourceYaml:raw,renderedYaml:rendered+ciliumPolicy,
+      ? captureControllerSource({lock,sourceRevision,sourceYaml:raw,renderedYaml:rendered+ciliumPolicy,
         renderInputs:{storageClass,consoleUrl,authEnvironment,...(kubernetesApiEgress?{kubernetesApiEgress}:{})},verifiedBom}) : undefined;
     return { spec, installerTemplate, rendered:rendered+ciliumPolicy, controllerSource };
   }));
