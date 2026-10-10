@@ -1,5 +1,6 @@
 import { LedgerMismatch, chainVerdict, describeChainVerdict, oneWayBoundary, progressAfterFailure, releaseIncludes, describeOneWay, transitionOneWay } from './one-way-migrations.mjs';
 import {KUBERNETES_EGRESS_SLOT,discoverRegistryKubernetesEgress,renderRegistryKubernetesEgress,discoverConsoleApiCiliumPolicy} from './registry-runtime-access.mjs';
+import {FOUNDATION_BOOTSTRAP_PATH,planFoundationRuntimeRbac,applyComponentRuntimePrerequisites,describeComponentRuntimePrerequisite} from './component-runtime-prerequisites.mjs';
 import {setTimeout as registryDelay} from 'node:timers/promises';
 import {REGISTRY_AUTH_SECRET,REGISTRY_AUTH_CONTRACT,REGISTRY_NAMESPACES,initialRegistryState,registryStateSecret,parseRegistryState,requiredImages,pullSecretData,GENERATION_ANNOTATION,validateCredential} from './registry-lifecycle-contract.mjs';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
@@ -1728,10 +1729,21 @@ function installPreparedComponentRelease(
   label,
   changedComponents = lock.changedComponents,
   progress,
-  { applyMigrations = true } = {}
+  { applyMigrations = true, onPrerequisite = () => {} } = {}
 ) {
   if (applyMigrations) runComponentMigrations(prepared.foundation, progress);
   const release = componentReleaseWorkloadManifests(lock, prepared, changedComponents);
+  // Before the first workload manifest: a new extension controller verifies the Foundation runtime RBAC on
+  // its first reconcile, and a refusal here leaves every workload as it was.
+  applyComponentRuntimePrerequisites(prepared, changedComponents, {
+    kubectl,
+    onRecord: (record) => {
+      const line = describeComponentRuntimePrerequisite(record);
+      if (progress) progress.item(label, line);
+      else console.log(`[${label}] ${line}`);
+      onPrerequisite(record);
+    }
+  });
   applyComponentReleaseInDependencyOrder(release, changedComponents, {
     apply: stage => applyRelease(stage, label, progress, { preserveHostLocalEdgeTrust: isLocalEdgeLock(lock) }),
     wait: components => waitForComponentRollouts(components, progress)
@@ -2607,13 +2619,23 @@ export async function prepareComponentRelease(
     includeMigrations = true,
     sourceArtifactCredential = null,
     registryCredentials,
-    verifiedBom
+    verifiedBom,
+    // The release currently on the cluster. Its controller's Foundation profile decides whether this
+    // release changes it; without one (forward repair) the target profile is always applied.
+    installedLock = null
   } = {}
 ) {
   const specs = componentReleaseManifestSpecs(lock, changedComponents);
   let controllerSource;
   const migrationSourceRevision = componentMigrationSourceRevision(lock, changedComponents, includeMigrations);
-  const [foundationRelease, base] = await Promise.all([
+  const controllerSpec = specs.foundation.find((spec) => spec.path === EXTENSION_CONTROLLER_MANIFEST.path);
+  const installedControllerRevision = /^[a-f0-9]{40}$/u.test(installedLock?.components?.extensionController?.sourceRevision ?? '')
+    ? installedLock.components.extensionController.sourceRevision
+    : null;
+  const readFoundationBootstrap = (sourceRevision) => sourceRevision
+    ? fetchReleaseArtifact(lock, FOUNDATION_BOOTSTRAP_PATH, { sourceRevision, sourceArtifactCredential, optional404: true })
+    : null;
+  const [foundationRelease, base, foundationBootstrap, installedFoundationBootstrap] = await Promise.all([
     Promise.all(specs.foundation.map(async (spec) => ({
       path: spec.path,
       yaml: await fetchManifest(
@@ -2636,8 +2658,17 @@ export async function prepareComponentRelease(
         authEnvironment,
         { sourceRevision: spec.artifactSourceRevision, sourceArtifactCredential, registryCredentials }
       )
-    })))
+    }))),
+    readFoundationBootstrap(controllerSpec?.artifactSourceRevision),
+    controllerSpec ? readFoundationBootstrap(installedControllerRevision) : null
   ]);
+  const foundationRuntimeRbac = controllerSpec ? planFoundationRuntimeRbac({
+    sourceRevision: controllerSpec.artifactSourceRevision,
+    bundle: foundationBootstrap,
+    baselineRevision: installedControllerRevision,
+    baselineBundle: installedFoundationBootstrap,
+    controllerManifest: foundationRelease.find((item) => item.path === controllerSpec.path)?.yaml
+  }) : null;
   let migration = null;
   if (migrationSourceRevision) {
     const script = await fetchReleaseArtifact(lock, 'scripts/console-migrations.mjs', {
@@ -2654,7 +2685,8 @@ export async function prepareComponentRelease(
       { sourceArtifactCredential }
     );
   }
-  const foundation = { root, release: foundationRelease, migration,controllerSource };
+  const foundation = { root, release: foundationRelease, migration,controllerSource,
+    ...(foundationRuntimeRbac ? { foundationRuntimeRbac } : {}) };
   return { foundation, base, all: [...foundationRelease, ...base] };
 }
 
@@ -3204,7 +3236,8 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           config.authEnvironment,
-          { changedComponents: changedWorkloadComponents, includeMigrations: true, sourceArtifactCredential, registryCredentials, verifiedBom:targetVerifiedBom }
+          { changedComponents: changedWorkloadComponents, includeMigrations: true, sourceArtifactCredential, registryCredentials, verifiedBom:targetVerifiedBom,
+            installedLock: repair ? null : previousLock }
         ),
         rollbackChangedComponents.length > 0
           ? operations.prepareComponentRelease(
@@ -3217,7 +3250,10 @@ export async function upgrade(
               changedComponents: rollbackChangedComponents,
               includeMigrations: false,
               sourceArtifactCredential,
-              registryCredentials
+              registryCredentials,
+              // A rollback runs over the target, so it restores the previous profile exactly as the
+              // target replaced it.
+              installedLock: targetLock
             }
           )
           : Promise.resolve({
@@ -3372,6 +3408,12 @@ export async function upgrade(
     };
     // Re-review N2: what this run has already done, for an exact account when it must stop.
     const effects = [];
+    // Runtime prerequisites a component release applied beside its manifests (component-runtime-prerequisites.mjs).
+    // The target's are kept in the transition, so the Installing and Failed records carry them.
+    const recordPrerequisite = (direction) => (record) => {
+      effects.push(`${direction} ${record.step}: ${record.decision}`);
+      if (direction === 'target' && transition) transition.prerequisites = [...(transition.prerequisites ?? []), record];
+    };
     const lostOwnership = (stage) => new Error(`The installation record changed ${stage}; another writer owns it now. `
       + `Already done by this run: ${effects.length ? effects.join('; ') : 'nothing beyond namespace and pull-secret checks'}. `
       + 'Not done: any further install, prune, inventory, rollback or record write. The other writer\'s change is not known; review the record before resuming. '
@@ -3451,7 +3493,7 @@ export async function upgrade(
           '업그레이드',
           changedWorkloadComponents,
           undefined,
-          { applyMigrations: !agentIdentityCutover }
+          { applyMigrations: !agentIdentityCutover, onPrerequisite: recordPrerequisite('target') }
         );
         if (agentIdentityCutover) {
           // The canonical workloads are staged first while the old DB identity
@@ -3595,7 +3637,7 @@ export async function upgrade(
             '롤백',
             rollbackChangedComponents,
             undefined,
-            { applyMigrations: false }
+            { applyMigrations: false, onPrerequisite: recordPrerequisite('rollback') }
           );
         } else {
           if (!componentTransition) await operations.installPreparedRelease(
