@@ -128,3 +128,9 @@ test('bootstrap names the CA after the installation, shows its fingerprint and i
   assert.match(cli, /if \(!plan\.eligible\) throw/);
   assert.match(cli, /verifyServedBySystemTrust\(consoleUrl\)/);
 });
+
+test('trust-ca runs the installer with PowerShell 7 when present and otherwise with Windows PowerShell', async () => {
+  const { powershellCommand } = await import('../src/installation-ca.mjs');
+  assert.deepEqual(powershellCommand({ run: () => '' }), ['pwsh']);
+  assert.deepEqual(powershellCommand({ run: () => { throw new Error('ENOENT'); } }), ['powershell.exe', '-ExecutionPolicy', 'Bypass']);
+});

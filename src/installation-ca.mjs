@@ -144,13 +144,27 @@ export function verifyServedBySystemTrust(consoleUrl, { connectFn = connect, sys
  * Adds exactly this CA to Windows CurrentUser\Root through the reviewed installer, which refuses a
  * different fingerprint. Nothing is removed. Callers have checked planInstallationCaTrust().eligible.
  */
+/**
+ * PowerShell 7 when present; otherwise the Windows PowerShell 5.1 that every Windows has. The trust
+ * installer uses only APIs both provide (checked 2026-10-11), so trust-ca needs no extra install.
+ */
+export function powershellCommand({ run = defaultRun } = {}) {
+  try {
+    run('pwsh', ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { capture: true });
+    return ['pwsh'];
+  } catch {
+    return ['powershell.exe', '-ExecutionPolicy', 'Bypass'];
+  }
+}
+
 export async function applyInstallationCaTrust(ca, { run = defaultRun, packageDirectory = HERE } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'opensphere-installation-ca-'));
   const certificate = join(directory, 'opensphere-installation-ca.crt');
   const installer = await materializeRuntimeAsset('Install-LocalDevelopmentCa.ps1', packageDirectory);
   try {
     await writeFile(certificate, ca.pem, { encoding: 'utf8', mode: 0o600 });
-    run('pwsh', ['-NoProfile', '-NonInteractive', '-File', installer.path, '-CertificatePath', certificate, '-ExpectedSha256', ca.sha256]);
+    const [shell, ...shellArgs] = powershellCommand({ run });
+    run(shell, [...shellArgs, '-NoProfile', '-NonInteractive', '-File', installer.path, '-CertificatePath', certificate, '-ExpectedSha256', ca.sha256]);
   } finally {
     await installer.cleanup();
     await rm(directory, { recursive: true, force: true });
