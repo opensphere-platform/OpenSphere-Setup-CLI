@@ -1,19 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {registryKubernetesEgress,discoverRegistryKubernetesEgress,renderRegistryKubernetesEgress,KUBERNETES_EGRESS_SLOT,discoverConsoleApiCiliumPolicy} from '../src/registry-runtime-access.mjs';
+import {registryKubernetesEgress,discoverRegistryKubernetesEgress,renderRegistryKubernetesEgress,KUBERNETES_EGRESS_SLOT,discoverKubernetesApiCiliumPolicy,KUBERNETES_API_CILIUM_POLICIES} from '../src/registry-runtime-access.mjs';
 const service=()=>({metadata:{name:'kubernetes',namespace:'default'},spec:{clusterIPs:['10.96.0.1'],ports:[{name:'https',protocol:'TCP',port:443,targetPort:6443}]}});
 const slices=()=>({items:[{metadata:{namespace:'default',labels:{'kubernetes.io/service-name':'kubernetes'}},addressType:'IPv4',ports:[{name:'https',port:6443}],endpoints:[{addresses:['172.18.0.3'],conditions:{ready:true}}]}]});
+const definition={metadata:{name:'ciliumnetworkpolicies.cilium.io'},spec:{group:'cilium.io',names:{kind:'CiliumNetworkPolicy'}}};
+const CONSOLE_API='apps/console-api/deploy.yaml',OS_SHELL='apps/os-shell-control/deploy.yaml';
 
 test('Cilium API access selects only Console API and the discovered HTTPS ports',()=>{
   const rules=registryKubernetesEgress(service(),slices());
-  assert.equal(discoverConsoleApiCiliumPolicy(rules,()=>''),'');
-  const definition={metadata:{name:'ciliumnetworkpolicies.cilium.io'},spec:{group:'cilium.io',names:{kind:'CiliumNetworkPolicy'}}};
-  const policy=JSON.parse(discoverConsoleApiCiliumPolicy(rules,()=>JSON.stringify(definition)).split('---\n')[1]);
+  assert.equal(discoverKubernetesApiCiliumPolicy(CONSOLE_API,rules,()=>''),'');
+  const policy=JSON.parse(discoverKubernetesApiCiliumPolicy(CONSOLE_API,rules,()=>JSON.stringify(definition)).split('---\n')[1]);
   assert.equal(policy.metadata.namespace,'opensphere-console');
   assert.deepEqual(policy.spec,{endpointSelector:{matchLabels:{'app.kubernetes.io/name':'opensphere-console-api'}},
     egress:[{toEntities:['kube-apiserver'],toPorts:[{ports:[{port:'443',protocol:'TCP'},{port:'6443',protocol:'TCP'}]}]}]});
-  assert.throws(()=>discoverConsoleApiCiliumPolicy([{to:[{ipBlock:{cidr:'0.0.0.0/0'}}],ports:[{protocol:'TCP',port:443}]}],()=>JSON.stringify(definition)),/valid/);
-  assert.throws(()=>discoverConsoleApiCiliumPolicy(rules,()=>'{"metadata":{}}'),/Unexpected/);
+  assert.throws(()=>discoverKubernetesApiCiliumPolicy(CONSOLE_API,[{to:[{ipBlock:{cidr:'0.0.0.0/0'}}],ports:[{protocol:'TCP',port:443}]}],()=>JSON.stringify(definition)),/valid/);
+  assert.throws(()=>discoverKubernetesApiCiliumPolicy(CONSOLE_API,rules,()=>'{"metadata":{}}'),/Unexpected/);
+});
+
+test('Console API Cilium policy bytes are unchanged by the per-manifest generalisation',()=>{
+  // Output of discoverConsoleApiCiliumPolicy at Setup 07101a0 for these rules (live on RKE2 with the same spec).
+  const rules=['10.43.0.1/32:443','10.10.1.31/32:6443','10.10.1.32/32:6443'].map(target=>{
+    const [cidr,port]=target.split(':');return {to:[{ipBlock:{cidr}}],ports:[{protocol:'TCP',port:Number(port)}]};});
+  assert.equal(discoverKubernetesApiCiliumPolicy(CONSOLE_API,rules,()=>JSON.stringify(definition)),
+    '\n---\n{"apiVersion":"cilium.io/v2","kind":"CiliumNetworkPolicy","metadata":{"name":"opensphere-console-api-kubernetes-egress",'
+    +'"namespace":"opensphere-console","labels":{"app.kubernetes.io/part-of":"opensphere-console","app.kubernetes.io/managed-by":"opensphere-setup"}},'
+    +'"spec":{"endpointSelector":{"matchLabels":{"app.kubernetes.io/name":"opensphere-console-api"}},"egress":[{"toEntities":["kube-apiserver"],'
+    +'"toPorts":[{"ports":[{"port":"443","protocol":"TCP"},{"port":"6443","protocol":"TCP"}]}]}]}}\n');
+});
+
+test('OS Shell API gets its own Cilium policy; every other manifest gets none without a cluster read',()=>{
+  const rules=registryKubernetesEgress(service(),slices());
+  const policy=JSON.parse(discoverKubernetesApiCiliumPolicy(OS_SHELL,rules,()=>JSON.stringify(definition)).split('---\n')[1]);
+  assert.deepEqual(policy.metadata,{name:'opensphere-shell-api-kubernetes-egress',namespace:'opensphere-console',
+    labels:{'app.kubernetes.io/part-of':'opensphere-console','app.kubernetes.io/managed-by':'opensphere-setup'}});
+  assert.deepEqual(policy.spec,{endpointSelector:{matchLabels:{app:'opensphere-shell-api'}},
+    egress:[{toEntities:['kube-apiserver'],toPorts:[{ports:[{port:'443',protocol:'TCP'},{port:'6443',protocol:'TCP'}]}]}]});
+  assert.equal(discoverKubernetesApiCiliumPolicy(OS_SHELL,rules,()=>''),'','no Cilium policy API, no document');
+  assert.deepEqual(Object.keys(KUBERNETES_API_CILIUM_POLICIES).sort(),[CONSOLE_API,OS_SHELL]);
+  for(const path of ['apps/extension-controller/deploy.yaml','apps/osaa-gateway/deploy.yaml','constructor','__proto__','toString']){
+    assert.equal(discoverKubernetesApiCiliumPolicy(path,rules,()=>assert.fail('no cluster read')),'',path);
+  }
 });
 
 test('API egress contains exact Service and ready endpoint addresses, including HA and IPv6',()=>{

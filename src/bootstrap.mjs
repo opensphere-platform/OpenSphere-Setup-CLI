@@ -1,5 +1,5 @@
 import { LedgerMismatch, chainVerdict, describeChainVerdict, oneWayBoundary, progressAfterFailure, releaseIncludes, describeOneWay, transitionOneWay } from './one-way-migrations.mjs';
-import {KUBERNETES_EGRESS_SLOT,discoverRegistryKubernetesEgress,renderRegistryKubernetesEgress,discoverConsoleApiCiliumPolicy} from './registry-runtime-access.mjs';
+import {KUBERNETES_EGRESS_SLOT,discoverRegistryKubernetesEgress,renderRegistryKubernetesEgress,discoverKubernetesApiCiliumPolicy} from './registry-runtime-access.mjs';
 import {FOUNDATION_BOOTSTRAP_PATH,planFoundationRuntimeRbac,applyComponentRuntimePrerequisites,describeComponentRuntimePrerequisite} from './component-runtime-prerequisites.mjs';
 import {setTimeout as registryDelay} from 'node:timers/promises';
 import {REGISTRY_AUTH_SECRET,REGISTRY_AUTH_CONTRACT,REGISTRY_NAMESPACES,initialRegistryState,registryStateSecret,parseRegistryState,requiredImages,pullSecretData,GENERATION_ANNOTATION,validateCredential} from './registry-lifecycle-contract.mjs';
@@ -1126,6 +1126,12 @@ export async function fetchManifest(
     ? await fetchReleaseArtifact(lock, 'apps/os-shell-control/runtime-template.js', { sourceRevision, sourceArtifactCredential })
     : undefined;
   const kubernetesApiEgress = sourceYaml.includes(KUBERNETES_EGRESS_SLOT) ? discoverRegistryKubernetesEgress(kubectl) : undefined;
+  // The Cilium form travels with the manifest, so an OS Shell component release applies it in the same apply as
+  // its NetworkPolicy. Console API's policy is applied by the full installation only; this path has never
+  // re-applied it and does not start to here.
+  const ciliumPolicy = kubernetesApiEgress && spec.path !== CONSOLE_API_MANIFEST.path
+    ? discoverKubernetesApiCiliumPolicy(spec.path, kubernetesApiEgress, kubectl)
+    : '';
   const rendered = renderManifest(
     lock,
     spec,
@@ -1134,7 +1140,7 @@ export async function fetchManifest(
     consoleUrl,
     authEnvironment,
     { sourceRevision, runtimeTemplateSource, kubernetesApiEgress }
-  );
+  ) + ciliumPolicy;
   if(spec.path===EXTENSION_CONTROLLER_MANIFEST.path && onControllerSource)
     onControllerSource(captureControllerSource({lock,sourceRevision,sourceYaml,renderedYaml:rendered,
       renderInputs:{storageClass,consoleUrl:normalizeConsoleUrl(consoleUrl),authEnvironment:validateAuthEnvironment(authEnvironment),
@@ -1238,8 +1244,8 @@ async function materializeFoundationInstallers(
     const raw = await fetchReleaseArtifact(lock, spec.path, { sourceArtifactCredential });
     const kubernetesApiEgress = raw.includes(KUBERNETES_EGRESS_SLOT)
       ? discoverRegistryKubernetesEgress(kubectl) : undefined;
-    const ciliumPolicy=spec.path==='apps/console-api/deploy.yaml' && kubernetesApiEgress
-      ? discoverConsoleApiCiliumPolicy(kubernetesApiEgress,kubectl) : '';
+    // Only Console API passes here with a slot; OS Shell is rendered by the native installer in this path.
+    const ciliumPolicy=kubernetesApiEgress ? discoverKubernetesApiCiliumPolicy(spec.path,kubernetesApiEgress,kubectl) : '';
     const rendered = renderManifest(
       lock,
       spec,

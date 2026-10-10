@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import vm from 'node:vm';
-import { stringify } from 'yaml';
+import { parseAllDocuments, stringify } from 'yaml';
 import {
   FOUNDATION_BOOTSTRAP_PATH,
   FOUNDATION_RUNTIME_RBAC,
@@ -18,12 +18,14 @@ import {
 } from '../src/component-runtime-prerequisites.mjs';
 import {
   KUBERNETES_EGRESS_SLOT,
+  discoverKubernetesApiCiliumPolicy,
   discoverRegistryKubernetesEgress,
   renderRegistryKubernetesEgress
 } from '../src/registry-runtime-access.mjs';
 import {
   OS_SHELL_MANIFEST,
   EXTENSION_CONTROLLER_MANIFEST,
+  CONSOLE_API_MANIFEST,
   applyComponentReleaseInDependencyOrder,
   componentReleaseWorkloadManifests,
   renderManifest
@@ -472,16 +474,19 @@ function shellTransition() {
       [name, { repository: `opensphere-${name.toLowerCase()}`, image: image(`opensphere-${name.toLowerCase()}`), sourceRevision: NEW_REVISION }]))
   };
 }
-function fetchHarness(source, kubectlCalls) {
+const CILIUM_CRD = '{"metadata":{"name":"ciliumnetworkpolicies.cilium.io"},"spec":{"group":"cilium.io","names":{"kind":"CiliumNetworkPolicy"}}}';
+const CRD_READ = 'get customresourcedefinition ciliumnetworkpolicies.cilium.io --ignore-not-found -o json';
+function fetchHarness(source, kubectlCalls, { cilium = false } = {}) {
   return vm.runInNewContext(`(${bootstrapSource.slice(fetchBegin, fetchEnd).replace(/^export /, '')})`, {
-    OS_SHELL_MANIFEST, EXTENSION_CONTROLLER_MANIFEST, KUBERNETES_EGRESS_SLOT, renderManifest,
-    discoverRegistryKubernetesEgress, renderRegistryKubernetesEgress,
-    fetchReleaseArtifact: async (_lock, path) => path === OS_SHELL_MANIFEST.path ? source : 'module.exports = {};\n',
+    OS_SHELL_MANIFEST, EXTENSION_CONTROLLER_MANIFEST, CONSOLE_API_MANIFEST, KUBERNETES_EGRESS_SLOT, renderManifest,
+    discoverRegistryKubernetesEgress, renderRegistryKubernetesEgress, discoverKubernetesApiCiliumPolicy,
+    fetchReleaseArtifact: async (_lock, path) => path.endsWith('/deploy.yaml') ? source : 'module.exports = {};\n',
     renderKnowledgeManifest: async () => assert.fail('not a Gateway manifest'),
     kubectl: (args) => {
       kubectlCalls.push(args.join(' '));
       if (args.includes('service')) return JSON.stringify(apiService);
       if (args.includes('endpointslices.discovery.k8s.io')) return JSON.stringify(apiSlices);
+      if (args.join(' ') === CRD_READ) return cilium ? CILIUM_CRD : '';
       throw new Error(`unexpected kubectl ${args.join(' ')}`);
     }
   });
@@ -493,9 +498,11 @@ test('OS Shell component release renders the Kubernetes API egress with the Cons
     { sourceRevision: NEW_REVISION, fetchFn: async () => assert.fail('artifacts are isolated') });
   assert.deepEqual(calls, [
     '-n default get service kubernetes -o json',
-    '-n default get endpointslices.discovery.k8s.io -l kubernetes.io/service-name=kubernetes -o json'
+    '-n default get endpointslices.discovery.k8s.io -l kubernetes.io/service-name=kubernetes -o json',
+    CRD_READ
   ]);
   assert.doesNotMatch(rendered, /__OPENSPHERE_/);
+  assert.doesNotMatch(rendered, /CiliumNetworkPolicy/, 'a cluster without the Cilium policy API gets no Cilium document');
   for (const [cidr, port] of [['10.43.0.1/32', 443], ['10.10.1.31/32', 6443], ['10.10.1.32/32', 6443], ['10.10.1.33/32', 6443]]) {
     assert.ok(rendered.includes(`    - ${JSON.stringify({ to: [{ ipBlock: { cidr } }], ports: [{ protocol: 'TCP', port }] })}`), cidr);
   }
@@ -515,4 +522,39 @@ test('an OS Shell manifest without the egress slot (older Console) renders witho
     'development', { sourceRevision: OLD_REVISION, fetchFn: async () => assert.fail('artifacts are isolated') });
   assert.deepEqual(calls, []);
   assert.doesNotMatch(rendered, /ipBlock|kubernetes-egress|__OPENSPHERE_/);
+});
+
+test('OS Shell component release carries its Cilium policy in the same applied manifest as the NetworkPolicy', async () => {
+  const lock = shellTransition(), calls = [];
+  const rendered = await fetchHarness(shellLines(true), calls, { cilium: true })(lock, OS_SHELL_MANIFEST, 'standard',
+    'https://console.example.test', 'development', { sourceRevision: NEW_REVISION, fetchFn: async () => assert.fail('artifacts are isolated') });
+  assert.equal(calls.at(-1), CRD_READ);
+  assert.ok(rendered.includes(`sha256:${createHash('sha256').update(shellLines(true)).digest('hex')}`),
+    'the appended policy does not change the manifest evidence digest');
+  const applied = componentReleaseWorkloadManifests(lock, { foundation: { release: [] }, base: [{ path: OS_SHELL_MANIFEST.path, yaml: rendered }] }, ['osShellControl']);
+  assert.equal(applied.length, 1);
+  const documents = parseAllDocuments(applied[0].yaml).map((document) => document.toJS()).filter(Boolean);
+  const policies = documents.filter((document) => /NetworkPolicy$/.test(document.kind) && document.metadata.name === 'opensphere-shell-api-kubernetes-egress');
+  assert.deepEqual(policies.map((document) => document.kind), ['NetworkPolicy', 'CiliumNetworkPolicy']);
+  const [standard, cilium] = policies;
+  assert.deepEqual(cilium.metadata, { name: 'opensphere-shell-api-kubernetes-egress', namespace: 'opensphere-console',
+    labels: { 'app.kubernetes.io/part-of': 'opensphere-console', 'app.kubernetes.io/managed-by': 'opensphere-setup' } });
+  assert.deepEqual(cilium.spec.endpointSelector.matchLabels, standard.spec.podSelector.matchLabels, 'the same Pods as the NetworkPolicy');
+  assert.deepEqual(cilium.spec.egress, [{ toEntities: ['kube-apiserver'],
+    toPorts: [{ ports: [{ port: '443', protocol: 'TCP' }, { port: '6443', protocol: 'TCP' }] }] }]);
+});
+
+test('Console API component path keeps its behaviour: no Cilium document and no Cilium API read', async () => {
+  const image = `ghcr.io/opensphere-platform/opensphere-console-api@sha256:${'c'.repeat(64)}`, calls = [];
+  const source = ['apiVersion: apps/v1', 'kind: Deployment', 'metadata: { name: opensphere-console-api, namespace: opensphere-console }',
+    'spec:', '  template:', '    spec:', '      containers:', '        - name: api', '          image: __OPENSPHERE_CONSOLE_API_IMAGE__',
+    '---', 'apiVersion: networking.k8s.io/v1', 'kind: NetworkPolicy', 'metadata: { name: opensphere-console-api-kubernetes-egress, namespace: opensphere-console }',
+    'spec:', '  podSelector: { matchLabels: { app.kubernetes.io/name: opensphere-console-api } }', '  policyTypes: [Egress]', '  egress:',
+    `    - ${KUBERNETES_EGRESS_SLOT}`].join('\n') + '\n';
+  const rendered = await fetchHarness(source, calls, { cilium: true })({ channel: 'edge', sourceRevision: NEW_REVISION,
+    releaseDigest: `sha256:${'d'.repeat(64)}`, components: { consoleApi: { image } } }, CONSOLE_API_MANIFEST, 'standard',
+  'https://console.example.test', 'development', { sourceRevision: NEW_REVISION, fetchFn: async () => assert.fail('artifacts are isolated') });
+  assert.equal(calls.includes(CRD_READ), false);
+  assert.match(rendered, /10\.10\.1\.31\/32/);
+  assert.doesNotMatch(rendered, /CiliumNetworkPolicy/);
 });

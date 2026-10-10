@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
 import { join } from 'node:path';
-import { renderRegistryKubernetesEgress, KUBERNETES_EGRESS_SLOT, discoverConsoleApiCiliumPolicy } from '../src/registry-runtime-access.mjs';
+import { renderRegistryKubernetesEgress, KUBERNETES_EGRESS_SLOT, discoverKubernetesApiCiliumPolicy } from '../src/registry-runtime-access.mjs';
 import {EXTENSION_CONTROLLER_MANIFEST} from '../src/bootstrap.mjs';
 import {captureControllerSource} from '../src/controller-source.mjs';
 
@@ -37,7 +37,7 @@ function harness(discovered = rules, cilium=false) {
     },
     discoverRegistryKubernetesEgress: () => { discoveries++; return discovered; },
     renderRegistryKubernetesEgress,
-    discoverConsoleApiCiliumPolicy,
+    discoverKubernetesApiCiliumPolicy,
     renderManifest: (_lock,_spec,value,_sc,_url,_auth,{kubernetesApiEgress}) =>
       renderRegistryKubernetesEgress(value,kubernetesApiEgress)
         .replace('__OPENSPHERE_CONSOLE_API_IMAGE__','ghcr.io/example/api@sha256:'+'a'.repeat(64))
