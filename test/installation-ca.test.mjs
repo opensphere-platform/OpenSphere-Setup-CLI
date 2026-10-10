@@ -263,6 +263,9 @@ test('Windows chain verification checks the name first and reports the chain eng
   // Windows PowerShell 5.1 writes a one-element array as a string.
   const untrusted = await verifyServedByWindowsChain(url, { fetchFn, platform: 'win32', run: fakeRun('{"built":false,"status":"UntrustedRoot"}') });
   assert.deepEqual([untrusted.verified, untrusted.status], [false, ['UntrustedRoot']]);
+  // The chain is built for TLS server use (serverAuth), not for any purpose.
+  const encoded = calls.find((call) => call.includes('-EncodedCommand')).split(' ').at(-1);
+  assert.match(Buffer.from(encoded, 'base64').toString('utf16le'), /ApplicationPolicy\.Add\(\[System\.Security\.Cryptography\.Oid\]::new\('1\.3\.6\.1\.5\.5\.7\.3\.1'\)\)/);
   if (process.platform === 'win32') {
     // The real engine: this generated CA is in no store, so Windows does not verify the Console.
     const real = await verifyServedByWindowsChain(url, { fetchFn });

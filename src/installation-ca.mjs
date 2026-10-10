@@ -203,8 +203,11 @@ export async function matchTrustedRootSignature(consoleUrl, { fetchFn = fetchSer
 }
 
 // Builds the served certificate's chain with the Windows chain engine (the trust store Windows and
-// Chrome on Windows use). Revocation is not checked: an installation CA publishes no CRL or OCSP.
+// Chrome on Windows use), for TLS server use: the chain must be valid for serverAuth
+// (1.3.6.1.5.5.7.3.1; a certificate without an EKU extension is valid for any use, as in browsers).
+// Revocation is not checked: an installation CA publishes no CRL or OCSP.
 // The engine does not check the host name; servedNameAndValidity does that first.
+export const SERVER_AUTH_OID = '1.3.6.1.5.5.7.3.1';
 function windowsChainScript(certificatePath) {
   return [
     "$ErrorActionPreference = 'Stop'",
@@ -212,6 +215,7 @@ function windowsChainScript(certificatePath) {
     '$chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()',
     'try {',
     '  $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck',
+    `  [void]$chain.ChainPolicy.ApplicationPolicy.Add([System.Security.Cryptography.Oid]::new('${SERVER_AUTH_OID}'))`,
     '  $built = $chain.Build($certificate)',
     '  $root = $chain.ChainElements[$chain.ChainElements.Count - 1].Certificate',
     '  [pscustomobject]@{ built = $built; status = @($chain.ChainStatus | ForEach-Object { $_.Status.ToString() });',
