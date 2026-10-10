@@ -37,6 +37,17 @@ function readStoredIdentity(kubectl) {
   return { installationId: data.installationId, clusterUid: data.clusterUid, createdAt: data.createdAt };
 }
 
+// Read only: the recorded identity of the installation on this cluster, or null when none was recorded.
+// Never creates one (trust-ca and other readers must not change the installation).
+export function readInstallationIdentity({ kubectl = defaultKubectl } = {}) {
+  const identity = readStoredIdentity(kubectl);
+  if (!identity) return null;
+  if (identity.clusterUid !== readClusterUid({ kubectl })) {
+    fail('InstallationIdentityClusterMismatch', 'the installation identity belongs to another cluster');
+  }
+  return { installationId: identity.installationId, clusterUid: identity.clusterUid };
+}
+
 // adoptInstallationId: an ID an earlier installation already recorded in its config.json, kept when
 // the identity record is created for the first time (upgrade from a lock that carried one).
 export function ensureInstallationIdentity({ kubectl = defaultKubectl, newId = randomUUID, now = () => new Date(), adoptInstallationId } = {}) {

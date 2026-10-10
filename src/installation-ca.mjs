@@ -66,6 +66,7 @@ export function inspectInstallationCa(pem, { now = new Date() } = {}) {
     throw new Error('The installation CA certificate is not self-signed');
   }
   const notAfter = new Date(certificate.validTo);
+  if (new Date(certificate.validFrom).getTime() > now.getTime()) throw new Error('The installation CA is not valid yet');
   if (!(notAfter.getTime() > now.getTime() + 24 * 3600 * 1000)) throw new Error('The installation CA expires within a day');
   return Object.freeze({
     subject: certificate.subject.replace(/\n/g, ', '),
@@ -116,17 +117,36 @@ export function verifyServedByCa(consoleUrl, caPem, { connectFn = connect, timeo
 }
 
 /**
+ * Whether the CA belongs to this installation. A per-installation CA names its installation in OU and
+ * must name the one recorded on this cluster (`installation`, from readInstallationIdentity, or null).
+ * The legacy shared name carries no installation id, so it is accepted as an explicit compatibility
+ * exception and reported as not proven; the served-certificate check and the fingerprint still bind it.
+ */
+function installationBinding(ca, installation) {
+  if (ca.form !== 'per-installation') return { state: 'not-proven-legacy-name', blocker: null };
+  if (!installation) {
+    return { state: 'unavailable', blocker: 'InstallationIdentityUnavailable: this cluster records no installation identity to compare with the CA' };
+  }
+  return installation.installationId === ca.installationId
+    ? { state: 'matched', blocker: null }
+    : { state: 'mismatch', blocker: `InstallationIdMismatch: the CA names installation ${ca.installationId}; this cluster records ${installation.installationId}` };
+}
+
+/**
  * The trust plan for one installation: what would be trusted and why. With apply, the caller must name
  * the fingerprint it compared (expectedSha256); a mismatch refuses before any change.
  */
-export function planInstallationCaTrust({ ca, served, consoleUrl, expectedSha256, apply, platform = process.platform }) {
+export function planInstallationCaTrust({ ca, served, consoleUrl, expectedSha256, apply, installation = null, platform = process.platform }) {
   const blockers = [];
+  const binding = installationBinding(ca, installation);
+  if (binding.blocker) blockers.push(binding.blocker);
   if (!served.authorized) blockers.push(`ServedCertificateNotSignedByThisCa: ${served.error}`);
   if (apply && expectedSha256 === undefined) blockers.push('ExpectedFingerprintRequired: pass --expect-sha256 with the fingerprint you compared');
   if (expectedSha256 !== undefined && normalizeSha256(expectedSha256) !== ca.sha256) blockers.push('FingerprintMismatch');
   if (apply && platform !== 'win32') blockers.push('UnsupportedPlatform: import ca.crt with your operating system trust tool');
   return Object.freeze({
-    consoleUrl, subject: ca.subject, form: ca.form, installationId: ca.installationId, sha256: ca.sha256,
+    consoleUrl, subject: ca.subject, form: ca.form, installationId: ca.installationId,
+    recordedInstallationId: installation?.installationId ?? null, installationBinding: binding.state, sha256: ca.sha256,
     notBefore: ca.notBefore, notAfter: ca.notAfter, served, store: 'Windows CurrentUser\\Root',
     note: ca.form === 'legacy-shared-name'
       ? 'This installation uses the older shared CA name. Another installation CA with the same name may already be trusted; it does not need removing, but the Console only verifies once this CA is trusted.'
@@ -151,36 +171,89 @@ export function fetchServedCertificate(consoleUrl, { connectFn = connect, timeou
   });
 }
 
-/**
- * After trusting: does the operating system trust store alone now verify the Console?
- * OpenSSL picks one issuer by name; with two installation CAs that share the legacy name it tries the
- * first and reports a signature failure even when the right CA is trusted (observed 2026-10-11, while
- * Windows itself verified the Console). Windows and browsers try every candidate, so this check does too:
- * some trusted system CA must have issued and signed the served certificate, be valid now, and the
- * certificate must name the Console host and be valid now.
- */
-export async function verifyServedBySystemTrust(consoleUrl, { fetchFn = fetchServedCertificate, systemCas = () => getCACertificates('system'), now = new Date() } = {}) {
-  let served;
-  try { served = await fetchFn(consoleUrl); } catch (error) { return { authorized: false, error: error.code || error.message }; }
+const within = (certificate, now) => new Date(certificate.validFrom) <= now && now < new Date(certificate.validTo);
+
+/** The served certificate names the Console host and is valid now; otherwise the reason. */
+function servedNameAndValidity(consoleUrl, served, now) {
   const host = new URL(consoleUrl).hostname.replace(/^\[|\]$/g, '');
-  const within = (certificate) => new Date(certificate.validFrom) <= now && now < new Date(certificate.validTo);
-  if (!within(served)) return { authorized: false, error: 'CERT_NOT_VALID_NOW' };
-  if (!(/^[\d.:]+$/.test(host) ? served.checkIP(host) : served.checkHost(host))) return { authorized: false, error: 'HOSTNAME_MISMATCH' };
-  const candidates = systemCas().map((pem) => { try { return new X509Certificate(pem); } catch { return null; } })
-    .filter((ca) => ca && ca.ca && served.checkIssued(ca));
-  const issuer = candidates.find((ca) => within(ca) && served.verify(ca.publicKey));
-  return issuer
-    ? { authorized: true, error: null, issuerSha256: normalizeSha256(issuer.fingerprint256), candidatesWithSameName: candidates.length }
-    : { authorized: false, error: candidates.length ? 'CERT_SIGNATURE_FAILURE' : 'UNABLE_TO_GET_ISSUER_CERT', candidatesWithSameName: candidates.length };
+  if (!within(served, now)) return 'CERT_NOT_VALID_NOW';
+  if (!(/^[\d.:]+$/.test(host) ? served.checkIP(host) : served.checkHost(host))) return 'HOSTNAME_MISMATCH';
+  return null;
 }
 
 /**
- * Adds exactly this CA to Windows CurrentUser\Root through the reviewed installer, which refuses a
- * different fingerprint. Nothing is removed. Callers have checked planInstallationCaTrust().eligible.
+ * Supporting evidence only, not a chain verification: does some CA in the trust store that Node reads
+ * (getCACertificates('system')) have the served certificate's issuer name and a key that verifies its
+ * signature? OpenSSL picks one issuer by name; with two installation CAs that share the legacy name it
+ * tries the first and fails even when the right CA is trusted (observed 2026-10-11). This match tries
+ * every same-name candidate. It checks no key usage, EKU, policy or revocation, so it never stands in for
+ * the operating system's own verification (verifyServedByWindowsChain) or a browser check.
  */
+export async function matchTrustedRootSignature(consoleUrl, { fetchFn = fetchServedCertificate, systemCas = () => getCACertificates('system'), now = new Date() } = {}) {
+  let served;
+  try { served = await fetchFn(consoleUrl); } catch (error) { return { matched: false, error: error.code || error.message }; }
+  const reason = servedNameAndValidity(consoleUrl, served, now);
+  if (reason) return { matched: false, error: reason };
+  const candidates = systemCas().map((pem) => { try { return new X509Certificate(pem); } catch { return null; } })
+    .filter((ca) => ca && ca.ca && served.checkIssued(ca));
+  const issuer = candidates.find((ca) => within(ca, now) && served.verify(ca.publicKey));
+  return issuer
+    ? { matched: true, error: null, issuerSha256: normalizeSha256(issuer.fingerprint256), candidatesWithSameName: candidates.length }
+    : { matched: false, error: candidates.length ? 'CERT_SIGNATURE_FAILURE' : 'UNABLE_TO_GET_ISSUER_CERT', candidatesWithSameName: candidates.length };
+}
+
+// Builds the served certificate's chain with the Windows chain engine (the trust store Windows and
+// Chrome on Windows use). Revocation is not checked: an installation CA publishes no CRL or OCSP.
+// The engine does not check the host name; servedNameAndValidity does that first.
+function windowsChainScript(certificatePath) {
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    `$certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new('${certificatePath.replace(/'/g, "''")}')`,
+    '$chain = [System.Security.Cryptography.X509Certificates.X509Chain]::new()',
+    'try {',
+    '  $chain.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck',
+    '  $built = $chain.Build($certificate)',
+    '  $root = $chain.ChainElements[$chain.ChainElements.Count - 1].Certificate',
+    '  [pscustomobject]@{ built = $built; status = @($chain.ChainStatus | ForEach-Object { $_.Status.ToString() });',
+    '    rootSha256 = $root.GetCertHashString([System.Security.Cryptography.HashAlgorithmName]::SHA256).ToLowerInvariant() } | ConvertTo-Json -Compress',
+    '} finally { $chain.Dispose(); $certificate.Dispose() }',
+  ].join('\n');
+}
+
+/**
+ * Does Windows itself verify the Console? The served certificate (public data) is checked for host name
+ * and validity, then its chain is built by the Windows chain engine against the current user's and the
+ * machine's trust stores. A browser may still hold an earlier result until it is restarted, so a browser
+ * check stays a separate step.
+ */
+export async function verifyServedByWindowsChain(consoleUrl, { fetchFn = fetchServedCertificate, run = defaultRun, now = new Date(), platform = process.platform } = {}) {
+  if (platform !== 'win32') return { verified: null, error: 'NotWindows' };
+  let served;
+  try { served = await fetchFn(consoleUrl); } catch (error) { return { verified: false, error: error.code || error.message }; }
+  const reason = servedNameAndValidity(consoleUrl, served, now);
+  if (reason) return { verified: false, error: reason };
+  const directory = await mkdtemp(join(tmpdir(), 'opensphere-console-chain-'));
+  try {
+    const path = join(directory, 'console.crt');
+    await writeFile(path, served.toString(), 'utf8');
+    const [shell, ...shellArgs] = powershellCommand({ run });
+    const output = run(shell, [...shellArgs, '-NoProfile', '-NonInteractive', '-EncodedCommand',
+      Buffer.from(windowsChainScript(path), 'utf16le').toString('base64')], { capture: true });
+    const result = JSON.parse(output);
+    const status = [].concat(result.status ?? []).map(String);
+    const verified = result.built === true && status.length === 0;
+    return { verified, error: verified ? null : (status.join(',') || 'ChainNotBuilt'), status, rootSha256: result.rootSha256 ?? null };
+  } catch (error) {
+    return { verified: false, error: `WindowsChainCheckFailed: ${String(error.message).split('\n')[0]}` };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
 /**
  * PowerShell 7 when present; otherwise the Windows PowerShell 5.1 that every Windows has. The trust
- * installer uses only APIs both provide (checked 2026-10-11), so trust-ca needs no extra install.
+ * installer and the chain check use only APIs both provide (checked 2026-10-11), so trust-ca needs no
+ * extra install. `-ExecutionPolicy Bypass` applies to that one process only; no policy is changed.
  */
 export function powershellCommand({ run = defaultRun } = {}) {
   try {
@@ -191,6 +264,10 @@ export function powershellCommand({ run = defaultRun } = {}) {
   }
 }
 
+/**
+ * Adds exactly this CA to Windows CurrentUser\Root through the reviewed installer, which refuses a
+ * different fingerprint. Nothing is removed. Callers have checked planInstallationCaTrust().eligible.
+ */
 export async function applyInstallationCaTrust(ca, { run = defaultRun, packageDirectory = HERE } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'opensphere-installation-ca-'));
   const certificate = join(directory, 'opensphere-installation-ca.crt');

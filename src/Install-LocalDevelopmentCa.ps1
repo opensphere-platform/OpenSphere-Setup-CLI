@@ -25,6 +25,25 @@ try {
   if (-not $basicConstraints -or -not $basicConstraints.CertificateAuthority) {
     throw 'Refusing to trust a certificate that is not a CA'
   }
+  # Subject = Issuer only says self-issued. The Windows chain engine checks the self-signature itself
+  # (NotSignatureValid); an unknown root is allowed here because this CA is not trusted yet.
+  $selfCheck = [System.Security.Cryptography.X509Certificates.X509Chain]::new()
+  try {
+    $selfCheck.ChainPolicy.RevocationMode = [System.Security.Cryptography.X509Certificates.X509RevocationMode]::NoCheck
+    $selfCheck.ChainPolicy.VerificationFlags = [System.Security.Cryptography.X509Certificates.X509VerificationFlags]::AllowUnknownCertificateAuthority
+    [void]$selfCheck.Build($certificate)
+    $badSignature = @($selfCheck.ChainStatus | Where-Object {
+      $_.Status -band [System.Security.Cryptography.X509Certificates.X509ChainStatusFlags]::NotSignatureValid })
+    if ($selfCheck.ChainElements.Count -ne 1 -or $badSignature.Count -gt 0) {
+      throw 'Refusing to trust a CA whose self-signature does not verify'
+    }
+  }
+  finally {
+    $selfCheck.Dispose()
+  }
+  if ($certificate.NotBefore.ToUniversalTime() -gt [DateTime]::UtcNow) {
+    throw 'Refusing to trust a CA that is not valid yet'
+  }
   if ($certificate.NotAfter.ToUniversalTime() -le [DateTime]::UtcNow.AddDays(1)) {
     throw 'Refusing to trust an expired or near-expiry local CA'
   }

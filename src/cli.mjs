@@ -32,8 +32,9 @@ import { assertForwardRepair, installationRecordDigest } from './forward-repair.
 import {resolveInstallationRelease} from './installation-release.mjs';
 import { takeSourceArtifactCredential } from './source-artifact-credential.mjs';
 import { assertKubectl, kubectl } from './process.mjs';
-import { applyInstallationCaTrust, inspectInstallationCa, planInstallationCaTrust, readInstalledConsoleCa,
-  verifyServedByCa, verifyServedBySystemTrust } from './installation-ca.mjs';
+import { applyInstallationCaTrust, inspectInstallationCa, matchTrustedRootSignature, planInstallationCaTrust,
+  readInstalledConsoleCa, verifyServedByCa, verifyServedByWindowsChain } from './installation-ca.mjs';
+import { readInstallationIdentity } from './installation-identity.mjs';
 import { verifyInstallation } from './verify.mjs';
 import { defaultConsoleUrl, normalizeConsoleUrl } from './console-url.mjs';
 import { selectAuthEnvironment } from './auth-environment.mjs';
@@ -195,8 +196,9 @@ Usage:
       [--one-way-recovery-plan | --one-way-recovery <reviewed-installation-record-sha256>]
   opensphere-setup trust-ca [--context <kube-context>] [--console <https-origin>]
       [--expect-sha256 <fingerprint> --apply]
-      Shows the installation CA that signs the Console and whether it really serves it; with --apply
-      and the fingerprint you compared, adds exactly that CA to Windows CurrentUser\Root.
+      Shows the installation CA that signs the Console, whether it really serves it, whether it belongs
+      to this installation and whether Windows already verifies the Console; with --apply and the
+      fingerprint you compared, adds exactly that CA to Windows CurrentUser\Root and rechecks with Windows.
   opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
       [--complete-installation]
   opensphere-setup recovery-drill --component <supabase|gitea> --manifest-key <s3-object-key>
@@ -714,13 +716,21 @@ async function main() {
     const consoleUrl = suppliedConsoleUrl || installedConsoleUrl();
     if (!consoleUrl) throw new Error('No installed Console is recorded in this context; pass --console');
     const ca = inspectInstallationCa(readInstalledConsoleCa({ kubectl }));
+    const installation = readInstallationIdentity({ kubectl });
     const served = await verifyServedByCa(consoleUrl, ca.pem);
     const apply = hasOption('--apply');
-    const plan = planInstallationCaTrust({ ca, served, consoleUrl, apply,
+    const plan = planInstallationCaTrust({ ca, served, consoleUrl, apply, installation,
       expectedSha256: hasOption('--expect-sha256') ? option('--expect-sha256', '') : undefined });
     console.log(JSON.stringify(plan, null, 2));
     if (!apply) {
-      if (plan.eligible || plan.blockers.every((b) => b.startsWith('ExpectedFingerprintRequired'))) {
+      // Read only: whether Windows already verifies the Console on this workstation.
+      const windowsNow = await verifyServedByWindowsChain(consoleUrl);
+      if (windowsNow.verified !== null) {
+        console.log(JSON.stringify({ windowsChainVerifiesConsoleNow: windowsNow.verified, windowsChain: windowsNow }, null, 2));
+      }
+      if (windowsNow.verified === true && windowsNow.rootSha256 === plan.sha256) {
+        console.error('[확인] 이 PC의 Windows는 이미 이 CA로 Console을 검증합니다. 신뢰 추가는 필요 없습니다. 브라우저가 경고를 보이면 브라우저를 다시 시작하세요.');
+      } else if (plan.eligible || plan.blockers.every((b) => b.startsWith('ExpectedFingerprintRequired'))) {
         console.error(`[다음] 지문 ${plan.sha256} 를 설치 기록이나 관리자에게 받은 값과 비교한 뒤, 같으면
 `
           + `       ${invokedAs()} trust-ca${hasOption('--context') ? ` --context ${option('--context', '')}` : ''} --expect-sha256 ${plan.sha256} --apply`);
@@ -729,10 +739,15 @@ async function main() {
     }
     if (!plan.eligible) throw new Error(`Installation CA not trusted: ${plan.blockers.join('; ')}`);
     await applyInstallationCaTrust(ca);
-    const after = await verifyServedBySystemTrust(consoleUrl);
-    console.log(JSON.stringify({ trusted: ca.sha256, store: plan.store, systemTrustVerifiesConsole: after.authorized,
-      ...(after.authorized ? {} : { error: after.error }) }, null, 2));
-    if (!after.authorized) process.exitCode = 1;
+    // The result is Windows' own chain verification. The root-signature match is supporting evidence
+    // only, and a browser check stays separate (a running browser may keep its earlier result).
+    const windows = await verifyServedByWindowsChain(consoleUrl);
+    const signature = await matchTrustedRootSignature(consoleUrl);
+    console.log(JSON.stringify({ trusted: ca.sha256, store: plan.store,
+      windowsChainVerifiesConsole: windows.verified, windowsChain: windows,
+      trustedRootSignatureMatch: signature,
+      browserCheck: 'not performed: restart the browser, then open the Console' }, null, 2));
+    if (windows.verified !== true) process.exitCode = 1;
     return;
   }
   if (command === 'verify') {
