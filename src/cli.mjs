@@ -12,7 +12,7 @@ import {createGitHubRegistryAuth} from './github-registry-auth.mjs';
 import {GITHUB_OAUTH_CLIENT_ID} from './github-oauth-app.mjs';
 import './portable-runtime.mjs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
 import {
   bootstrap,
   completeInstallationVerification,
@@ -143,6 +143,12 @@ function installedConsoleUrl() {
   } catch {
     return undefined;
   }
+}
+
+// How this CLI was started, so a printed next step can be pasted as is (packaged binary or node src/cli.mjs).
+function invokedAs() {
+  const script = process.argv[1] || '';
+  return /cli\.mjs$/i.test(script) ? `node ${relative(process.cwd(), script) || script}` : 'opensphere-setup';
 }
 
 function help() {
@@ -717,7 +723,7 @@ async function main() {
       if (plan.eligible || plan.blockers.every((b) => b.startsWith('ExpectedFingerprintRequired'))) {
         console.error(`[다음] 지문 ${plan.sha256} 를 설치 기록이나 관리자에게 받은 값과 비교한 뒤, 같으면
 `
-          + `       opensphere-setup trust-ca${hasOption('--context') ? ` --context ${option('--context', '')}` : ''} --expect-sha256 ${plan.sha256} --apply`);
+          + `       ${invokedAs()} trust-ca${hasOption('--context') ? ` --context ${option('--context', '')}` : ''} --expect-sha256 ${plan.sha256} --apply`);
       }
       return;
     }

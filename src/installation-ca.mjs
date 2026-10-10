@@ -135,9 +135,43 @@ export function planInstallationCaTrust({ ca, served, consoleUrl, expectedSha256
   });
 }
 
-/** After trusting: does the operating system trust store alone now verify the Console? */
-export function verifyServedBySystemTrust(consoleUrl, { connectFn = connect, systemCas = () => getCACertificates('system') } = {}) {
-  return verifyServedByCa(consoleUrl, systemCas(), { connectFn });
+/** The certificate the Console serves (public data only), without trusting it. */
+export function fetchServedCertificate(consoleUrl, { connectFn = connect, timeoutMs = 10000 } = {}) {
+  const url = new URL(consoleUrl);
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  return new Promise((resolve, reject) => {
+    const socket = connectFn({ host, port: Number(url.port || 443), servername: /^[\d.:]+$/.test(host) ? undefined : host,
+      rejectUnauthorized: false, ALPNProtocols: ['http/1.1'] }, () => {
+      const raw = socket.getPeerCertificate()?.raw;
+      socket.destroy();
+      raw ? resolve(new X509Certificate(raw)) : reject(new Error('The Console presented no certificate'));
+    });
+    socket.setTimeout(timeoutMs, () => { socket.destroy(); reject(new Error('timeout')); });
+    socket.on('error', reject);
+  });
+}
+
+/**
+ * After trusting: does the operating system trust store alone now verify the Console?
+ * OpenSSL picks one issuer by name; with two installation CAs that share the legacy name it tries the
+ * first and reports a signature failure even when the right CA is trusted (observed 2026-10-11, while
+ * Windows itself verified the Console). Windows and browsers try every candidate, so this check does too:
+ * some trusted system CA must have issued and signed the served certificate, be valid now, and the
+ * certificate must name the Console host and be valid now.
+ */
+export async function verifyServedBySystemTrust(consoleUrl, { fetchFn = fetchServedCertificate, systemCas = () => getCACertificates('system'), now = new Date() } = {}) {
+  let served;
+  try { served = await fetchFn(consoleUrl); } catch (error) { return { authorized: false, error: error.code || error.message }; }
+  const host = new URL(consoleUrl).hostname.replace(/^\[|\]$/g, '');
+  const within = (certificate) => new Date(certificate.validFrom) <= now && now < new Date(certificate.validTo);
+  if (!within(served)) return { authorized: false, error: 'CERT_NOT_VALID_NOW' };
+  if (!(/^[\d.:]+$/.test(host) ? served.checkIP(host) : served.checkHost(host))) return { authorized: false, error: 'HOSTNAME_MISMATCH' };
+  const candidates = systemCas().map((pem) => { try { return new X509Certificate(pem); } catch { return null; } })
+    .filter((ca) => ca && ca.ca && served.checkIssued(ca));
+  const issuer = candidates.find((ca) => within(ca) && served.verify(ca.publicKey));
+  return issuer
+    ? { authorized: true, error: null, issuerSha256: normalizeSha256(issuer.fingerprint256), candidatesWithSameName: candidates.length }
+    : { authorized: false, error: candidates.length ? 'CERT_SIGNATURE_FAILURE' : 'UNABLE_TO_GET_ISSUER_CERT', candidatesWithSameName: candidates.length };
 }
 
 /**

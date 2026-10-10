@@ -134,3 +134,27 @@ test('trust-ca runs the installer with PowerShell 7 when present and otherwise w
   assert.deepEqual(powershellCommand({ run: () => '' }), ['pwsh']);
   assert.deepEqual(powershellCommand({ run: () => { throw new Error('ENOENT'); } }), ['powershell.exe', '-ExecutionPolicy', 'Bypass']);
 });
+
+test('the system-trust check tries every trusted CA with the same name, as Windows and browsers do', { skip: !PWSH && 'pwsh unavailable' }, async () => {
+  const { verifyServedBySystemTrust } = await import('../src/installation-ca.mjs');
+  // Legacy certificates (no key identifiers): the RKE2 Console leaf and its CA (public fixtures), and
+  // another CA with the same shared name trusted earlier.
+  const leaf = new X509Certificate(readFileSync(join(ROOT, 'test', 'fixtures', 'legacy-console-leaf.crt'), 'utf8'));
+  const earlier = generate(['-DnsNames', 'console.example.test']).ca;
+  const fetchFn = async () => leaf;
+  const url = 'https://console.opensphere.triangles.com';
+  const before = await verifyServedBySystemTrust(url, { fetchFn, systemCas: () => [earlier] });
+  assert.deepEqual([before.authorized, before.error], [false, 'CERT_SIGNATURE_FAILURE']);
+  // Both trusted, the earlier one first: still verified through the right CA.
+  const after = await verifyServedBySystemTrust(url, { fetchFn, systemCas: () => [earlier, LEGACY] });
+  assert.deepEqual([after.authorized, after.issuerSha256, after.candidatesWithSameName], [true, inspectInstallationCa(LEGACY).sha256, 2]);
+  assert.equal((await verifyServedBySystemTrust('https://other.example.test', { fetchFn, systemCas: () => [LEGACY] })).error, 'HOSTNAME_MISMATCH');
+  assert.equal((await verifyServedBySystemTrust(url, { fetchFn, systemCas: () => [] })).error, 'UNABLE_TO_GET_ISSUER_CERT');
+  // New certificates carry key identifiers, so a same-name CA of another installation is not even a candidate.
+  const serving = generate(['-DnsNames', 'console.example.test', '-InstallationId', ID]);
+  const other = generate(['-DnsNames', 'console.example.test', '-InstallationId', ID]).ca;
+  const newLeaf = new X509Certificate(serving.leaf);
+  const onlyOther = await verifyServedBySystemTrust('https://console.example.test', { fetchFn: async () => newLeaf, systemCas: () => [other] });
+  assert.deepEqual([onlyOther.authorized, onlyOther.candidatesWithSameName], [false, 0]);
+  assert.equal((await verifyServedBySystemTrust('https://console.example.test', { fetchFn: async () => newLeaf, systemCas: () => [other, serving.ca] })).authorized, true);
+});
