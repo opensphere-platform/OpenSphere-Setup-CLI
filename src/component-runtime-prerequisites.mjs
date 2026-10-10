@@ -165,17 +165,38 @@ export function applyFoundationRuntimeRbac(plan, { kubectl, now = () => new Date
   }
   // Prepare-FoundationPrerequisites.ps1 semantics: one List through client-side `kubectl apply`. RBAC rules have
   // no merge key, so each complete target list replaces the live one; the read-back below proves it did.
-  kubectl(['apply', '-f', '-'], {
-    capture: true,
-    input: `${JSON.stringify({ apiVersion: 'v1', kind: 'List', items: plan.documents })}\n`
-  });
-  const mismatched = plan.documents.filter((document) =>
-    !foundationRuntimeObjectMatches(document, readObject(kubectl, document)));
+  // From the apply on, a failure is never "nothing changed": the cluster RBAC may already differ, so the
+  // failure carries its own record (afterWrite) for the transition and the run's effects.
+  try {
+    kubectl(['apply', '-f', '-'], {
+      capture: true,
+      input: `${JSON.stringify({ apiVersion: 'v1', kind: 'List', items: plan.documents })}\n`
+    });
+  } catch (error) {
+    throw afterWrite(error, { ...record, decision: 'apply-outcome-unknown' },
+      'Foundation runtime RBAC apply did not complete; the cluster RBAC may be partly changed. No workload manifest was applied.');
+  }
+  let mismatched;
+  try {
+    mismatched = plan.documents.filter((document) =>
+      !foundationRuntimeObjectMatches(document, readObject(kubectl, document)));
+  } catch (error) {
+    throw afterWrite(error, { ...record, decision: 'changed-unverified' },
+      'Foundation runtime RBAC was sent but could not be read back; the cluster RBAC may already be changed. No workload manifest was applied.');
+  }
   if (mismatched.length) {
-    throw new Error(`Foundation runtime RBAC did not read back as the target profile: ${mismatched
-      .map((document) => foundationRbacIdentity(identityOf(document))).join(', ')}; no workload manifest was applied`);
+    const names = mismatched.map((document) => foundationRbacIdentity(identityOf(document)));
+    throw afterWrite(null, { ...record, decision: 'changed-unverified', mismatched: names },
+      `Foundation runtime RBAC did not read back as the target profile: ${names.join(', ')}. It was sent, so the cluster RBAC may already be changed. No workload manifest was applied.`);
   }
   return { ...record, decision: 'applied', verifiedAt: now().toISOString() };
+}
+
+// An error after a write: the step's record travels with it, so the caller records the possible change.
+function afterWrite(cause, prerequisiteRecord, message) {
+  const error = new Error(cause ? `${message} (${cause.message})` : message);
+  error.prerequisiteRecord = prerequisiteRecord;
+  return error;
 }
 
 export const OS_SHELL_CONTROL_CA = 'opensphere-shell-control-ca';
@@ -204,23 +225,35 @@ export function publishOsShellFoundationCa({ kubectl }) {
   if (typeof certificate !== 'string' || !CERTIFICATE_PEM.test(certificate)) {
     throw new Error(`${OS_SHELL_CA_SOURCE_NAMESPACE}/${OS_SHELL_CONTROL_CA} does not hold only a public CA certificate`);
   }
-  kubectl(['apply', '-f', '-'], {
-    capture: true,
-    input: `${JSON.stringify({
-      apiVersion: 'v1',
-      kind: 'ConfigMap',
-      metadata: {
-        name: OS_SHELL_CONTROL_CA,
-        namespace: FOUNDATION_NAMESPACE,
-        labels: { 'app.kubernetes.io/managed-by': 'opensphere-setup-cli' }
-      },
-      data: { 'ca.crt': certificate }
-    })}\n`
-  });
-  const projected = JSON.parse(kubectl(['-n', FOUNDATION_NAMESPACE, 'get', 'configmap', OS_SHELL_CONTROL_CA, '-o', 'json'], { capture: true }));
+  try {
+    kubectl(['apply', '-f', '-'], {
+      capture: true,
+      input: `${JSON.stringify({
+        apiVersion: 'v1',
+        kind: 'ConfigMap',
+        metadata: {
+          name: OS_SHELL_CONTROL_CA,
+          namespace: FOUNDATION_NAMESPACE,
+          labels: { 'app.kubernetes.io/managed-by': 'opensphere-setup-cli' }
+        },
+        data: { 'ca.crt': certificate }
+      })}\n`
+    });
+  } catch (error) {
+    throw afterWrite(error, { ...record, decision: 'apply-outcome-unknown' },
+      `${FOUNDATION_NAMESPACE}/${OS_SHELL_CONTROL_CA} apply did not complete; it may already be changed.`);
+  }
+  let projected;
+  try {
+    projected = JSON.parse(kubectl(['-n', FOUNDATION_NAMESPACE, 'get', 'configmap', OS_SHELL_CONTROL_CA, '-o', 'json'], { capture: true }));
+  } catch (error) {
+    throw afterWrite(error, { ...record, decision: 'changed-unverified' },
+      `${FOUNDATION_NAMESPACE}/${OS_SHELL_CONTROL_CA} was sent but could not be read back; it may already be changed.`);
+  }
   if (canonical(Object.keys(projected?.data ?? {})) !== canonical(['ca.crt'])
       || projected.data['ca.crt'] !== certificate || projected.binaryData) {
-    throw new Error(`${FOUNDATION_NAMESPACE}/${OS_SHELL_CONTROL_CA} did not read back as exactly the public CA certificate`);
+    throw afterWrite(null, { ...record, decision: 'changed-unverified' },
+      `${FOUNDATION_NAMESPACE}/${OS_SHELL_CONTROL_CA} did not read back as exactly the public CA certificate; it was sent, so it may already be changed.`);
   }
   return { ...record, decision: 'published', certificateSha256: sha256(certificate) };
 }
@@ -234,11 +267,18 @@ export function applyComponentRuntimePrerequisites(prepared, changedComponents, 
 }) {
   const records = [];
   const record = (value) => { records.push(value); onRecord(value); };
+  // A step that fails after its write still reports that write before the failure propagates.
+  const run = (step) => {
+    try { record(step()); } catch (error) {
+      if (error?.prerequisiteRecord) record(error.prerequisiteRecord);
+      throw error;
+    }
+  };
   const foundationRbac = prepared?.foundation?.foundationRuntimeRbac;
   if (changedComponents.includes('extensionController') && foundationRbac) {
-    record(applyFoundationRuntimeRbac(foundationRbac, { kubectl, ...(now ? { now } : {}) }));
+    run(() => applyFoundationRuntimeRbac(foundationRbac, { kubectl, ...(now ? { now } : {}) }));
   }
-  if (changedComponents.includes('osShellControl')) record(publishOsShellFoundationCa({ kubectl }));
+  if (changedComponents.includes('osShellControl')) run(() => publishOsShellFoundationCa({ kubectl }));
   return records;
 }
 
@@ -248,10 +288,15 @@ export function describeComponentRuntimePrerequisite(record) {
     return {
       applied: `Foundation 실행 RBAC ${record.objects.length}개 적용, 재확인 일치 (${revision})`,
       unchanged: `Foundation 실행 RBAC 변경 없음, 적용 생략 (${revision})`,
-      'not-declared': `Foundation 실행 RBAC 선언 없음 (${revision})`
+      'not-declared': `Foundation 실행 RBAC 선언 없음 (${revision})`,
+      'changed-unverified': `Foundation 실행 RBAC를 보냈지만 재확인이 맞지 않음. 클러스터 RBAC가 이미 바뀌었을 수 있음 (${revision})`,
+      'apply-outcome-unknown': `Foundation 실행 RBAC 적용이 끝나지 않음. 일부가 바뀌었을 수 있음 (${revision})`
     }[record.decision];
   }
-  return record.decision === 'published'
-    ? `OS Shell CA 공개 인증서를 ${record.namespace}에 게시, 재확인 일치`
-    : `${record.namespace} namespace 없음, OS Shell CA 게시 생략`;
+  return {
+    published: `OS Shell CA 공개 인증서를 ${record.namespace}에 게시, 재확인 일치`,
+    skipped: `${record.namespace} namespace 없음, OS Shell CA 게시 생략`,
+    'changed-unverified': `OS Shell CA를 ${record.namespace}에 보냈지만 재확인이 맞지 않음. 이미 바뀌었을 수 있음`,
+    'apply-outcome-unknown': `OS Shell CA 적용이 끝나지 않음. ${record.namespace}에서 이미 바뀌었을 수 있음`
+  }[record.decision];
 }

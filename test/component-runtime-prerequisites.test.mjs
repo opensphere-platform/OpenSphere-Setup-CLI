@@ -271,7 +271,7 @@ test('Foundation step replaces every rules list in full and refuses a merged rea
 
   const merging = fakeCluster({ objects: live, applyMode: 'merge' });
   assert.throws(() => applyFoundationRuntimeRbac(plan, { kubectl: merging.kubectl }),
-    /did not read back as the target profile: Role\/opensphere-foundation\/opensphere-foundation-contract-controller; no workload manifest was applied/);
+    /did not read back as the target profile: Role\/opensphere-foundation\/opensphere-foundation-contract-controller\. It was sent, so the cluster RBAC may already be changed\. No workload manifest was applied\./);
 
   // Fields a client-side apply cannot remove fail closed exactly as verifyFoundationProfile would.
   for (const mutate of [
@@ -423,7 +423,33 @@ test('a Foundation read-back mismatch refuses before any workload manifest of th
     { onPrerequisite: (record) => recorded.push(record) }), /did not read back/);
   assert.equal(events.some((event) => event.startsWith('manifest:')), false);
   assert.equal(events.some((event) => event.startsWith('wait:')), false);
-  assert.deepEqual(recorded, []);
+  // Review 2026-10-11 (Phobos): the RBAC was sent, so the failure is recorded as a possible change,
+  // never as "no workload applied, nothing changed".
+  assert.deepEqual(recorded.map((record) => [record.step, record.decision, record.mismatched]),
+    [['foundation-runtime-rbac', 'changed-unverified', ['Role/opensphere-foundation/opensphere-foundation-contract-controller']]]);
+});
+
+test('a prerequisite whose apply or read-back fails after the write records that the cluster may be changed', () => {
+  const failing = (fail) => {
+    const cluster = fakeCluster({ objects: [...liveProfile(), caConfigMap('opensphere-console', { 'ca.crt': CA })] });
+    return { ...cluster, kubectl: (args, options = {}) => {
+      if (fail(args)) throw new Error('kubectl: connection reset');
+      return cluster.kubectl(args, options);
+    } };
+  };
+  const cases = [
+    [['extensionController'], (args) => args[0] === 'apply', 'foundation-runtime-rbac', 'apply-outcome-unknown', /apply did not complete; the cluster RBAC may be partly changed/],
+    [['extensionController'], (args) => args.includes('get') && args.includes('roles.rbac.authorization.k8s.io'), 'foundation-runtime-rbac', 'changed-unverified', /was sent but could not be read back/],
+    [['osShellControl'], (args) => args[0] === 'apply', 'os-shell-ca-foundation', 'apply-outcome-unknown', /apply did not complete; it may already be changed/],
+    [['osShellControl'], (args) => args[0] === '-n' && args[1] === 'opensphere-foundation' && args.includes('configmap'), 'os-shell-ca-foundation', 'changed-unverified', /was sent but could not be read back/]
+  ];
+  for (const [changed, fail, step, decision, message] of cases) {
+    const recorded = [], cluster = failing(fail);
+    assert.throws(() => applyComponentRuntimePrerequisites({ foundation: { foundationRuntimeRbac: forwardPlan() } }, changed,
+      { kubectl: cluster.kubectl, onRecord: (record) => recorded.push(record) }), message);
+    assert.deepEqual(recorded.map((record) => [record.step, record.decision]), [[step, decision]], step + ' ' + decision);
+    assert.ok(describeComponentRuntimePrerequisite(recorded[0]).includes('바뀌었을 수 있음'), 'the console line says it may be changed');
+  }
 });
 
 test('an unchanged Foundation profile and an unchanged OS Shell leave both steps out', () => {
