@@ -32,6 +32,8 @@ import { assertForwardRepair, installationRecordDigest } from './forward-repair.
 import {resolveInstallationRelease} from './installation-release.mjs';
 import { takeSourceArtifactCredential } from './source-artifact-credential.mjs';
 import { assertKubectl, kubectl } from './process.mjs';
+import { applyInstallationCaTrust, inspectInstallationCa, planInstallationCaTrust, readInstalledConsoleCa,
+  verifyServedByCa, verifyServedBySystemTrust } from './installation-ca.mjs';
 import { verifyInstallation } from './verify.mjs';
 import { defaultConsoleUrl, normalizeConsoleUrl } from './console-url.mjs';
 import { selectAuthEnvironment } from './auth-environment.mjs';
@@ -185,6 +187,10 @@ Usage:
       [--registry-username <github-login> --registry-token-stdin]
       [--repair-plan | --forward-repair <reviewed-installation-record-sha256>]
       [--one-way-recovery-plan | --one-way-recovery <reviewed-installation-record-sha256>]
+  opensphere-setup trust-ca [--context <kube-context>] [--console <https-origin>]
+      [--expect-sha256 <fingerprint> --apply]
+      Shows the installation CA that signs the Console and whether it really serves it; with --apply
+      and the fingerprint you compared, adds exactly that CA to Windows CurrentUser\Root.
   opensphere-setup verify [--context <kube-context>] [--console <https-origin>]
       [--complete-installation]
   opensphere-setup recovery-drill --component <supabase|gitea> --manifest-key <s3-object-key>
@@ -697,6 +703,32 @@ async function main() {
     return;
   }
 
+  if (command === 'trust-ca') {
+    assertKubectl();
+    const consoleUrl = suppliedConsoleUrl || installedConsoleUrl();
+    if (!consoleUrl) throw new Error('No installed Console is recorded in this context; pass --console');
+    const ca = inspectInstallationCa(readInstalledConsoleCa({ kubectl }));
+    const served = await verifyServedByCa(consoleUrl, ca.pem);
+    const apply = hasOption('--apply');
+    const plan = planInstallationCaTrust({ ca, served, consoleUrl, apply,
+      expectedSha256: hasOption('--expect-sha256') ? option('--expect-sha256', '') : undefined });
+    console.log(JSON.stringify(plan, null, 2));
+    if (!apply) {
+      if (plan.eligible || plan.blockers.every((b) => b.startsWith('ExpectedFingerprintRequired'))) {
+        console.error(`[다음] 지문 ${plan.sha256} 를 설치 기록이나 관리자에게 받은 값과 비교한 뒤, 같으면
+`
+          + `       opensphere-setup trust-ca${hasOption('--context') ? ` --context ${option('--context', '')}` : ''} --expect-sha256 ${plan.sha256} --apply`);
+      }
+      return;
+    }
+    if (!plan.eligible) throw new Error(`Installation CA not trusted: ${plan.blockers.join('; ')}`);
+    await applyInstallationCaTrust(ca);
+    const after = await verifyServedBySystemTrust(consoleUrl);
+    console.log(JSON.stringify({ trusted: ca.sha256, store: plan.store, systemTrustVerifiesConsole: after.authorized,
+      ...(after.authorized ? {} : { error: after.error }) }, null, 2));
+    if (!after.authorized) process.exitCode = 1;
+    return;
+  }
   if (command === 'verify') {
     assertKubectl();
     const complete=hasOption('--complete-installation');

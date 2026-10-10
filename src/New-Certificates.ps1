@@ -2,7 +2,12 @@ param(
   [Parameter(Mandatory = $true)][string]$OutputDirectory,
   [string[]]$DnsNames = @(),
   # A Console reached by address needs an iPAddress SAN; browsers ignore an IP written as a DNS name.
-  [string[]]$IpAddresses = @()
+  [string[]]$IpAddresses = @(),
+  # 2026-10-10: the CA is named after the installation. Every installation used to issue a CA called
+  # "CN=OpenSphere Installation CA"; a workstation that trusted one of them failed every other one with
+  # a signature error (Windows selects the trusted CA by name). Empty keeps the legacy name for callers
+  # that have no installation identity yet.
+  [string]$InstallationId = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,8 +15,14 @@ $ErrorActionPreference = 'Stop'
 
 $notBefore = [DateTimeOffset]::UtcNow.AddMinutes(-5)
 $caKey = [System.Security.Cryptography.ECDsa]::Create([System.Security.Cryptography.ECCurve+NamedCurves]::nistP256)
+if ($InstallationId -and $InstallationId -notmatch '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$') {
+  throw "InstallationId must be a lowercase UUID"
+}
+$caSubject = if ($InstallationId) {
+  "CN=OpenSphere Installation CA $($InstallationId.Substring(0, 8)), OU=installation $InstallationId, O=OpenSphere"
+} else { 'CN=OpenSphere Installation CA' }
 $caRequest = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
-  'CN=OpenSphere Installation CA',
+  [System.Security.Cryptography.X509Certificates.X500DistinguishedName]::new($caSubject),
   $caKey,
   [System.Security.Cryptography.HashAlgorithmName]::SHA256
 )
@@ -25,11 +36,18 @@ $caRequest.CertificateExtensions.Add(
     $true
   )
 )
+# Key identifiers let a client pick the issuing CA by key, not only by name.
+$caRequest.CertificateExtensions.Add(
+  [System.Security.Cryptography.X509Certificates.X509SubjectKeyIdentifierExtension]::new($caRequest.PublicKey, $false)
+)
 $caCertificate = $caRequest.CreateSelfSigned($notBefore, $notBefore.AddYears(5))
 
 $key = [System.Security.Cryptography.ECDsa]::Create([System.Security.Cryptography.ECCurve+NamedCurves]::nistP256)
+# The leaf names the Console host it serves (the first requested name), not "localhost".
+$primaryName = @($DnsNames + $IpAddresses | Where-Object { $_ -and $_ -notmatch '[\s/,=+]' } | Select-Object -First 1)
+$leafSubject = if ($primaryName.Count -gt 0) { "CN=$($primaryName[0])" } else { 'CN=localhost' }
 $request = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
-  'CN=localhost',
+  [System.Security.Cryptography.X509Certificates.X500DistinguishedName]::new($leafSubject),
   $key,
   [System.Security.Cryptography.HashAlgorithmName]::SHA256
 )
@@ -66,6 +84,12 @@ $request.CertificateExtensions.Add(
     [System.Security.Cryptography.X509Certificates.X509KeyUsageFlags]::DigitalSignature,
     $true
   )
+)
+$request.CertificateExtensions.Add(
+  [System.Security.Cryptography.X509Certificates.X509AuthorityKeyIdentifierExtension]::CreateFromCertificate($caCertificate, $true, $false)
+)
+$request.CertificateExtensions.Add(
+  [System.Security.Cryptography.X509Certificates.X509SubjectKeyIdentifierExtension]::new($request.PublicKey, $false)
 )
 $serial = New-Object byte[] 16
 [System.Security.Cryptography.RandomNumberGenerator]::Fill($serial)

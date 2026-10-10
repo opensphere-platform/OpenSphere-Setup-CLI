@@ -26,9 +26,15 @@ test('installation CA private key is never written, so trusting the CA cannot ex
   assert.doesNotMatch(source, /\$caCertificate\.(CopyWithPrivateKey|Export\(|ExportPkcs)/);
 });
 
-test('local CA installer validates the exact CA identity and writes only CurrentUser Root', async () => {
+test('local CA installer validates the CA identity and the reviewed fingerprint and writes only CurrentUser Root', async () => {
   const source = await readFile(join(ROOT, 'src', 'Install-LocalDevelopmentCa.ps1'), 'utf8');
-  assert.match(source, /Subject -ne 'CN=OpenSphere Installation CA'/);
+  // The legacy shared name or the per-installation name (2026-10-10), self-signed.
+  assert.match(source, /Subject -eq 'CN=OpenSphere Installation CA'/);
+  assert.match(source, /OU=installation/);
+  assert.match(source, /Subject -ne \$certificate\.Issuer/);
+  // The fingerprint the operator compared is mandatory and checked before any store access.
+  assert.match(source, /\[Parameter\(Mandatory = \$true\)\]\[string\]\$ExpectedSha256/);
+  assert.ok(source.indexOf('GetCertHashString') < source.indexOf('X509Store]::new'));
   assert.match(source, /X509BasicConstraintsExtension/);
   assert.match(source, /CertificateAuthority/);
   assert.match(source, /StoreName\]::Root/);

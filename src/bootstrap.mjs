@@ -49,6 +49,7 @@ import {
   parseShellTlsSecretRef,
   shellTlsSecretRefText
 } from './shell-tls.mjs';
+import { inspectInstallationCa } from './installation-ca.mjs';
 import {
   REGISTRY_PULL_SECRET,
   registryPullSecretManifest,
@@ -2876,7 +2877,7 @@ export async function bootstrap(lock, {
     progress?.item('설치 경계', 'Recovery 및 기타 선택 모듈 설정은 bootstrap 이후 Console에서 수행');
 
     progress?.step('Console HTTPS 인증서와 TLS Secret 준비');
-    recordInstallationState(
+    const preparedState = recordInstallationState(
       lock,
       cluster.storageClass,
       initialAdmin,
@@ -2896,7 +2897,9 @@ export async function bootstrap(lock, {
       run('pwsh', [
         '-NoProfile', '-NonInteractive', '-File', certificateGenerator.path,
         '-OutputDirectory', work,
-        ...(isIP(consoleHost) ? ['-IpAddresses', consoleHost] : ['-DnsNames', consoleHost])
+        ...(isIP(consoleHost) ? ['-IpAddresses', consoleHost] : ['-DnsNames', consoleHost]),
+        // 2026-10-10: the CA is named after this installation so it cannot be mistaken for another one.
+        ...(preparedState?.config?.installationId ? ['-InstallationId', preparedState.config.installationId] : [])
       ]);
     } finally {
       await certificateGenerator.cleanup();
@@ -2906,6 +2909,11 @@ export async function bootstrap(lock, {
     const ca = join(work, 'ca.crt');
     if (externalShellTls) ensureExternalShellTlsSecret(effectiveShellTls, externalShellTls);
     else ensureTlsSecret('opensphere-console', 'shell-tls', certificate, key, ca);
+    // The fingerprint an operator compares before trusting this installation's CA (trust-ca).
+    // An existing Secret keeps its CA; the fingerprint shown is the one actually installed.
+    const installedCa = externalShellTls ? null : inspectInstallationCa(
+      Buffer.from(readSecret('opensphere-console', 'shell-tls').data?.['ca.crt'] ?? '', 'base64').toString('utf8'));
+    if (installedCa) progress?.item('설치 CA', `${installedCa.subject} · SHA-256 ${installedCa.sha256}`);
 
     // Until 2026-09-23 this was also limited to a loopback Console. The limit protected nothing:
     // New-Certificates.ps1 writes only ca.crt and discards the CA private key, so the trusted CA
@@ -2919,12 +2927,13 @@ export async function bootstrap(lock, {
       && process.platform === 'win32'
     ) {
       const localCa = join(work, 'opensphere-local-development-ca.crt');
-      await writeFile(localCa, await readFile(ca, 'utf8'), 'utf8');
+      await writeFile(localCa, installedCa.pem, 'utf8');
       const caInstaller = await materializeRuntimeAsset('Install-LocalDevelopmentCa.ps1', HERE);
       try {
         run('pwsh', [
           '-NoProfile', '-NonInteractive', '-File', caInstaller.path,
-          '-CertificatePath', localCa
+          '-CertificatePath', localCa,
+          '-ExpectedSha256', installedCa.sha256
         ]);
       } finally {
         await caInstaller.cleanup();
