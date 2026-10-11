@@ -820,6 +820,53 @@ test('component release applies the complete single-owner C_API authority manife
   assert.match(selected[0].yaml, /kind: Service/);
 });
 
+// component-runtime-prerequisites.mjs: each preparation compares its controller's Foundation profile with the
+// release it will run over, and the target's prerequisite records are kept in the transition record.
+function prerequisiteRuntime(previous, events, prepared, records, options) {
+  const operations = runtime(previous, events, options);
+  const prepare = operations.prepareComponentRelease;
+  operations.prepareComponentRelease = async (release, ...args) => {
+    prepared.push({ release: release.sourceRevision, installed: args[4]?.installedLock?.sourceRevision ?? null });
+    return prepare(release, ...args);
+  };
+  const install = operations.installPreparedComponentRelease;
+  operations.installPreparedComponentRelease = (release, preparedRelease, storageClass, consoleUrl, label, changed, progress, installOptions = {}) => {
+    installOptions.onPrerequisite({ step: 'foundation-runtime-rbac', decision: 'applied', sourceRevision: release.sourceRevision });
+    return install(release, preparedRelease, storageClass, consoleUrl, label, changed, progress, installOptions);
+  };
+  const recordState = operations.recordInstallationState;
+  operations.recordInstallationState = (release, storageClass, admin, url, auth, tls, phase, stateOptions) => {
+    records.push({ phase, release: release.sourceRevision, prerequisites: stateOptions?.transition?.prerequisites ?? null });
+    return recordState(release, storageClass, admin, url, auth, tls, phase, stateOptions);
+  };
+  return operations;
+}
+
+test('component release prepares runtime prerequisites against the opposite release and records the target ones', async () => {
+  const previous = lock('1'.repeat(40), 'a');
+  previous.trust = LOCAL_EDGE_TRUST;
+  delete previous.releaseBom;
+  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST, undefined, { auxiliaryArtifacts: previous.auxiliaryArtifacts });
+  const target = componentTarget(previous, '2'.repeat(40), ['extensionController']);
+  const prepared = [], records = [];
+  await upgrade(previous, target, { runtime: prerequisiteRuntime(previous, [], prepared, records,
+    { recordedInventory: [{ name: 'complete-release' }] }) });
+  assert.deepEqual(prepared, [
+    { release: target.sourceRevision, installed: previous.sourceRevision },
+    { release: previous.sourceRevision, installed: target.sourceRevision }
+  ]);
+  const installing = records.filter((record) => record.phase === 'Installing');
+  assert.equal(installing[0].prerequisites, null, 'the claim precedes any prerequisite');
+  assert.deepEqual(installing.at(-1).prerequisites,
+    [{ step: 'foundation-runtime-rbac', decision: 'applied', sourceRevision: target.sourceRevision }]);
+
+  // A failed target restores the previous release through the same step; its record is not the target's.
+  const failedRecords = [];
+  await assert.rejects(upgrade(previous, target, { runtime: prerequisiteRuntime(previous, [], [], failedRecords,
+    { failTarget: true, recordedInventory: [{ name: 'complete-release' }] }) }), /previous release was restored/);
+  assert.equal(failedRecords.some((record) => record.prerequisites?.some((item) => item.sourceRevision === previous.sourceRevision)), false);
+});
+
 test('component release refuses to overwrite a missing complete release inventory', async () => {
   const previous = lock('1'.repeat(40), 'a');
   previous.trust = LOCAL_EDGE_TRUST;

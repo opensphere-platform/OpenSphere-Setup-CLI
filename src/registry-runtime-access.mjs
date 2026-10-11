@@ -71,7 +71,20 @@ export function renderRegistryKubernetesEgress(source, rules) {
   return source.replace(pattern, (_, indent) => rules.map(rule => `${indent}- ${JSON.stringify(rule)}`).join('\n'));
 }
 
-export function discoverConsoleApiCiliumPolicy(rules,kubectl) {
+// CIDR peers do not ordinarily select node-hosted API servers under Cilium, so a workload whose NetworkPolicy
+// carries the egress slot also gets the kube-apiserver entity on the same discovered HTTPS ports. Closed by
+// manifest path: each entry selects exactly the Pods its NetworkPolicy selects, and any other manifest gets none.
+export const KUBERNETES_API_CILIUM_POLICIES=Object.freeze({
+  'apps/console-api/deploy.yaml':Object.freeze({name:'opensphere-console-api-kubernetes-egress',
+    matchLabels:Object.freeze({'app.kubernetes.io/name':'opensphere-console-api'})}),
+  // Console d429dfe9+ NetworkPolicy opensphere-shell-api-kubernetes-egress (OS Shell system actor admission).
+  'apps/os-shell-control/deploy.yaml':Object.freeze({name:'opensphere-shell-api-kubernetes-egress',
+    matchLabels:Object.freeze({app:'opensphere-shell-api'})})
+});
+
+export function discoverKubernetesApiCiliumPolicy(manifestPath,rules,kubectl) {
+  const target=Object.hasOwn(KUBERNETES_API_CILIUM_POLICIES,manifestPath)?KUBERNETES_API_CILIUM_POLICIES[manifestPath]:null;
+  if(!target)return '';
   const text=kubectl(['get','customresourcedefinition','ciliumnetworkpolicies.cilium.io','--ignore-not-found','-o','json'],{capture:true});
   if(!text.trim())return '';
   const definition=JSON.parse(text);
@@ -82,8 +95,8 @@ export function discoverConsoleApiCiliumPolicy(rules,kubectl) {
   const ports=[...new Set(rules.map(rule=>rule.ports[0].port))].sort((a,b)=>a-b)
     .map(port=>({port:String(port),protocol:'TCP'}));
   return '\n---\n'+JSON.stringify({apiVersion:'cilium.io/v2',kind:'CiliumNetworkPolicy',
-    metadata:{name:'opensphere-console-api-kubernetes-egress',namespace:'opensphere-console',
+    metadata:{name:target.name,namespace:'opensphere-console',
       labels:{'app.kubernetes.io/part-of':'opensphere-console','app.kubernetes.io/managed-by':'opensphere-setup'}},
-    spec:{endpointSelector:{matchLabels:{'app.kubernetes.io/name':'opensphere-console-api'}},
+    spec:{endpointSelector:{matchLabels:{...target.matchLabels}},
       egress:[{toEntities:['kube-apiserver'],toPorts:[{ports}]}]}})+'\n';
 }

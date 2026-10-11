@@ -63,6 +63,8 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     'clusterrolebinding/opensphere-registry',
     'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
     'clusterrolebinding/opensphere-shell-runtime-token-reviewer',
+    // OS Shell API admission of the Foundation system actor, bound to the same reviewer role (Console d429dfe9).
+    'clusterrolebinding/opensphere-shell-api-token-reviewer',
     'clusterrolebinding/opensphere-cluster-manager-runtime',
     'clusterrolebinding/opensphere-hiss-diagnostics',
     'clusterrolebinding/opensphere-extension-installation-profile-reader',
