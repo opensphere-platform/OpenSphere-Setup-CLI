@@ -3,7 +3,7 @@ import {run} from './process.mjs';
 import {POLICY,BINDING,matchesWriterFence} from './psss-crossplane-writer-fence.mjs';
 import {observePsssCrossplaneHandoff,createPsssCrossplaneHandoffClient} from './psss-crossplane-handoff-preflight.mjs';
 
-const PINNED_SHA='ec055d3d18d1371117d772dce0d8cdb52d267ab093de0849ff83fda76b4f9fef';
+const PINNED_SHA='77cdd0f63d7518173d86105228c87083225899632ca101bb6953f15e07fd0f22';
 const resources=[POLICY,BINDING];
 const canonical=value=>JSON.stringify(order(value));
 function order(value){return Array.isArray(value)?value.map(order):value&&typeof value==='object'
