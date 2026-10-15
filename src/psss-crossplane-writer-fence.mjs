@@ -6,7 +6,10 @@ export const POLICY_NAME='opensphere-psss-crossplane-writer-fence';
 export const CM_USERNAME='system:serviceaccount:opensphere-console:opensphere-cluster-manager-runtime';
 
 const protectedName="request.operation == 'DELETE' ? oldObject.metadata.name : object.metadata.name";
-const expression=`request.namespace != 'crossplane-system' &&
+// A cluster-scoped request (CRD, ClusterRole, webhook, Namespace) has no request.namespace. Reading it unguarded was a
+// CEL error, and with failurePolicy Fail every cluster-scoped Cluster Manager write was denied (RKE2, 2026-10-07 to
+// 2026-10-16: the HISS Shared Observability CRD install failed on it).
+const expression=`(!has(request.namespace) || request.namespace != 'crossplane-system') &&
   request.resource.group != 'crossplane.io' &&
   !request.resource.group.endsWith('.crossplane.io') &&
   !(request.resource.group == 'apiextensions.k8s.io' &&

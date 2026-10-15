@@ -10,6 +10,10 @@ test('Crossplane writer fence is scoped to the CM service account and has no mis
  assert.equal(Object.hasOwn(BINDING.spec,'paramRef'),false);
  assert.deepEqual(POLICY.spec.matchConstraints.resourceRules[0].operations,['CREATE','UPDATE','DELETE']);
  assert.match(POLICY.spec.validations[0].expression,/request\.namespace != 'crossplane-system'/);
+ // Cluster-scoped requests carry no namespace; the guard keeps the expression from erroring (and denying) on them.
+ assert.ok(POLICY.spec.validations[0].expression.startsWith("(!has(request.namespace) || request.namespace != 'crossplane-system') &&"));
+ assert.ok(!/(^|[^.(!])request\.namespace\b/.test(POLICY.spec.validations[0].expression.replace("!has(request.namespace) || request.namespace != 'crossplane-system'",'')),
+   'request.namespace is read only behind has()');
  assert.match(POLICY.spec.validations[0].expression,/request\.resource\.group != 'crossplane.io'/);
  assert.match(POLICY.spec.validations[0].expression,/customresourcedefinitions/);
 });
