@@ -30,7 +30,7 @@ const projection = r=>({apiVersion:r.apiVersion,kind:r.kind,name:r.metadata?.nam
   imagePullSecrets:r.imagePullSecrets||[],aggregateLabels:Object.fromEntries(Object.entries(r.metadata?.labels||{}).filter(([k])=>k.startsWith('rbac.authorization.k8s.io/aggregate-to-')))});
 const fail = (code,message,evidence)=>Object.assign(new Error(message),{code,...(evidence?{evidence}:{})});
 export const HISS_VALIDATION_ARTIFACT = 'deploy/installation-profiles/hiss-validation.yaml';
-const VALIDATION_SHA256 = 'f079f22c8420c196f7ad834f42fc0d8acddf8b4c5134d9522fc5499fa219957d';
+const VALIDATION_SHA256 = '286b837d4104a8936cee5169f2a70f52fb20490f0df5c3ac6f6037c2cde342d4';
 
 export function verifyHissValidationArtifact(raw) {
   if (typeof raw !== 'string' || digest(raw) !== VALIDATION_SHA256) throw fail('UNTRUSTED_PROFILE','HISS validation bytes differ from the approved contract');
