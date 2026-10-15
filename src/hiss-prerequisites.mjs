@@ -9,12 +9,14 @@ import { installTarget } from './install-target.mjs';
 export const HISS_EXECUTION_PROFILE = Object.freeze({
   id: 'hiss-chart-execution-v1',
   sourceRepository: 'opensphere-platform/OpenSphere-shell-clusterManager',
-  sourceRevision: '44d4a7595ee3609ed1a199ce3294bd7f194d4b47',
+  // H2 (2026-10-16, user decisions HD2 and HD4): adds the node log agent identity and a second executor Role.
+  // Additive only; creation never rewrites an object that H1 prepared.
+  sourceRevision: '20062177e2a2af22ff95a5a26670865b443341cb',
   sourcePath: 'deploy/hiss-execution-profile.proposed.json',
   // Console delivery must use the release's Console revision, never the owner
   // revision above. This path is metadata only; no artifact is fetched here.
   consoleArtifactPath: 'deploy/installation-profiles/hiss-execution.json',
-  sha256: '9ddee9740e7ff194eb88a8093d8b631405a1da290209e748bf265bd17441118b',
+  sha256: 'acd07dcf02555f763ea14c6dae9566dc417cc81b54bda8f22190c79d593a7af2',
 });
 const groups = {Namespace:['v1','namespaces'],ServiceAccount:['v1','serviceaccounts'],
   Role:['rbac.authorization.k8s.io/v1','roles'],RoleBinding:['rbac.authorization.k8s.io/v1','rolebindings'],
@@ -47,6 +49,25 @@ export function prepareHissValidation(raw, scope, {runner=run}={}) {
     {capture:true,input:raw});
   return {applied:true,resourceCount:7,installationComplete:false};
 }
+// Storage observation (H2, user decision HD4): a read-only Longhorn Role for Cluster Manager and one NetworkPolicy
+// admitting Prometheus to longhorn-manager :9500. Source: Cluster Manager deploy/hiss-storage-observation.yaml at
+// 20062177e2a2af22ff95a5a26670865b443341cb. Applied only where Longhorn runs; elsewhere it is NotApplicable.
+const STORAGE_OBSERVATION_SHA256 = '5117b4f3c8b8af230a0d108275b981604729e7767ec984570182640680dd2a4c';
+export function verifyHissStorageObservationArtifact(raw) {
+  if (typeof raw !== 'string' || digest(raw) !== STORAGE_OBSERVATION_SHA256) throw fail('UNTRUSTED_PROFILE','HISS storage observation bytes differ from the approved contract');
+  return raw;
+}
+export function prepareHissStorageObservation(raw, scope, {runner=run, apply=false}={}) {
+  const target = installTarget(scope);
+  verifyHissStorageObservationArtifact(raw);
+  const present = args => Boolean(String(runner('kubectl',['--context',target.context,'get',...args,'--ignore-not-found','-o','name','--request-timeout=10s'],{capture:true})||'').trim());
+  if (!present(['customresourcedefinition','volumes.longhorn.io']) || !present(['namespace','longhorn-system']))
+    return {state:'NotApplicable',reason:'LonghornNotInstalled',applied:false};
+  if (!apply) return {state:'NeedsPreparation',applied:false,resourceCount:3};
+  runner('kubectl',['--context',target.context,'apply','--server-side','--field-manager=opensphere-setup-hiss','-f','-','--request-timeout=20s'],
+    {capture:true,input:raw});
+  return {state:'Applied',applied:true,resourceCount:3};
+}
 const reference = (kind,name,namespace)=>({apiVersion:groups[kind][0],kind,metadata:{name,...(namespace?{namespace}:{})}});
 
 function observationIndex(returned, requested) {
@@ -70,7 +91,7 @@ export function verifyHissExecutionProfile(raw,scope) {
   installTarget(scope);
   if(typeof raw!=='string'||Buffer.byteLength(raw)>1024*1024||digest(raw)!==HISS_EXECUTION_PROFILE.sha256)throw fail('UNTRUSTED_PROFILE','HISS prerequisite bytes differ from the captured contract');
   const profile=JSON.parse(raw);
-  if(profile.schemaVersion!==1||profile.status!=='proposed-not-applied'||profile.resources.length!==96)throw fail('UNTRUSTED_PROFILE','HISS prerequisite envelope differs');
+  if(profile.schemaVersion!==1||profile.status!=='proposed-not-applied'||profile.resources.length!==101)throw fail('UNTRUSTED_PROFILE','HISS prerequisite envelope differs');
   return profile;
 }
 function references(resources) {
