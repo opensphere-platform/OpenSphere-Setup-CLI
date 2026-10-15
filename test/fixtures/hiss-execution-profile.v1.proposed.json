@@ -5595,6 +5595,158 @@
           "namespace": "opensphere-console"
         }
       ]
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "opensphere-his-log-agent",
+        "namespace": "monitoring",
+        "labels": {
+          "app.kubernetes.io/name": "opensphere-his-log-agent",
+          "app.kubernetes.io/managed-by": "OpenSphere-Setup",
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "automountServiceAccountToken": true
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "opensphere-his-log-agent",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "pods",
+            "namespaces",
+            "nodes"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "opensphere-his-log-agent",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "opensphere-his-log-agent"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-his-log-agent",
+          "namespace": "monitoring"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "opensphere-hiss-observability-h2-executor",
+        "namespace": "monitoring",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "daemonsets"
+          ],
+          "resourceNames": [
+            "opensphere-his-log-agent"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "resourceNames": [
+            "opensphere-his-log-agent-config"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ]
+        },
+        {
+          "apiGroups": [
+            "monitoring.coreos.com"
+          ],
+          "resources": [
+            "servicemonitors"
+          ],
+          "resourceNames": [
+            "opensphere-his-longhorn-manager"
+          ],
+          "verbs": [
+            "update",
+            "patch",
+            "delete"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "opensphere-hiss-observability-h2-executor",
+        "namespace": "monitoring",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "opensphere-hiss-observability-h2-executor"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-cluster-manager-runtime",
+          "namespace": "opensphere-console"
+        }
+      ]
     }
   ]
 }
