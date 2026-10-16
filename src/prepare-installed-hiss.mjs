@@ -1,7 +1,8 @@
 import profile from './hiss-preparation-profile.json' with {type:'json'};
 import validation from './hiss-validation-artifact.json' with {type:'json'};
 import storageObservation from './hiss-storage-observation-artifact.json' with {type:'json'};
-import {createHissPrerequisiteClient,prepareHissPrerequisites,prepareHissStorageObservation,prepareHissValidation,verifyHissStorageObservationArtifact,verifyHissValidationArtifact} from './hiss-prerequisites.mjs';
+import bindingCrd from './hiss-observability-binding-crd-artifact.json' with {type:'json'};
+import {createHissPrerequisiteClient,prepareHissObservabilityBindingCrd,prepareHissPrerequisites,prepareHissStorageObservation,prepareHissValidation,verifyHissObservabilityBindingCrd,verifyHissStorageObservationArtifact,verifyHissValidationArtifact} from './hiss-prerequisites.mjs';
 import {run} from './process.mjs';
 import {installTarget} from './install-target.mjs';
 
@@ -22,6 +23,7 @@ export async function prepareInstalledHiss({context,apply=false,runner=run,onPro
   const target=observe(),client=createHissPrerequisiteClient(target.scope,runner);
   verifyHissValidationArtifact(validation.yaml);
   verifyHissStorageObservationArtifact(storageObservation.yaml);
+  verifyHissObservabilityBindingCrd(bindingCrd.yaml);
   const assertTarget=()=>{if(JSON.stringify(observe())!==JSON.stringify(target))throw Error('Installation or cluster changed; no further HISS preparation writes allowed');};
   const result=await prepareHissPrerequisites(JSON.stringify(profile,null,2)+'\n',target.scope,{apply,onProgress,client:{
     read:resources=>{assertTarget();return client.read(resources);},
@@ -31,5 +33,7 @@ export async function prepareInstalledHiss({context,apply=false,runner=run,onPro
   const validationResult=apply?prepareHissValidation(validation.yaml,target.scope,{runner}):{applied:false,verificationRequired:true};
   assertTarget();
   const storageResult=prepareHissStorageObservation(storageObservation.yaml,target.scope,{runner,apply});
-  assertTarget();return {...result,target,validation:validationResult,storageObservation:storageResult};
+  assertTarget();
+  const crdResult=prepareHissObservabilityBindingCrd(bindingCrd.yaml,target.scope,{runner,apply});
+  assertTarget();return {...result,target,validation:validationResult,storageObservation:storageResult,observabilityBindingCrd:crdResult};
 }

@@ -10,13 +10,14 @@ export const HISS_EXECUTION_PROFILE = Object.freeze({
   id: 'hiss-chart-execution-v1',
   sourceRepository: 'opensphere-platform/OpenSphere-shell-clusterManager',
   // H2 (2026-10-16, user decisions HD2 and HD4): adds the node log agent identity and a second executor Role.
-  // Additive only; creation never rewrites an object that H1 prepared.
-  sourceRevision: '20062177e2a2af22ff95a5a26670865b443341cb',
+  // H3 (2026-10-16, HD6-HD9): adds the consumer-reader ClusterRole (tokenreviews create, ObservabilityBinding read
+  // and status write). Additive only; creation never rewrites an object that an earlier revision prepared.
+  sourceRevision: '7452d5c9c113503f9b26f641e73e77bb28a092ce',
   sourcePath: 'deploy/hiss-execution-profile.proposed.json',
   // Console delivery must use the release's Console revision, never the owner
   // revision above. This path is metadata only; no artifact is fetched here.
   consoleArtifactPath: 'deploy/installation-profiles/hiss-execution.json',
-  sha256: 'acd07dcf02555f763ea14c6dae9566dc417cc81b54bda8f22190c79d593a7af2',
+  sha256: '56e84c506c0ff6db2d6703d9c3062eac379ccaa36a7be11c5453faad574d8e1a',
 });
 const groups = {Namespace:['v1','namespaces'],ServiceAccount:['v1','serviceaccounts'],
   Role:['rbac.authorization.k8s.io/v1','roles'],RoleBinding:['rbac.authorization.k8s.io/v1','rolebindings'],
@@ -68,6 +69,24 @@ export function prepareHissStorageObservation(raw, scope, {runner=run, apply=fal
     {capture:true,input:raw});
   return {state:'Applied',applied:true,resourceCount:3};
 }
+// H3 (HD7): the ObservabilityBinding CRD (v1alpha2). Source: Cluster Manager deploy/hiss-observability-binding.crd.yaml
+// at 7452d5c9c113503f9b26f641e73e77bb28a092ce. Server-side apply under the same field manager as the other HISS artifacts.
+const OBSERVABILITY_BINDING_CRD_SHA256 = '8fb398879edc939db661e0cd5822f01a245d7dc767a999324142bf9acaedde27';
+export function verifyHissObservabilityBindingCrd(raw) {
+  if (typeof raw !== 'string' || digest(raw) !== OBSERVABILITY_BINDING_CRD_SHA256) throw fail('UNTRUSTED_PROFILE','ObservabilityBinding CRD bytes differ from the approved contract');
+  return raw;
+}
+export function prepareHissObservabilityBindingCrd(raw, scope, {runner=run, apply=false}={}) {
+  const target = installTarget(scope);
+  verifyHissObservabilityBindingCrd(raw);
+  if (!apply) {
+    const present = String(runner('kubectl',['--context',target.context,'get','customresourcedefinition','observabilitybindings.observability.opensphere.io','--ignore-not-found','-o','name','--request-timeout=10s'],{capture:true})||'').trim();
+    return {state:present?'Present':'NeedsPreparation',applied:false};
+  }
+  runner('kubectl',['--context',target.context,'apply','--server-side','--field-manager=opensphere-setup-hiss','-f','-','--request-timeout=20s'],
+    {capture:true,input:raw});
+  return {state:'Applied',applied:true,resourceCount:1};
+}
 const reference = (kind,name,namespace)=>({apiVersion:groups[kind][0],kind,metadata:{name,...(namespace?{namespace}:{})}});
 
 function observationIndex(returned, requested) {
@@ -91,7 +110,7 @@ export function verifyHissExecutionProfile(raw,scope) {
   installTarget(scope);
   if(typeof raw!=='string'||Buffer.byteLength(raw)>1024*1024||digest(raw)!==HISS_EXECUTION_PROFILE.sha256)throw fail('UNTRUSTED_PROFILE','HISS prerequisite bytes differ from the captured contract');
   const profile=JSON.parse(raw);
-  if(profile.schemaVersion!==1||profile.status!=='proposed-not-applied'||profile.resources.length!==101)throw fail('UNTRUSTED_PROFILE','HISS prerequisite envelope differs');
+  if(profile.schemaVersion!==1||profile.status!=='proposed-not-applied'||profile.resources.length!==103)throw fail('UNTRUSTED_PROFILE','HISS prerequisite envelope differs');
   return profile;
 }
 function references(resources) {

@@ -5747,6 +5747,78 @@
           "namespace": "opensphere-console"
         }
       ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRole",
+      "metadata": {
+        "name": "opensphere-hiss-consumer-reader",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            "authentication.k8s.io"
+          ],
+          "resources": [
+            "tokenreviews"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "observability.opensphere.io"
+          ],
+          "resources": [
+            "observabilitybindings"
+          ],
+          "verbs": [
+            "get",
+            "list",
+            "watch"
+          ]
+        },
+        {
+          "apiGroups": [
+            "observability.opensphere.io"
+          ],
+          "resources": [
+            "observabilitybindings/status"
+          ],
+          "verbs": [
+            "update",
+            "patch"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "opensphere-hiss-consumer-reader",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "opensphere-hiss-consumer-reader"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-cluster-manager-runtime",
+          "namespace": "opensphere-console"
+        }
+      ]
     }
   ]
 }

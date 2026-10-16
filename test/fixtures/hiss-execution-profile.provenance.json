@@ -2,9 +2,9 @@
   "contract": "hiss-chart-execution-v1",
   "status": "proposed-not-applied",
   "repository": "opensphere-platform/OpenSphere-shell-clusterManager",
-  "revision": "20062177e2a2af22ff95a5a26670865b443341cb",
+  "revision": "7452d5c9c113503f9b26f641e73e77bb28a092ce",
   "path": "deploy/hiss-execution-profile.proposed.json",
-  "sha256": "acd07dcf02555f763ea14c6dae9566dc417cc81b54bda8f22190c79d593a7af2",
+  "sha256": "56e84c506c0ff6db2d6703d9c3062eac379ccaa36a7be11c5453faad574d8e1a",
   "fixture": "hiss-execution-profile.v1.proposed.json",
   "runtimeImport": false,
   "note": "Exact public namespace/ServiceAccount/RBAC proposal, without runtime credentials. Copying this fixture does not authorize applying it."
