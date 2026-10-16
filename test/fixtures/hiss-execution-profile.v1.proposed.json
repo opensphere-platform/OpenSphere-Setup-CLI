@@ -5752,7 +5752,7 @@
       "apiVersion": "rbac.authorization.k8s.io/v1",
       "kind": "ClusterRole",
       "metadata": {
-        "name": "opensphere-hiss-consumer-reader",
+        "name": "opensphere-hiss-token-reviewer",
         "labels": {
           "app.kubernetes.io/part-of": "opensphere-console",
           "opensphere.io/authority": "hiss-chart-execution-v1"
@@ -5769,7 +5769,44 @@
           "verbs": [
             "create"
           ]
-        },
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "ClusterRoleBinding",
+      "metadata": {
+        "name": "opensphere-hiss-token-reviewer",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "ClusterRole",
+        "name": "opensphere-hiss-token-reviewer"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-cluster-manager-runtime",
+          "namespace": "opensphere-console"
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "opensphere-hiss-binding-reader",
+        "namespace": "opensphere-foundation",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/authority": "hiss-chart-execution-v1"
+        }
+      },
+      "rules": [
         {
           "apiGroups": [
             "observability.opensphere.io"
@@ -5799,9 +5836,10 @@
     },
     {
       "apiVersion": "rbac.authorization.k8s.io/v1",
-      "kind": "ClusterRoleBinding",
+      "kind": "RoleBinding",
       "metadata": {
-        "name": "opensphere-hiss-consumer-reader",
+        "name": "opensphere-hiss-binding-reader",
+        "namespace": "opensphere-foundation",
         "labels": {
           "app.kubernetes.io/part-of": "opensphere-console",
           "opensphere.io/authority": "hiss-chart-execution-v1"
@@ -5809,8 +5847,8 @@
       },
       "roleRef": {
         "apiGroup": "rbac.authorization.k8s.io",
-        "kind": "ClusterRole",
-        "name": "opensphere-hiss-consumer-reader"
+        "kind": "Role",
+        "name": "opensphere-hiss-binding-reader"
       },
       "subjects": [
         {
