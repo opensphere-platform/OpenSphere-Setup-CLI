@@ -13,6 +13,7 @@ function fixture(change=false,{longhorn=false}={}){
   assert.deepEqual(args.slice(0,2),['--context','rke2']);
   if(args.includes('opensphere-installation-lock'))return JSON.stringify({metadata:{uid:'install-a'},data:{'config.json':JSON.stringify({consoleUrl:'https://console.example.test'}),'release.json':JSON.stringify({channel:'edge',releaseDigest:'sha256:'+'a'.repeat(64)})}});
   if(args.includes('namespace')&&args.includes('kube-system'))return JSON.stringify({metadata:{uid:cluster}});
+  if(args.includes('observabilitybindings.observability.opensphere.io'))return '';
   if(args.includes('volumes.longhorn.io')||args.includes('longhorn-system'))return longhorn?args[args.indexOf('get')+1]+'/x\n':'';
   if(args.includes('apply')){assert(args.includes('--server-side'));assert(args.includes('--field-manager=opensphere-setup-hiss'));applies.push(options.input);return '';}
   const input=JSON.parse(options.input);
@@ -36,10 +37,11 @@ test('invalid context is rejected before contacting Kubernetes',async()=>{
 });
 test('storage observation is applied only where Longhorn runs',async()=>{
  const without=fixture();const plain=await prepareInstalledHiss({context:'rke2',apply:true,runner:without.runner});
- assert.equal(plain.storageObservation.state,'NotApplicable');assert.equal(without.applies.length,1);
+ assert.equal(plain.storageObservation.state,'NotApplicable');assert.equal(plain.observabilityBindingCrd.state,'Applied');assert.equal(without.applies.length,2);
+ assert.match(without.applies[1],/kind: CustomResourceDefinition/);
  const lh=fixture(false,{longhorn:true});const planned=await prepareInstalledHiss({context:'rke2',runner:lh.runner});
- assert.equal(planned.storageObservation.state,'NeedsPreparation');assert.equal(lh.applies.length,0);
+ assert.equal(planned.storageObservation.state,'NeedsPreparation');assert.equal(planned.observabilityBindingCrd.state,'NeedsPreparation');assert.equal(lh.applies.length,0);
  const applied=await prepareInstalledHiss({context:'rke2',apply:true,runner:lh.runner});
- assert.equal(applied.storageObservation.state,'Applied');assert.equal(lh.applies.length,2);
+ assert.equal(applied.storageObservation.state,'Applied');assert.equal(lh.applies.length,3);
  assert.match(lh.applies[1],/name: opensphere-hiss-storage-observer/);assert.doesNotMatch(lh.applies[1],/kind: ClusterRole/);
 });

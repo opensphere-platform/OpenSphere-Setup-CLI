@@ -72,16 +72,16 @@ test('HISS preparation rejects changed profile bytes and invalid targets before 
   assert.equal(client.creates.length, 0);
 });
 
-test('default preparation only inspects all 101 objects and five external dependencies', async () => {
+test('default preparation only inspects all 103 objects and five external dependencies', async () => {
   const client = memoryClient();
   const plan = await prepare(client);
   assert.equal(plan.status, 'NeedsPreparation');
-  assert.equal(plan.resources.length, 101);
+  assert.equal(plan.resources.length, 103);
   assert.equal(plan.applied, false);
   assert.equal(plan.installationComplete, false);
   assert.equal(plan.resources.every(r => r.status === 'Missing'), true);
   assert.equal(client.reads.length, 1);
-  assert.equal(client.reads[0].length, 106);
+  assert.equal(client.reads[0].length, 108);
   assert.equal(client.creates.length, 0);
 });
 
@@ -138,13 +138,13 @@ test('missing prerequisites create in dependency order and replay makes no write
   const first = await prepareApply(client);
   assert.equal(first.status, 'Prepared');
   assert.equal(first.installationComplete, false);
-  assert.equal(first.created.length, 101);
-  assert.equal(client.creates.length, 101);
+  assert.equal(first.created.length, 103);
+  assert.equal(client.creates.length, 103);
   const before = copy([...client.state]);
   const second = await prepareApply(client);
   assert.equal(second.created.length, 0);
-  assert.equal(second.preserved.length, 101);
-  assert.equal(client.creates.length, 101);
+  assert.equal(second.preserved.length, 103);
+  assert.equal(client.creates.length, 103);
   assert.deepEqual([...client.state], before);
 });
 
@@ -158,7 +158,7 @@ test('existing namespaces retain PSA, labels and annotations; existing RBAC reta
   const client = memoryClient([namespace, role]);
   const before = [copy(client.state.get(key(namespace))), copy(client.state.get(key(role)))];
   const result = await prepareApply(client);
-  assert.equal(result.created.length, 99);
+  assert.equal(result.created.length, 101);
   assert.deepEqual([client.state.get(key(namespace)), client.state.get(key(role))], before);
   assert.equal(client.creates.some(r => key(r) === key(namespace) || key(r) === key(role)), false);
 });
@@ -205,12 +205,12 @@ test('timeout after a persisted create observes the result once and does not iss
   };
   const result = await prepareApply(client);
   assert.equal(result.status, 'Prepared');
-  assert.equal(result.created.length, 100);
+  assert.equal(result.created.length, 102);
   assert.equal(result.observedAfterCreate.length, 1);
-  assert.equal(client.creates.length, 101);
-  assert.equal(new Set(client.creates.map(key)).size, 101);
+  assert.equal(client.creates.length, 103);
+  assert.equal(new Set(client.creates.map(key)).size, 103);
   assert.equal((await prepareApply(client)).created.length, 0);
-  assert.equal(client.creates.length, 101);
+  assert.equal(client.creates.length, 103);
 });
 
 test('an unconfirmed create stops, preserves completed work, and the next invocation fills only missing objects', async () => {
@@ -226,7 +226,7 @@ test('an unconfirmed create stops, preserves completed work, and the next invoca
   assert.equal(client.state.size, external.length + 3);
   client.beforeCreate = null;
   const retry = await prepareApply(client);
-  assert.equal(retry.created.length, 98);
+  assert.equal(retry.created.length, 100);
   assert.equal(retry.preserved.length, 3);
   for (const item of prefix) assert.deepEqual(client.state.get(key(item)), item);
 });
@@ -248,7 +248,7 @@ test('final observation failure, policy drift or replacement never reports Prepa
   for (const fault of ['unavailable', 'policy', 'replacement', 'external-replacement']) {
     const client = memoryClient();
     client.beforeRead = (requested, call) => {
-      if (call === 1 || requested.length !== 106) return;
+      if (call === 1 || requested.length !== 108) return;
       if (fault === 'unavailable') throw new Error('API unavailable');
       if (fault === 'external-replacement') client.state.get(key(external[0])).metadata.uid = 'new-external-uid';
       else {
@@ -260,11 +260,11 @@ test('final observation failure, policy drift or replacement never reports Prepa
     };
     await assert.rejects(prepareApply(client), error => {
       assert.equal(error.code, 'PREPARATION_INCOMPLETE');
-      assert.equal(error.evidence.created.length, 101);
+      assert.equal(error.evidence.created.length, 103);
       assert.equal(error.evidence.installationComplete, false);
       return true;
     });
-    assert.equal(client.state.size, 106);
+    assert.equal(client.state.size, 108);
   }
 });
 
@@ -283,7 +283,7 @@ test('progress callback failures cannot reverse confirmed writes or change the c
   });
   assert.equal(result.status, 'Prepared');
   assert.equal(result.context, 'docker-desktop');
-  assert.equal(result.created.length, 101);
+  assert.equal(result.created.length, 103);
 });
 
 // Until 2026-09-23 the adapter could only ever name docker-desktop. The target is now the
@@ -292,7 +292,7 @@ test('any invoked cluster is accepted, prepared, and pinned for the adapter life
   const other = { context: 'rke2', channel: 'edge', consoleUrl: 'https://console.opensphere.test:1114' };
   const result = await prepareHissPrerequisites(raw, other, { client: memoryClient(), apply: true });
   assert.equal(result.status, 'Prepared');
-  assert.equal(result.created.length, 101);
+  assert.equal(result.created.length, 103);
 
   const calls = [];
   const mutable = { ...other };
