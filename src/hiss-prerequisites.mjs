@@ -70,8 +70,8 @@ export function prepareHissStorageObservation(raw, scope, {runner=run, apply=fal
   return {state:'Applied',applied:true,resourceCount:3};
 }
 // H3 (HD7): the ObservabilityBinding CRD (v1alpha2). Source: Cluster Manager deploy/hiss-observability-binding.crd.yaml
-// at 7452d5c9c113503f9b26f641e73e77bb28a092ce. Server-side apply under the same field manager as the other HISS artifacts.
-const OBSERVABILITY_BINDING_CRD_SHA256 = '8fb398879edc939db661e0cd5822f01a245d7dc767a999324142bf9acaedde27';
+// at 92b51732138edc032739f415e0398dba6f871952. Server-side apply under the same field manager as the other HISS artifacts.
+const OBSERVABILITY_BINDING_CRD_SHA256 = '7bbbc448e0bb2703066d610457faa927ef9b734ca3c4b295475012afa4089c0e';
 export function verifyHissObservabilityBindingCrd(raw) {
   if (typeof raw !== 'string' || digest(raw) !== OBSERVABILITY_BINDING_CRD_SHA256) throw fail('UNTRUSTED_PROFILE','ObservabilityBinding CRD bytes differ from the approved contract');
   return raw;
