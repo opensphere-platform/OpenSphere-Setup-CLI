@@ -1727,6 +1727,33 @@ export function applyComponentReleaseInDependencyOrder(release, changedComponent
   if (pending.size) apply([...pending]);
 }
 
+// The CRD manifests of a component release, in order, and everything else. A manifest is a CRD manifest when every
+// document in it is a CustomResourceDefinition.
+const CRD_KIND = /^kind:[ \t]*CustomResourceDefinition[ \t]*$/mu;
+export function splitComponentReleaseCrds(release) {
+  const isCrd = manifest => {
+    const documents = manifestDocuments(manifest.yaml);
+    return documents.length > 0 && documents.every(document => CRD_KIND.test(document));
+  };
+  return { crds: release.filter(isCrd), rest: release.filter(manifest => !isCrd(manifest)) };
+}
+
+// metadata.name of each CRD document: the first indented `name:` line after a top-level `metadata:` line.
+export function customResourceDefinitionNames(yaml) {
+  return manifestDocuments(yaml).flatMap(document => {
+    if (!CRD_KIND.test(document)) return [];
+    const lines = document.split(/\r?\n/u);
+    const start = lines.findIndex(line => /^metadata:[ \t]*$/u.test(line));
+    if (start < 0) return [];
+    for (const line of lines.slice(start + 1)) {
+      if (!/^[ \t]/u.test(line)) break;
+      const match = line.match(/^[ \t]+name:[ \t]*["']?([a-z0-9.-]+)["']?[ \t]*$/u);
+      if (match) return [match[1]];
+    }
+    return [];
+  });
+}
+
 function installPreparedComponentRelease(
   lock,
   prepared,
@@ -1750,7 +1777,16 @@ function installPreparedComponentRelease(
       onPrerequisite(record);
     }
   });
-  applyComponentReleaseInDependencyOrder(release, changedComponents, {
+  // CRDs first and Established before anything else: a ValidatingAdmissionPolicy is type-checked against the CRD
+  // schema when it is written and only again when its spec changes. Applied before its CRD gained a field, it keeps a
+  // stale "undefined field" warning (RKE2 2026-10-17: moduleRelease), and C_EXT then refuses Provider delivery.
+  const { crds, rest } = splitComponentReleaseCrds(release);
+  if (crds.length) {
+    applyRelease(crds, label, progress, { preserveHostLocalEdgeTrust: isLocalEdgeLock(lock) });
+    const names = crds.flatMap(manifest => customResourceDefinitionNames(manifest.yaml));
+    if (names.length) kubectl(['wait', '--for=condition=Established', '--timeout=60s', ...names.map(name => 'crd/' + name)]);
+  }
+  applyComponentReleaseInDependencyOrder(rest, changedComponents, {
     apply: stage => applyRelease(stage, label, progress, { preserveHostLocalEdgeTrust: isLocalEdgeLock(lock) }),
     wait: components => waitForComponentRollouts(components, progress)
   });

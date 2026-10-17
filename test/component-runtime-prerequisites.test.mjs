@@ -27,6 +27,8 @@ import {
   EXTENSION_CONTROLLER_MANIFEST,
   CONSOLE_API_MANIFEST,
   applyComponentReleaseInDependencyOrder,
+  splitComponentReleaseCrds,
+  customResourceDefinitionNames,
   componentReleaseWorkloadManifests,
   renderManifest
 } from '../src/bootstrap.mjs';
@@ -391,6 +393,8 @@ function installHarness(cluster, events) {
     applyComponentRuntimePrerequisites,
     describeComponentRuntimePrerequisite,
     applyComponentReleaseInDependencyOrder,
+    splitComponentReleaseCrds,
+    customResourceDefinitionNames,
     applyRelease: (stage) => { for (const manifest of stage) events.push(`manifest:${manifest.path}`); },
     isLocalEdgeLock: () => false,
     waitForComponentRollouts: (components) => events.push(`wait:${components.join(',')}`)
