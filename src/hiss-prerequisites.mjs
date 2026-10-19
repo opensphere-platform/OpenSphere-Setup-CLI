@@ -72,18 +72,33 @@ export function prepareHissStorageObservation(raw, scope, {runner=run, apply=fal
   return {state:'Applied',applied:true,resourceCount:3};
 }
 // H3 (HD7): the ObservabilityBinding CRD (v1alpha2). Source: Cluster Manager deploy/hiss-observability-binding.crd.yaml
-// at cefd0b5691cda09b2f7b3128c08d57d4e570be5b (Namespaced). Server-side apply under the same field manager as the other HISS artifacts.
-const OBSERVABILITY_BINDING_CRD_SHA256 = '192d2d2e75930b57565c53cb7b0ec0a6acfb94bfd6cb018a7253bf5a75b2dde3';
+// at 93180e6 (Y2, 2026-10-19: spec.targets x-kubernetes-validations, every target in opensphere-foundation; before it
+// cefd0b5691cda09b2f7b3128c08d57d4e570be5b). Server-side apply under the same field manager as the other HISS artifacts,
+// so an installed CRD is updated in place; the stored bindings already satisfy the rule (read-only check on RKE2).
+const OBSERVABILITY_BINDING_CRD_SHA256 = 'c77629e8f632dc9be0b541445f465c4ff52055ab0dc0316a1f84daa95d4c4d6e';
 export function verifyHissObservabilityBindingCrd(raw) {
   if (typeof raw !== 'string' || digest(raw) !== OBSERVABILITY_BINDING_CRD_SHA256) throw fail('UNTRUSTED_PROFILE','ObservabilityBinding CRD bytes differ from the approved contract');
   return raw;
+}
+// The CEL rules of the approved CRD, as written in its YAML (rule: "..."). A served CRD without every one of them is an
+// older revision: the plan reports it as NeedsUpdate, not Present.
+export function observabilityBindingCrdRules(raw) {
+  return [...String(raw).matchAll(/^\s*- rule: "(.*)"\s*$/gm)].map((m) => m[1].replace(/\\"/g, '"'));
 }
 export function prepareHissObservabilityBindingCrd(raw, scope, {runner=run, apply=false}={}) {
   const target = installTarget(scope);
   verifyHissObservabilityBindingCrd(raw);
   if (!apply) {
-    const present = String(runner('kubectl',['--context',target.context,'get','customresourcedefinition','observabilitybindings.observability.opensphere.io','--ignore-not-found','-o','name','--request-timeout=10s'],{capture:true})||'').trim();
-    return {state:present?'Present':'NeedsPreparation',applied:false};
+    const live = String(runner('kubectl',['--context',target.context,'get','customresourcedefinition','observabilitybindings.observability.opensphere.io','--ignore-not-found','-o','json','--request-timeout=10s'],{capture:true})||'').trim();
+    if (!live) return {state:'NeedsPreparation',applied:false};
+    let rules = [];
+    try {
+      const crd = JSON.parse(live);
+      const version = (crd.spec?.versions || []).find((v) => v.name === 'v1alpha2');
+      rules = (version?.schema?.openAPIV3Schema?.properties?.spec?.properties?.targets?.['x-kubernetes-validations'] || []).map((v) => v.rule);
+    } catch { rules = []; }
+    const current = observabilityBindingCrdRules(raw).every((rule) => rules.includes(rule));
+    return {state:current?'Present':'NeedsUpdate',applied:false};
   }
   runner('kubectl',['--context',target.context,'apply','--server-side','--field-manager=opensphere-setup-hiss','-f','-','--request-timeout=20s'],
     {capture:true,input:raw});
