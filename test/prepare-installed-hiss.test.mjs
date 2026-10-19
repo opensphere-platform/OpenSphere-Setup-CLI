@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {prepareInstalledHiss} from '../src/prepare-installed-hiss.mjs';
 import profile from '../src/hiss-preparation-profile.json' with {type:'json'};
+import storageObservation from '../src/hiss-storage-observation-artifact.json' with {type:'json'};
+import {verifyHissStorageObservationArtifact} from '../src/hiss-prerequisites.mjs';
+const storageObservationYaml=()=>verifyHissStorageObservationArtifact(storageObservation.yaml);
 const identity=r=>`${r.kind}/${r.metadata.namespace||''}/${r.metadata.name}`;
 function fixture(change=false,{longhorn=false}={}){
  let serial=0, cluster='cluster-a',writes=0;
@@ -44,4 +47,14 @@ test('storage observation is applied only where Longhorn runs',async()=>{
  const applied=await prepareInstalledHiss({context:'rke2',apply:true,runner:lh.runner});
  assert.equal(applied.storageObservation.state,'Applied');assert.equal(lh.applies.length,3);
  assert.match(lh.applies[1],/name: opensphere-hiss-storage-observer/);assert.doesNotMatch(lh.applies[1],/kind: ClusterRole/);
+});
+test('H-P6: the storage observation Role reads one Longhorn setting by name and the backup targets, and writes nothing',()=>{
+ const yaml=storageObservationYaml();
+ const role=yaml.split('\n---\n')[0];
+ assert.match(role,/resources: \[volumes, replicas, engines, nodes\]\n    verbs: \[get, list, watch\]/);
+ assert.match(role,/resources: \[settings\]\n    resourceNames: \[replica-soft-anti-affinity\]\n    verbs: \[get\]/);
+ assert.match(role,/resources: \[backuptargets\]\n    verbs: \[get, list\]/);
+ assert.equal((role.match(/verbs:/g)||[]).length,3);
+ assert.doesNotMatch(role,/create|update|patch|delete|escalate|bind|impersonate|\*/);
+ assert.doesNotMatch(role,/secrets/);
 });
