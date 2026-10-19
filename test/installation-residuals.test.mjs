@@ -43,6 +43,18 @@ test('resume detects missing Ceph parameters without weakening Deny or writing r
   assertManagedAdmissionParameters({run: args => args.includes('configmap') ? 'configmap/opensphere-ceph-preparation-policy' : run(args)});
 });
 
+// D-C2 (Console user decision 2026-10-19): the FoundationModel name policy's parameter is the Foundation Registration.
+// Its absence only denies the two Foundation identities' writes, so Setup never waits for it, but the reference is exact.
+test('the FoundationModel name policy binding is accepted with its exact Registration reference only', () => {
+  const ref = {name:'foundation',namespace:'opensphere-console',parameterNotFoundAction:'Deny'};
+  const read = (paramRef) => args => args.includes('validatingadmissionpolicybinding/opensphere-foundation-model-writer')
+    ? JSON.stringify({metadata:{name:'opensphere-foundation-model-writer'},spec:{policyName:'opensphere-foundation-model-writer',paramRef}})
+    : args.includes('configmap') ? assert.fail('no parameter read for this binding') : '';
+  assertManagedAdmissionParameters({run: read(ref)});
+  for (const bad of [{...ref,parameterNotFoundAction:'Allow'},{...ref,name:'other'},{...ref,namespace:'opensphere-foundation'},{...ref,selector:{}}])
+    assert.throws(() => assertManagedAdmissionParameters({run: read(bad)}), /Unexpected managed admission parameter reference: validatingadmissionpolicybinding\/opensphere-foundation-model-writer/);
+});
+
 function runtime() {
   const events = [];
   const state = {releaseDigest:'sha256:test', managedNamespaces:[...MANAGED_NAMESPACES],managedClusterScopedResources:structuredClone(resources)};
