@@ -8,7 +8,10 @@ import { parseAllDocuments } from 'yaml';
 // OS Shell CA projection into opensphere-foundation). This module delivers both before any workload manifest.
 
 export const FOUNDATION_BOOTSTRAP_PATH = 'apps/extension-controller/src/foundation-bootstrap.json';
-const FOUNDATION_BOOTSTRAP_SCHEMA = 'opensphere.foundation-bootstrap/v1';
+// v2 (Console D-C2 release, review 2026-10-19): the bundle that grants FoundationModel writes without names and carries
+// the name policy. A Setup that knows only v1 refuses it, so it can never apply that RBAC before the policy exists.
+const FOUNDATION_BOOTSTRAP_SCHEMAS = Object.freeze(['opensphere.foundation-bootstrap/v1', 'opensphere.foundation-bootstrap/v2']);
+const FOUNDATION_BOOTSTRAP_V2 = 'opensphere.foundation-bootstrap/v2';
 const RBAC_API_VERSION = 'rbac.authorization.k8s.io/v1';
 
 // Exactly the objects C_EXT verifyFoundationProfile reads and compares on every reconcile of the Foundation
@@ -72,7 +75,7 @@ export const foundationRbacIdentity = ({ kind, namespace, name }) => `${kind}/${
 function parseBundle(bundleText) {
   let bundle;
   try { bundle = JSON.parse(bundleText); } catch { throw new Error('Foundation bootstrap artifact is not valid JSON'); }
-  if (bundle?.schema !== FOUNDATION_BOOTSTRAP_SCHEMA || !Array.isArray(bundle.resources)) {
+  if (!FOUNDATION_BOOTSTRAP_SCHEMAS.includes(bundle?.schema) || !Array.isArray(bundle.resources)) {
     throw new Error('Foundation bootstrap artifact has an unsupported contract');
   }
   return bundle;
@@ -145,6 +148,10 @@ export function planFoundationRuntimeRbac({
   if (nameFreeModelWrite(documents) && admission.length === 0) {
     throw new Error(`Foundation bootstrap artifact at ${sourceRevision} grants FoundationModel writes without names but declares no FoundationModel name policy`);
   }
+  // The policy and the name-free RBAC travel only in a v2 bundle, which an older Setup refuses.
+  if ((admission.length || nameFreeModelWrite(documents)) && JSON.parse(bundle).schema !== FOUNDATION_BOOTSTRAP_V2) {
+    throw new Error(`Foundation bootstrap artifact at ${sourceRevision} carries the FoundationModel name policy but is not ${FOUNDATION_BOOTSTRAP_V2}`);
+  }
   const baseline = baselineBundle === null || baselineBundle === undefined ? null : selectFoundationRuntimeRbac(baselineBundle);
   const baselineAdmission = baselineBundle === null || baselineBundle === undefined ? null : selectFoundationAdmission(baselineBundle);
   const changed = documents.length > 0 && (baseline === null || canonical(baseline) !== canonical(documents)
@@ -185,6 +192,40 @@ export function foundationAdmissionObjectMatches(expected, observed) {
 }
 const typeCheckPending = (expected, observed) => expected.kind === 'ValidatingAdmissionPolicy'
   && observed?.status?.observedGeneration !== observed?.metadata?.generation;
+
+// Review 2026-10-19 (kind, 5 rounds): an API server enforced the policy up to about 1.1 s after status.typeChecking was
+// observed, and RKE2 runs three API servers, each with its own admission informer. So before the RBAC is widened Setup
+// asks the API servers directly: a server dry-run create of a FoundationModel name nobody approved, as the Foundation
+// runtime ServiceAccount, must be denied by this policy several times in a row. Nothing is persisted by a dry run.
+export const ADMISSION_PROBE_SUBJECT = 'system:serviceaccount:opensphere-console:opensphere-foundation-runtime';
+const ADMISSION_PROBE_NAME = 'setup-admission-probe';
+const ADMISSION_PROBE_MODEL = Object.freeze({ apiVersion: 'foundation.opensphere.io/v1alpha1', kind: 'FoundationModel',
+  metadata: { name: ADMISSION_PROBE_NAME }, spec: { model: ADMISSION_PROBE_NAME, desiredState: 'Installed' } });
+const POLICY_NAME = 'opensphere-foundation-model-writer';
+export function probeFoundationAdmission(kubectl, { sleep = defaultSleep, attempts = 40, consecutive = 5, settleMilliseconds = 3000 } = {}) {
+  let denied = 0;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      kubectl(['create', '-f', '-', '--dry-run=server', '-o', 'name', '--as', ADMISSION_PROBE_SUBJECT],
+        { capture: true, input: `${JSON.stringify(ADMISSION_PROBE_MODEL)}\n` });
+      denied = 0; // admitted: this API server does not enforce the policy yet
+    } catch (error) {
+      const text = String(error?.stderr || error?.message || '');
+      if (text.includes(POLICY_NAME)) {
+        denied += 1;
+        if (denied >= consecutive) return { probe: 'denied', attempts: attempt };
+      } else {
+        // RBAC already refuses the runtime identity (it cannot create today), or the probe itself could not run. The
+        // policy is type-checked and read back; Setup waits for the slowest informer it measured and records why.
+        const reason = /forbidden/i.test(text) && /cannot create resource/i.test(text) ? 'rbac-forbidden' : 'unavailable';
+        sleep(settleMilliseconds);
+        return { probe: reason, attempts: attempt };
+      }
+    }
+    sleep(500);
+  }
+  return { probe: 'admitted', attempts };
+}
 const defaultSleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 
 // verifyFoundationProfile's per-object test, applied to what the API server returns after the apply.
@@ -223,7 +264,18 @@ export function applyFoundationRuntimeRbac(plan, { kubectl, now = () => new Date
     ...(admission.length ? { admissionDigest: plan.admissionDigest, admissionObjects: admission.map((document) => foundationRbacIdentity(identityOf(document))) } : {}),
     objects: plan.documents.map((document) => foundationRbacIdentity(identityOf(document)))
   };
-  if (!plan.changed) return { ...record, decision: plan.reason === 'not-declared' ? 'not-declared' : 'unchanged' };
+  if (!plan.changed) {
+    if (plan.reason === 'not-declared' || !admission.length) return { ...record, decision: plan.reason === 'not-declared' ? 'not-declared' : 'unchanged' };
+    // Review 2026-10-19 (minor 4): an unchanged bundle still has its name policy read and compared, so a deleted or
+    // edited policy is restored, type-checked and proven before this release continues (the RBAC is already name-free).
+    let drifted;
+    try { drifted = admission.filter((document) => !foundationAdmissionObjectMatches(document, readObject(kubectl, document))); }
+    catch (error) { throw afterWrite(error, { ...record, decision: 'admission-unverified' }, 'The FoundationModel name policy could not be read to compare it. Nothing was written.'); }
+    if (!drifted.length) return { ...record, decision: 'unchanged' };
+    const restored = applyAdmission(plan, admission, record, { kubectl, sleep, typeCheckAttempts });
+    return { ...record, ...restored, decision: 'admission-restored', restored: drifted.map((document) => foundationRbacIdentity(identityOf(document))),
+      verifiedAt: now().toISOString() };
+  }
   // Namespaces belong to their owners (upgrade ensures the managed ones first). A missing one stops this
   // step before its first write instead of leaving part of the profile applied.
   const namespaces = [...new Set(plan.documents.map((document) => document.metadata.namespace).filter(Boolean))].sort();
@@ -232,34 +284,9 @@ export function applyFoundationRuntimeRbac(plan, { kubectl, now = () => new Date
   if (missing.length) {
     throw new Error(`Foundation runtime RBAC was not applied: namespace ${missing.join(', ')} does not exist`);
   }
-  // D-C2: the FoundationModel name policy and its binding first, read back and type-checked, before any RBAC write.
-  // A failure here stops the step with the RBAC untouched.
-  if (admission.length) {
-    try {
-      kubectl(['apply', '-f', '-'], { capture: true, input: `${JSON.stringify({ apiVersion: 'v1', kind: 'List', items: admission })}\n` });
-    } catch (error) {
-      throw afterWrite(error, { ...record, decision: 'apply-outcome-unknown' },
-        'The FoundationModel name policy apply did not complete; it may be partly changed. The Foundation RBAC and every workload manifest were left as they were.');
-    }
-    let mismatchedPolicy;
-    try {
-      mismatchedPolicy = admission.filter((document) => {
-        for (let attempt = 1; ; attempt += 1) {
-          const observed = readObject(kubectl, document);
-          if (!typeCheckPending(document, observed) || attempt >= typeCheckAttempts) return !foundationAdmissionObjectMatches(document, observed);
-          sleep(500);
-        }
-      });
-    } catch (error) {
-      throw afterWrite(error, { ...record, decision: 'changed-unverified' },
-        'The FoundationModel name policy was sent but could not be read back. The Foundation RBAC and every workload manifest were left as they were.');
-    }
-    if (mismatchedPolicy.length) {
-      const names = mismatchedPolicy.map((document) => foundationRbacIdentity(identityOf(document)));
-      throw afterWrite(null, { ...record, decision: 'changed-unverified', mismatched: names },
-        `The FoundationModel name policy did not read back as the target or is not type-checked without warnings: ${names.join(', ')}. The Foundation RBAC and every workload manifest were left as they were.`);
-    }
-  }
+  // D-C2: the FoundationModel name policy and its binding first, read back, type-checked and proven enforced by the API
+  // servers, before any RBAC write. A failure here stops the step with the RBAC untouched.
+  const enforced = admission.length ? applyAdmission(plan, admission, record, { kubectl, sleep, typeCheckAttempts }) : {};
   // Prepare-FoundationPrerequisites.ps1 semantics: one List through client-side `kubectl apply`. RBAC rules have
   // no merge key, so each complete target list replaces the live one; the read-back below proves it did.
   // From the apply on, a failure is never "nothing changed": the cluster RBAC may already differ, so the
@@ -286,7 +313,40 @@ export function applyFoundationRuntimeRbac(plan, { kubectl, now = () => new Date
     throw afterWrite(null, { ...record, decision: 'changed-unverified', mismatched: names },
       `Foundation runtime RBAC did not read back as the target profile: ${names.join(', ')}. It was sent, so the cluster RBAC may already be changed. No workload manifest was applied.`);
   }
-  return { ...record, decision: 'applied', verifiedAt: now().toISOString() };
+  return { ...record, ...enforced, decision: 'applied', verifiedAt: now().toISOString() };
+}
+
+function applyAdmission(plan, admission, record, { kubectl, sleep, typeCheckAttempts }) {
+  try {
+    kubectl(['apply', '-f', '-'], { capture: true, input: `${JSON.stringify({ apiVersion: 'v1', kind: 'List', items: admission })}\n` });
+  } catch (error) {
+    throw afterWrite(error, { ...record, decision: 'apply-outcome-unknown' },
+      'The FoundationModel name policy apply did not complete; it may be partly changed. The Foundation RBAC and every workload manifest were left as they were.');
+  }
+  let mismatchedPolicy;
+  try {
+    mismatchedPolicy = admission.filter((document) => {
+      for (let attempt = 1; ; attempt += 1) {
+        const observed = readObject(kubectl, document);
+        if (!typeCheckPending(document, observed) || attempt >= typeCheckAttempts) return !foundationAdmissionObjectMatches(document, observed);
+        sleep(500);
+      }
+    });
+  } catch (error) {
+    throw afterWrite(error, { ...record, decision: 'changed-unverified' },
+      'The FoundationModel name policy was sent but could not be read back. The Foundation RBAC and every workload manifest were left as they were.');
+  }
+  if (mismatchedPolicy.length) {
+    const names = mismatchedPolicy.map((document) => foundationRbacIdentity(identityOf(document)));
+    throw afterWrite(null, { ...record, decision: 'changed-unverified', mismatched: names },
+      `The FoundationModel name policy did not read back as the target or is not type-checked without warnings: ${names.join(', ')}. The Foundation RBAC and every workload manifest were left as they were.`);
+  }
+  const probe = probeFoundationAdmission(kubectl, { sleep });
+  if (probe.probe === 'admitted') {
+    throw afterWrite(null, { ...record, decision: 'changed-unverified', admissionProbe: probe },
+      `The API servers kept admitting an unapproved FoundationModel name for the Foundation runtime after ${probe.attempts} dry runs, so the name policy is not proven enforced. The Foundation RBAC and every workload manifest were left as they were.`);
+  }
+  return { admissionProbe: probe };
 }
 
 // An error after a write: the step's record travels with it, so the caller records the possible change.
@@ -387,6 +447,8 @@ export function describeComponentRuntimePrerequisite(record) {
       applied: `${policy}Foundation 실행 RBAC ${record.objects.length}개 적용, 재확인 일치 (${revision})`,
       unchanged: `Foundation 실행 RBAC 변경 없음, 적용 생략 (${revision})`,
       'not-declared': `Foundation 실행 RBAC 선언 없음 (${revision})`,
+      'admission-restored': `FoundationModel 이름 정책이 바뀌었거나 없어 다시 적용, 재확인 일치 (${revision})`,
+      'admission-unverified': `FoundationModel 이름 정책을 읽지 못해 비교하지 못함. 아무것도 쓰지 않음 (${revision})`,
       'changed-unverified': `Foundation 실행 RBAC를 보냈지만 재확인이 맞지 않음. 클러스터 RBAC가 이미 바뀌었을 수 있음 (${revision})`,
       'apply-outcome-unknown': `Foundation 실행 RBAC 적용이 끝나지 않음. 일부가 바뀌었을 수 있음 (${revision})`
     }[record.decision];

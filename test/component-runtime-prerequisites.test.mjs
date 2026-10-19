@@ -6,6 +6,7 @@ import vm from 'node:vm';
 import { parseAllDocuments, stringify } from 'yaml';
 import {
   FOUNDATION_ADMISSION,
+  ADMISSION_PROBE_SUBJECT,
   FOUNDATION_BOOTSTRAP_PATH,
   FOUNDATION_RUNTIME_RBAC,
   foundationAdmissionObjectMatches,
@@ -137,7 +138,10 @@ function fakeCluster({
   namespaces = ['opensphere-console', 'opensphere-foundation', 'opensphere-foundation-secure-input'],
   terminating = [],
   objects = [],
-  applyMode = 'replace'
+  applyMode = 'replace',
+  // Server dry runs of an unapproved FoundationModel that API servers still admit after the policy is written.
+  admitProbes = 0,
+  probeError = null
 } = {}) {
   const store = new Map(objects.map((object) => [objectKey(object), structuredClone(object)]));
   const calls = [];
@@ -177,6 +181,13 @@ function fakeCluster({
         throw new Error(`${rest[1]} "${rest[2]}" not found`);
       }
       return JSON.stringify(object);
+    }
+    if (rest[0] === 'create' && rest.includes('--dry-run=server')) {
+      if (probeError) throw Object.assign(new Error('kubectl create failed'), { stderr: probeError });
+      const policy = store.get('ValidatingAdmissionPolicy//opensphere-foundation-model-writer');
+      if (!policy || admitProbes-- > 0) return 'foundationmodel.foundation.opensphere.io/setup-admission-probe created (server dry run)';
+      throw Object.assign(new Error('kubectl create failed'), { stderr: 'The foundationmodels "setup-admission-probe" is invalid: : ValidatingAdmissionPolicy '
+        + "'opensphere-foundation-model-writer' with binding 'opensphere-foundation-model-writer' denied request: FoundationModel setup-admission-probe is not approved" });
     }
     throw new Error(`unexpected kubectl ${args.join(' ')}`);
   };
@@ -613,6 +624,7 @@ function decoupledBundle() {
   const controller = bundle.resources.find((d) => d.kind === 'ClusterRole' && d.metadata.name === 'opensphere-foundation-contract-controller');
   controller.rules = controller.rules.map((r) => r.resources.includes('foundationmodels') ? rule(['foundation.opensphere.io'], ['foundationmodels'], ['patch']) : r);
   bundle.resources.splice(2, 0, modelPolicy(), modelBinding());
+  bundle.schema = 'opensphere.foundation-bootstrap/v2';
   return bundle;
 }
 const decoupledText = () => `${JSON.stringify(decoupledBundle(), null, 2)}\n`;
@@ -684,7 +696,8 @@ test('D-C2: the name policy is applied, type-checked and read back before the na
   assert.equal(record.decision, 'applied');
   assert.deepEqual(record.admissionObjects, FOUNDATION_ADMISSION.map(foundationRbacIdentity));
   assert.equal(record.admissionDigest, plan.admissionDigest);
-  assert.deepEqual(slept, [500], 'Setup waited for the type check once');
+  assert.deepEqual(slept, [500, 500, 500, 500, 500], 'Setup waited for the type check once, then between the dry-run probes');
+  assert.deepEqual(record.admissionProbe, { probe: 'denied', attempts: 5 });
   const writes = cluster.writes();
   assert.equal(writes.length, 2, 'the policy and the RBAC are separate writes');
   assert.deepEqual(JSON.parse(writes[0].input).items.map((d) => d.kind), ['ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding']);
@@ -692,6 +705,9 @@ test('D-C2: the name policy is applied, type-checked and read back before the na
   const order = cluster.calls.map((call) => call.args.slice(0, 2).join(' '));
   assert.ok(order.indexOf('get validatingadmissionpolicybindings.admissionregistration.k8s.io') < order.lastIndexOf('apply -f'),
     'the policy is read back before the RBAC write');
+  assert.ok(order.lastIndexOf('create -f') < order.lastIndexOf('apply -f'), 'the enforcement probes run before the RBAC write');
+  const probe = cluster.calls.find((call) => call.args[0] === 'create');
+  assert.deepEqual(probe.args, ['create', '-f', '-', '--dry-run=server', '-o', 'name', '--as', ADMISSION_PROBE_SUBJECT]);
   assert.match(describeComponentRuntimePrerequisite(record), /^FoundationModel 이름 정책 2개와 Foundation 실행 RBAC 15개 적용, 재확인 일치/);
 });
 
@@ -723,8 +739,65 @@ test('D-C2: an unchanged policy and RBAC are neither written nor read; a changed
   const same = planFoundationRuntimeRbac({ sourceRevision: NEW_REVISION, bundle: decoupledText(), baselineRevision: OLD_REVISION,
     baselineBundle: decoupledText(), controllerManifest: decoupledManifest() });
   assert.equal(same.changed, false);
-  assert.equal(applyFoundationRuntimeRbac(same, { kubectl: () => assert.fail('no call') }).decision, 'unchanged');
+  // Review 2026-10-19 (minor 4): the policy is still read and compared; only matching objects leave it unchanged.
+  const intact = fakeCluster({ objects: [...liveProfile({ samba: true }), modelPolicy(), modelBinding()] });
+  const record = applyFoundationRuntimeRbac(same, { kubectl: serverView(intact), sleep: () => {} });
+  assert.equal(record.decision, 'unchanged');
+  assert.equal(intact.writes().length, 0);
   const edited = decoupledBundle(); edited.resources[2].spec.validations[0].expression += ' && true';
   assert.equal(planFoundationRuntimeRbac({ sourceRevision: NEW_REVISION, bundle: JSON.stringify(edited), baselineRevision: OLD_REVISION,
     baselineBundle: decoupledText() }).reason, 'profile-changed');
+});
+
+// Review 2026-10-19 (minor 1 and 3): status.typeChecking from one read is not enforcement on every API server (kind: up
+// to about 1.1 s later, RKE2 has three). The RBAC is widened only after dry runs as the runtime identity are denied by
+// the policy several times in a row; an API server that keeps admitting stops the step with the RBAC untouched.
+test('D-C2: the RBAC is widened only after the API servers deny an unapproved name several times in a row', () => {
+  const late = fakeCluster({ objects: liveProfile({ samba: true }), admitProbes: 3 });
+  const record = applyFoundationRuntimeRbac(decoupledPlan(), { kubectl: serverView(late), sleep: () => {} });
+  assert.equal(record.decision, 'applied');
+  assert.deepEqual(record.admissionProbe, { probe: 'denied', attempts: 8 });
+  const never = fakeCluster({ objects: liveProfile({ samba: true }), admitProbes: 1000 });
+  assert.throws(() => applyFoundationRuntimeRbac(decoupledPlan(), { kubectl: serverView(never), sleep: () => {} }),
+    (error) => /not proven enforced/.test(error.message) && error.prerequisiteRecord?.decision === 'changed-unverified');
+  assert.equal(never.writes().length, 1, 'only the policy was written');
+  assert.deepEqual(never.store.get('ClusterRole//opensphere-foundation-runtime').rules,
+    liveProfile({ samba: true }).find((d) => d.kind === 'ClusterRole' && d.metadata.name === 'opensphere-foundation-runtime').rules);
+  // RBAC that already refuses the runtime identity cannot show the policy: Setup waits the measured settle time instead.
+  const slept = [];
+  const forbidden = fakeCluster({ objects: liveProfile({ samba: true }),
+    probeError: 'Error from server (Forbidden): foundationmodels.foundation.opensphere.io is forbidden: User "system:serviceaccount:opensphere-console:opensphere-foundation-runtime" cannot create resource "foundationmodels"' });
+  assert.equal(applyFoundationRuntimeRbac(decoupledPlan(), { kubectl: serverView(forbidden), sleep: (ms) => slept.push(ms) }).admissionProbe.probe, 'rbac-forbidden');
+  assert.ok(slept.includes(3000));
+});
+
+// Review 2026-10-19 (minor 3): a Setup that knew only v1 would apply the name-free RBAC before the policy. The bundle that
+// carries the policy is v2; this Setup accepts v1 and v2 and refuses the policy or name-free RBAC in a v1 bundle.
+test('D-C2: the name policy and name-free RBAC come only in a v2 bundle', () => {
+  assert.equal(decoupledPlan().changed, true);
+  const v1 = decoupledBundle(); v1.schema = 'opensphere.foundation-bootstrap/v1';
+  assert.throws(() => planFoundationRuntimeRbac({ sourceRevision: NEW_REVISION, bundle: JSON.stringify(v1), baselineRevision: OLD_REVISION,
+    baselineBundle: bundleText({ samba: true }) }), /is not opensphere.foundation-bootstrap\/v2/);
+  const v3 = decoupledBundle(); v3.schema = 'opensphere.foundation-bootstrap/v3';
+  assert.throws(() => planFoundationRuntimeRbac({ sourceRevision: NEW_REVISION, bundle: JSON.stringify(v3) }), /unsupported contract/);
+  // An older v1 bundle without the policy keeps working (rollback baseline, older Console).
+  assert.equal(forwardPlan().admission.length, 0);
+});
+
+// Review 2026-10-19 (minor 4): with an unchanged bundle the policy was neither read nor restored. A deleted or edited
+// policy is now applied again, type-checked and proven before the release continues; the RBAC is not rewritten.
+test('D-C2: an unchanged bundle restores a deleted or edited name policy before anything else', () => {
+  const same = planFoundationRuntimeRbac({ sourceRevision: NEW_REVISION, bundle: decoupledText(), baselineRevision: OLD_REVISION,
+    baselineBundle: decoupledText(), controllerManifest: decoupledManifest() });
+  const edited = modelPolicy(); edited.spec.failurePolicy = 'Ignore';
+  for (const [label, objects] of [['deleted', [modelBinding()]], ['edited', [edited, modelBinding()]]]) {
+    const cluster = fakeCluster({ objects: [...liveProfile({ samba: true }), ...objects] });
+    const record = applyFoundationRuntimeRbac(same, { kubectl: serverView(cluster), sleep: () => {} });
+    assert.equal(record.decision, 'admission-restored', label);
+    assert.deepEqual(record.restored, ['ValidatingAdmissionPolicy/opensphere-foundation-model-writer'], label);
+    assert.equal(record.admissionProbe.probe, 'denied', label);
+    assert.equal(cluster.writes().length, 1, `${label}: only the policy was written`);
+    assert.deepEqual(JSON.parse(cluster.writes()[0].input).items.map((d) => d.kind), ['ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding']);
+    assert.match(describeComponentRuntimePrerequisite(record), /FoundationModel 이름 정책이 바뀌었거나 없어 다시 적용/);
+  }
 });
