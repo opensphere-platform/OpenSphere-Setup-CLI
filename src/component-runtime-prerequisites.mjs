@@ -215,11 +215,14 @@ export function probeFoundationAdmission(kubectl, { sleep = defaultSleep, attemp
         denied += 1;
         if (denied >= consecutive) return { probe: 'denied', attempts: attempt };
       } else {
-        // RBAC already refuses the runtime identity (it cannot create today), or the probe itself could not run. The
-        // policy is type-checked and read back; Setup waits for the slowest informer it measured and records why.
-        const reason = /forbidden/i.test(text) && /cannot create resource/i.test(text) ? 'rbac-forbidden' : 'unavailable';
-        sleep(settleMilliseconds);
-        return { probe: reason, attempts: attempt };
+        // RBAC already refuses the runtime identity (it cannot create today): the policy cannot be observed through it,
+        // so Setup waits for the slowest informer it measured and records why. Any other failure means the probe could not
+        // run (for example impersonation refused); enforcement is then unproven and the caller stops (review 2026-10-19).
+        if (/forbidden/i.test(text) && /cannot create resource/i.test(text)) {
+          sleep(settleMilliseconds);
+          return { probe: 'rbac-forbidden', attempts: attempt };
+        }
+        return { probe: 'unavailable', attempts: attempt, reason: text.slice(0, 200) };
       }
     }
     sleep(500);
@@ -342,6 +345,10 @@ function applyAdmission(plan, admission, record, { kubectl, sleep, typeCheckAtte
       `The FoundationModel name policy did not read back as the target or is not type-checked without warnings: ${names.join(', ')}. The Foundation RBAC and every workload manifest were left as they were.`);
   }
   const probe = probeFoundationAdmission(kubectl, { sleep });
+  if (probe.probe === 'unavailable') {
+    throw afterWrite(null, { ...record, decision: 'changed-unverified', admissionProbe: probe },
+      'The enforcement probe for the FoundationModel name policy could not run, so the policy is not proven enforced. The Foundation RBAC and every workload manifest were left as they were.');
+  }
   if (probe.probe === 'admitted') {
     throw afterWrite(null, { ...record, decision: 'changed-unverified', admissionProbe: probe },
       `The API servers kept admitting an unapproved FoundationModel name for the Foundation runtime after ${probe.attempts} dry runs, so the name policy is not proven enforced. The Foundation RBAC and every workload manifest were left as they were.`);

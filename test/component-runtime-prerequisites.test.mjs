@@ -801,3 +801,20 @@ test('D-C2: an unchanged bundle restores a deleted or edited name policy before 
     assert.match(describeComponentRuntimePrerequisite(record), /FoundationModel 이름 정책이 바뀌었거나 없어 다시 적용/);
   }
 });
+
+// Review 2026-10-19 (mutant S6 survived): a probe that could not run at all (impersonation refused, API error) used to
+// widen the RBAC after 3 s like an RBAC refusal. It now stops with the RBAC untouched; only a real RBAC refusal settles.
+test('D-C2: a probe that cannot run stops the step; only an RBAC refusal of the runtime identity settles and continues', () => {
+  for (const stderr of ['Error from server (Forbidden): users "system:serviceaccount:opensphere-console:opensphere-foundation-runtime" is forbidden: User "setup" cannot impersonate resource "users"',
+    'error: unknown flag: --as', 'Unable to connect to the server: dial tcp 10.10.1.31:6443: i/o timeout']) {
+    const slept = [];
+    const cluster = fakeCluster({ objects: liveProfile({ samba: true }), probeError: stderr });
+    assert.throws(() => applyFoundationRuntimeRbac(decoupledPlan(), { kubectl: serverView(cluster), sleep: (ms) => slept.push(ms) }),
+      (error) => /probe for the FoundationModel name policy could not run/.test(error.message) && error.prerequisiteRecord?.decision === 'changed-unverified'
+        && error.prerequisiteRecord.admissionProbe.probe === 'unavailable', stderr);
+    assert.equal(cluster.writes().length, 1, 'only the policy was written');
+    assert.ok(!slept.includes(3000), 'no settle wait for an unrunnable probe');
+    assert.deepEqual(cluster.store.get('ClusterRole//opensphere-foundation-runtime').rules,
+      liveProfile({ samba: true }).find((d) => d.kind === 'ClusterRole' && d.metadata.name === 'opensphere-foundation-runtime').rules);
+  }
+});
