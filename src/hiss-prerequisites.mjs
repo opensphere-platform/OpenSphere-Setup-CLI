@@ -53,9 +53,10 @@ export function prepareHissValidation(raw, scope, {runner=run}={}) {
   return {applied:true,resourceCount:7,installationComplete:false};
 }
 // Storage observation (H2, user decision HD4): a read-only Longhorn Role for Cluster Manager and one NetworkPolicy
-// admitting Prometheus to longhorn-manager :9500. Source: Cluster Manager deploy/hiss-storage-observation.yaml at
-// 20062177e2a2af22ff95a5a26670865b443341cb. Applied only where Longhorn runs; elsewhere it is NotApplicable.
-const STORAGE_OBSERVATION_SHA256 = '5117b4f3c8b8af230a0d108275b981604729e7767ec984570182640680dd2a4c';
+// admitting Prometheus to longhorn-manager :9500. H-P6 (storage operations design 2026-10-19, M1) adds a read of
+// Longhorn's settings and backup targets to the same Role. Source: Cluster Manager deploy/hiss-storage-observation.yaml
+// at 3d295c4729507d074eaf04e87fc00ffe16d10a10. Applied only where Longhorn runs; elsewhere it is NotApplicable.
+const STORAGE_OBSERVATION_SHA256 = 'aedc3863ce6de4461d543ca6126694ee3987e8a78ed624cc8c28b2cf8db47ead';
 export function verifyHissStorageObservationArtifact(raw) {
   if (typeof raw !== 'string' || digest(raw) !== STORAGE_OBSERVATION_SHA256) throw fail('UNTRUSTED_PROFILE','HISS storage observation bytes differ from the approved contract');
   return raw;
