@@ -87,7 +87,10 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     'validatingadmissionpolicybinding/opensphere-shell-runtime-template-v1',
     'validatingadmissionpolicy/opensphere-shell-runtime-template-v1',
     'validatingadmissionpolicybinding/opensphere-cluster-manager-workload-guard',
-    'validatingadmissionpolicy/opensphere-cluster-manager-workload-guard'
+    'validatingadmissionpolicy/opensphere-cluster-manager-workload-guard',
+    // FoundationModel name policy (Console foundation-bootstrap.json, user decision 2026-10-19, D-C2).
+    'validatingadmissionpolicybinding/opensphere-foundation-model-writer',
+    'validatingadmissionpolicy/opensphere-foundation-model-writer'
   ])
 });
 

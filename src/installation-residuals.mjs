@@ -39,7 +39,16 @@ export function assertManagedAdmissionParameters({ run = kubectl } = {}) {
     const binding = JSON.parse(raw);
     const ref = binding.spec?.paramRef;
     if (!ref) continue;
-    // The sole parameterized binding in the canonical owned set.
+    // D-C2 (2026-10-19): the FoundationModel name policy's parameter is the Foundation Registration. Its absence is
+    // normal before Foundation is installed and only denies the two Foundation identities' FoundationModel writes, so it
+    // never blocks Setup; the reference itself must be exact.
+    if (resource === 'validatingadmissionpolicybinding/opensphere-foundation-model-writer') {
+      if (ref.name !== 'foundation' || ref.namespace !== 'opensphere-console' || ref.selector || ref.parameterNotFoundAction !== 'Deny') {
+        throw new Error(`Unexpected managed admission parameter reference: ${resource}`);
+      }
+      continue;
+    }
+    // The ceph preparation binding's parameter must exist.
     if (resource !== 'validatingadmissionpolicybinding/opensphere-ceph-preparation-job'
         || ref.name !== 'opensphere-ceph-preparation-policy' || ref.namespace !== 'opensphere-console'
         || ref.selector || ref.parameterNotFoundAction !== 'Deny') {
