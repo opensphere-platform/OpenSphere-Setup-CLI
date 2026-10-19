@@ -48,12 +48,13 @@ test('storage observation is applied only where Longhorn runs',async()=>{
  assert.equal(applied.storageObservation.state,'Applied');assert.equal(lh.applies.length,3);
  assert.match(lh.applies[1],/name: opensphere-hiss-storage-observer/);assert.doesNotMatch(lh.applies[1],/kind: ClusterRole/);
 });
-test('H-P6: the storage observation Role reads Longhorn settings and backup targets and writes nothing',()=>{
+test('H-P6: the storage observation Role reads one Longhorn setting by name and the backup targets, and writes nothing',()=>{
  const yaml=storageObservationYaml();
  const role=yaml.split('\n---\n')[0];
  assert.match(role,/resources: \[volumes, replicas, engines, nodes\]\n    verbs: \[get, list, watch\]/);
- assert.match(role,/resources: \[settings, backuptargets\]\n    verbs: \[get, list, watch\]/);
- assert.equal((role.match(/verbs:/g)||[]).length,2);
+ assert.match(role,/resources: \[settings\]\n    resourceNames: \[replica-soft-anti-affinity\]\n    verbs: \[get\]/);
+ assert.match(role,/resources: \[backuptargets\]\n    verbs: \[get, list\]/);
+ assert.equal((role.match(/verbs:/g)||[]).length,3);
  assert.doesNotMatch(role,/create|update|patch|delete|escalate|bind|impersonate|\*/);
  assert.doesNotMatch(role,/secrets/);
 });
