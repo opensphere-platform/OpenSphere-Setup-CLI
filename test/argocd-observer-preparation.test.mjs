@@ -9,7 +9,7 @@ import {verifyArgocdObserverAssets,runArgocdObserverPreparation} from '../src/ar
 import {preparePlatformCorePrerequisites} from '../src/platform-core-prerequisites.mjs';
 
 test('Setup ships a fixed complete observer source snapshot and verifies every byte before load',()=>{
- const result=verifyArgocdObserverAssets();assert.equal(result.fileCount,12);assert.equal(result.sourceRepository,'https://github.com/opensphere-platform/OpenSphere-Platform-Support');assert.equal(result.sourceRevision,'65d8bbfdddefafd1d1146b4ac73f8bda8f517a9f');assert.match(result.sourceTreeSha256,/^[a-f0-9]{64}$/);
+ const result=verifyArgocdObserverAssets();assert.equal(result.fileCount,12);assert.equal(result.sourceRepository,'https://github.com/opensphere-platform/OpenSphere-Platform-Support');assert.equal(result.sourceRevision,'fc136f54df1b2c1346cb6cb70d0195b3caf305ff');assert.match(result.sourceTreeSha256,/^[a-f0-9]{64}$/);
  const require=createRequire(import.meta.url),helper=require('../vendor/argocd-observer/tools/prepare-argocd-observer.cjs');
  assert.equal(typeof helper.createPreparation,'function');assert.throws(()=>helper.options(['--auth-token','private']),/Unsupported/);
 });
@@ -22,6 +22,13 @@ test('the dedicated Setup entry point defaults to plan and dispatches only its f
  const calls=[],fake={options:()=>({}),createPreparation:()=>({plan:()=>{calls.push('plan');return {state:'Planned'};}})};
  const result=runArgocdObserverPreparation([],{load:()=>fake});assert.deepEqual(calls,['plan']);assert.equal(result.installationComplete,false);assert.equal(result.setupAssets.fileCount,12);
  assert.throws(()=>runArgocdObserverPreparation([],{load:()=>({...fake,options:()=>({mode:'sync'})})}),/Unsupported/);
+});
+
+test('verified helper provenance never substitutes for the actually deployed PSSS compatibility source',()=>{
+ const require=createRequire(import.meta.url),helper=require('../vendor/argocd-observer/tools/prepare-argocd-observer.cjs');
+ const deployed='65d8bbfdddefafd1d1146b4ac73f8bda8f517a9f',image='sha256:'+'a'.repeat(64);let observed;
+ const result=runArgocdObserverPreparation(['--mode','apply','--compat-source',deployed,'--compat-digest',image],{load:()=>({options:helper.options,createPreparation:config=>({activate:()=>{observed=config;return {state:'ObserverPrepared'};}})})});
+ assert.equal(result.setupAssets.sourceRevision,'fc136f54df1b2c1346cb6cb70d0195b3caf305ff');assert.equal(observed['compat-source'],deployed);assert.equal(observed['compat-digest'],image);assert.equal(result.installationComplete,false);
 });
 
 test('the explicit cluster-scope mode dispatches only local namespace descriptor preparation',()=>{

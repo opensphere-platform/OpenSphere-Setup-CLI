@@ -2,9 +2,9 @@
   "schema": "opensphere.setup.argocd-observer-assets/v1",
   "sourceRepository": "https://github.com/opensphere-platform/OpenSphere-Platform-Support",
   "sourceKind": "content-addressed-source-snapshot",
-  "sourceTreeSha256": "1ce1770be7b8ce8bc893b5d20a779f64054769ef4956097fd8ece8b01ac13a04",
+  "sourceTreeSha256": "1279fe5080ad10ec64db9146a879a35a778d422d66ea8fa0fb46cc1369a2f761",
   "files": {
-    "tools/prepare-argocd-observer.cjs": "d2068e3b55d14c0c5d4aa09451bc9c1aa527037c296fd4ad0022cdf1fd7d8cde",
+    "tools/prepare-argocd-observer.cjs": "265784d17fd7bfb82562d56e1713e1612df4b8d7801039cf8830ee1ab6ca1949",
     "owner/argocd-core.cjs": "f097b64899084ae310fae6fcdc259bd65104d3bac7064907fdaf94b8c0a45344",
     "owner/argocd-observer-policy.cjs": "aab9b4c28f85d94a9cb6ec12eebba71313a4565e4928559c87e7e63bf72e9de4",
     "owner/argocd-policy-overlay.cjs": "da917d699262993b10af1e4748951b48d2816be1ea1ee98f9b9c96841bd178fe",
@@ -17,5 +17,5 @@
     "LICENSE-ARGO-CD.txt": "c996fc213c94f4a4a838407d355b081226caa7b103a4f239bb87fb8f1d8e3a60",
     "contracts/argocd-demo-observation-project-policy-legacy.json": "59ab39730e9365f10bce1bfb888672e22175debf7ce575b1af6a4bf09bffb4cb"
   },
-  "sourceRevision": "65d8bbfdddefafd1d1146b4ac73f8bda8f517a9f"
+  "sourceRevision": "fc136f54df1b2c1346cb6cb70d0195b3caf305ff"
 }

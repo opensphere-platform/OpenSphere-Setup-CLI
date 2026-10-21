@@ -5,6 +5,15 @@
 Setup은 12개 순수 의존성 자산을 `vendor/argocd-observer/manifest.json`의 고정 SHA-256으로
 검증한 뒤 실행한다. 임의 script/manifest/URL/토큰 입력은 지원하지 않는다.
 
+edge.42의 **도구 출처**는 PSSS `fc136f54df1b2c1346cb6cb70d0195b3caf305ff`다.
+이는 helper 수정이 반영된 source snapshot이며 운영 PSSS 이미지를 새로 빌드했다는 뜻이 아니다.
+`--compat-source`와 `--compat-digest`는 별도로 실제 `Current` Registration과 일치해야 한다.
+검증 대상 PSSS 20의 source는 `65d8bbfdddefafd1d1146b4ac73f8bda8f517a9f`이며,
+도구 출처 commit으로 이 운영 증거를 대체하지 않는다. helper와 시험은 PSSS Docker COPY 및
+서명된 모듈 입력에 포함되지 않으므로 이 수정 때문에 Console/PSSS 이미지를 재빌드하지 않는다.
+helper의 toolSha256이 plan에 포함되므로 이전 버전에서 승인한 plan digest는 재사용하지 않고
+edge.42로 새 plan을 생성해 검토한다.
+
 실행 위치: `OpenSphere-Setup-CLI`. 현재 entrypoint는 다음과 같다.
 
 ```powershell
@@ -103,7 +112,8 @@ $plan
    `opensphere-psss-first-delivery-projects` VAP뿐이다. 정확한 이전/다음 상태만 수용한다.
    UID/RV와 공개 spec digest를 먼저 검증하고 VAP server dry-run → 재확인 → stdin replace → 검증,
    그 다음 Project server dry-run → 재확인 → stdin replace → 검증 순서로 실행한다.
-   다른 필드·metadata·PFSS 분기를 보존한다. 두 객체는 원자적 transaction이 아니므로
+   last-applied tracking annotation 하나를 제외한 다른 필드·metadata·PFSS 분기를 보존한다.
+   두 객체는 원자적 transaction이 아니므로
    부분 실패 뒤에는 새 plan으로 남은 정확한 전환만 재개한다. 이전 상태로 자동 복귀하지 않는다.
 
    고정 demo의 whitelist만 기존 Deployment·Service·ConfigMap에 ReplicaSet·Pod를 더한다.
@@ -185,6 +195,55 @@ signing key나 전체 signing Secret을 읽지 않는다. Secret 값은 메모�
 
 ## 기존 권한 준비와 재현성
 
+### edge.42 metadata 회귀와 기존 설치 복구
+
+기존 helper는 live 객체의 last-applied annotation을 유지한 채 `kubectl replace`했다.
+kubectl은 `--save-config`를 지정하지 않아도 이 annotation이 있으면 입력 전체로 갱신한다.
+그 결과 서버 UID/RV/generation/creationTimestamp/status가 선언 기준에 들어갔고,
+후속 공식 Setup의 client-side apply가 이를 제거하려다 resourceVersion 필수 검증에 막혔다.
+rollback도 같은 apply 경로를 쓰므로 동일하게 실패했다. Secret 입력에 이 annotation이
+있다면 밀봉된 credential data도 복제될 수 있어 공개 객체와 Secret 모두에서 차단한다.
+
+edge.42 helper는 모든 replace의 dry-run·실제 stdin에서 해당 annotation key만 제거한다.
+원본 plan 객체, outer UID/RV, policy spec, 다른 annotations와 credential data는 유지한다.
+Secret 저장 후 검증도 같은 정규화 상태를 비교한다. UID/RV·정확한 정책·소유권 guard나
+회전·폐기·복구 순서를 완화하지 않는다. 이후 공식 Setup apply가 새 선언 기준을 기록할 수 있다.
+
+**이미 오염된 설치에 새 helper를 실행했다고 자동 복구된 것으로 판단하지 않는다.**
+정확한 기존/승인 spec 일치를 확인한 뒤 별도 검토된 metadata 수복으로 처리한다.
+
+1. 명시한 kubeconfig/context에서 cluster UID와 해당 VAP UID/RV를 다시 확인한다.
+   live spec과 승인 계약의 digest가 다르면 중단하며 VAP를 삭제하거나 Deny를 완화하지 않는다.
+2. 기존 last-applied JSON의 선언 spec·사용자 metadata는 보존하고 status 및 서버 전용
+   metadata(UID/RV/generation/creationTimestamp/managedFields 등)만 제거하는 계획을 만든다.
+3. JSON Patch의 test에 객체 UID, 현재 RV, 기존 annotation 값 세 개를 묶고,
+   해당 annotation 하나만 바꾸는 server dry-run을 검토한다. 긴 public patch는 지원되는
+   파일 전달을 사용한다. `--patch-file -`가 stdin이라는 가정은 하지 않는다.
+4. 같은 전제조건으로 수복한 뒤 UID·generation·실제 spec digest 불변을 확인한다.
+   concurrent 변경이나 불확실한 결과면 새로 읽고 재검토하며 강제 덮어쓰기하지 않는다.
+5. 설치 record/lock/실제 workload를 읽고 원래 공식 Setup complete 또는 target upgrade
+   경로를 재개한다. migration ledger나 설치 Ready 상태를 수동으로 편집하지 않는다.
+
+과거에 이미 완료된 one-way migration은 현재 시도의 새 경계 통과와 구별한다.
+중단 전 baseline이 Ready이고 이전 검증 시각·digest가 맞으며, 전체 live ledger가 그 baseline의
+검증된 chain과 owner별 불변 source에 정확히 들어갈 때만 공식 complete가 진행된다.
+검증 전후 ledger를 다시 읽는다. 새로 통과한 경계, 누락·중복·불명확한 증거는 계속 차단한다.
+
+PSSS helper 회귀는 449/449, 준비 helper 시험은 21/21 통과했다. 실제 kubectl v1.36.1
+client dry-run으로 오염 입력이 문제를 재현하고 수정된 VAP/Secret 입력은 이를 만들지 않음을
+확인했다. 빈 공개 kubeconfig와 로컬 GET 전용 discovery fixture를 사용했으므로 운영 API·
+credential 접근과 운영 쓰기는 0회다. 이 결과만으로 독립 클린 설치 완료를 주장하지 않는다.
+
+Setup edge.42 후보의 source observer 9/9, 전체 회귀 680건 중 677건 통과·실패 0·기존
+외부 Console fixture 조건 3건 skip을 확인했다. 그 fixture 관련 profile/transition 시험은
+Console의 정확한 Git object를 지정한 별도 실행에서 11/11 통과·skip 0으로 확인했다.
+실제 ncc bundle·변조 거부·SEA 13개 고정 자산 목록 시험도 3/3 통과했다. 로컬 Node24는
+Node26 이상이 필요한 SEA executable을 만들 수 없으므로 native Linux SEA·archive 실행은
+공식 발행 workflow에서 별도로 검증해야 한다. 이 문서의 후보 검증은 발행·채널 승격이나
+새 바이너리의 실제 설치 수용이 완료됐다는 선언이 아니다.
+
+### edge.40 → edge.41의 준비·검증 기록
+
 edge.40의 `preparePlatformCorePrerequisites`는 승인된 Argo v2/reader-fence 전환을 인식하지만
 새 reduced executor는 아직 충돌로 거부한다. 따라서 그 버전의 full upgrade/recovery는 권한을
 복원하지 않고 쓰기 전에 중단한다. extension-controller 단독 component 업데이트는 이 full
@@ -217,12 +276,12 @@ create/update/patch/delete는 실제로 거부되었다. 이 사실은 새 PSSS 
 
 패키지 회귀 검증은 `npm run test:argocd-observer-bundle`로 실행한다. 기존 readiness 모듈의
 직접 실행 guard가 ncc에서 imported 코드도 CLI로 오인하던 문제는 해당 filename 조건만
-추가하여 정상 help와 신규 준비 명령 모두를 검증한다. SEA에는 고정 13개 자산만 넣으며,
+추가하여 정상 help와 신규 준비 명령 모두를 검증한다. SEA의 observer 영역에는 고정 13개 자산을 넣으며,
 검증된 코드만 임시 경로에 materialize한 뒤 제거한다. private credential은 자산에 포함되지 않는다.
 공개 발행 workflow는 실제 Linux SEA에서 observer 명령을 실행하여 `Missing --kubeconfig`와
 종료 코드 1을 확인한다. 로컬 Windows 시험은 ncc bundle까지이며 Linux native SEA 실행을
 대신 증명하지 않는다. YAML 및 Linux matrix를 대입한 PowerShell smoke 구문의 파싱은 통과했다.
 
-고정 source provenance: PSSS `65d8bbfdddefafd1d1146b4ac73f8bda8f517a9f`.
-sourceTree SHA-256: `1ce1770be7b8ce8bc893b5d20a779f64054769ef4956097fd8ece8b01ac13a04`.
-고정 manifest SHA-256: `e63ed20f420e7cbed142803e915e2e4ea294e04439901d5bbfc1510d80bbfbe9`.
+고정 source provenance: PSSS `fc136f54df1b2c1346cb6cb70d0195b3caf305ff`.
+sourceTree SHA-256: `1279fe5080ad10ec64db9146a879a35a778d422d66ea8fa0fb46cc1369a2f761`.
+고정 manifest SHA-256: `7aa755dc715c5c7ebbdacd01ca0ec825a50205f2b8487aaaf5bc0bc09d36bd31`.

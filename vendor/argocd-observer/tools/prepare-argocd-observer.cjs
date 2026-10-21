@@ -21,6 +21,14 @@ const observationKinds=[...sourceKinds,{group:'apps',kind:'ReplicaSet'},{group:'
 const demoProjectSpec=kinds=>({sourceRepos:[repositoryUrl],destinations:[{server:LOCAL_CLUSTER_SERVER,namespace:'opensphere-platform-delivery'}],clusterResourceWhitelist:[],namespaceResourceWhitelist:kinds,orphanedResources:{warn:true}});
 const metadata=o=>({uid:o?.metadata?.uid||null,resourceVersion:o?.metadata?.resourceVersion||null});
 const json=v=>JSON.stringify(v);
+function replacementInput(value){
+ const result=structuredClone(value);
+ // kubectl replace refreshes an existing last-applied annotation even without
+ // --save-config. Never serialize live UID/RV/status, or sealed token data,
+ // into that declarative baseline. Keep the outer RV for optimistic locking.
+ if(result.metadata?.annotations)delete result.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration'];
+ return result;
+}
 function requireValue(ok,message){if(!ok)throw Object.assign(Error(message),{code:'PreparationRejected'});}
 function options(argv){const allowed=new Set(['kubeconfig','context','expected-cluster-uid','kubectl','argocd','argocd-sha256','openssl','openssl-sha256','mode','approve-plan','compat-source','compat-digest','authenticated-proof']);const out={};for(let i=0;i<argv.length;i+=2){requireValue(/^--[a-z][a-z0-9-]*$/.test(argv[i]||'')&&argv[i+1]&&!argv[i+1].startsWith('--'),'Every option requires a value');const key=argv[i].slice(2);requireValue(allowed.has(key),'Unsupported preparation option');requireValue(!Object.hasOwn(out,key),'Duplicate option');out[key]=argv[i+1];}return out;}
 function createPreparation(config,{execute=spawnSync,readFile=fs.readFileSync,now=()=>Date.now()}={}){
@@ -31,6 +39,7 @@ function createPreparation(config,{execute=spawnSync,readFile=fs.readFileSync,no
  let approvedTargets;
  function run(binary,args,input,environment={}){const result=execute(binary,args,{input:input===undefined?undefined:typeof input==='string'?input:json(input),encoding:'utf8',timeout:120000,maxBuffer:4*1024*1024,windowsHide:true,env:{...Object.fromEntries(Object.entries(process.env).filter(([key])=>!key.startsWith('ARGOCD_'))),KUBECONFIG:config.kubeconfig,...environment}});requireValue(result.status===0&&!result.error,'Preparation command failed; credential-bearing output withheld');return result.stdout||'';}
  function kubectl(args,input){
+  if(args[0]==='replace'&&input!==undefined)input=replacementInput(input);
   if(args.some(v=>['create','replace','patch','delete'].includes(v))){
    const uid=run(config.kubectl||'kubectl',k.concat(['get','namespace','kube-system','-o','jsonpath={.metadata.uid}'])).trim();
    requireValue(uid===config['expected-cluster-uid'],'Cluster UID changed before mutation; nothing further applied');
@@ -213,6 +222,7 @@ function createPreparation(config,{execute=spawnSync,readFile=fs.readFileSync,no
   const result=structuredClone(value);delete result.stringData;result.data=data;return result;
  }
  function replaceObserverCredential(value,expected){
+  value=replacementInput(value);
   kubectl(['replace','--dry-run=server','-f','-','-o','name'],value);
   const fresh=get('secret',P.SECRET,'argocd',{metadataOnly:true});requireValue(fresh?.metadata?.uid===expected.metadata.uid&&fresh.metadata.resourceVersion===expected.metadata.resourceVersion,'Observer credential changed before stdin replacement');
   kubectl(['replace','-f','-','-o','name'],value);
