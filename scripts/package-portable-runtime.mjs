@@ -6,6 +6,7 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { archiver } from '../src/portable-runtime.mjs';
+import {verifyArgocdObserverAssets} from '../src/argocd-observer-preparation.mjs';
 
 function option(name) {
   const index = process.argv.indexOf(name);
@@ -80,6 +81,9 @@ exec "$root/bin/opensphere-setup.bin" "$@"
     await mkdir(setupRuntime, { recursive: true });
     await cp(resolve(nodeExecutable), join(runtime, 'bin', 'node'));
     await cp(resolve(bundle), join(setupRuntime, 'index.mjs'));
+    const observerAssets=resolve(runtimeAssets,'../vendor/argocd-observer');
+    verifyArgocdObserverAssets(observerAssets);
+    await cp(observerAssets,join(runtime,'vendor/argocd-observer'),{recursive:true});
     await cp(resolve(runtimeAssets, 'New-Certificates.ps1'), join(setupRuntime, 'New-Certificates.ps1'));
     await cp(resolve(runtimeAssets, 'Install-LocalDevelopmentCa.ps1'), join(setupRuntime, 'Install-LocalDevelopmentCa.ps1'));
     await writeFile(packagedSetup, `#!/bin/sh

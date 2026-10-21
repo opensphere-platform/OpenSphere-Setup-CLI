@@ -3,7 +3,7 @@
 // Consumers must verify the BOM's signature first; this module does not establish trust.
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const CONTRACT = 'opensphere-release-readiness/v1';
@@ -126,7 +126,8 @@ export function verifyOwnerPreservation({ profile, sourceRevision, installed, re
     baseResourceVersion: installed.resourceVersion, comparedWorkloads: live.size, status: 'preserved' };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (process.argv[1] && basename(process.argv[1]) === 'release-readiness-profile.mjs'
+    && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const [command, ...args] = process.argv.slice(2);
   const json = path => JSON.parse(readFileSync(path, 'utf8'));
   if (command === 'attach') {

@@ -1,0 +1,243 @@
+{
+  "schema": "opensphere.argocd-core-executor-authority/v1",
+  "source": "Setup approved Argo observer security transition",
+  "resources": [
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "opensphere-platform-support-core-executor",
+        "namespace": "argocd"
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "serviceaccounts"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "argocd-application-controller",
+            "argocd-applicationset-controller",
+            "argocd-dex-server",
+            "argocd-notifications-controller",
+            "argocd-redis",
+            "argocd-repo-server",
+            "argocd-server"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "roles"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "argocd-application-controller",
+            "argocd-applicationset-controller",
+            "argocd-dex-server",
+            "argocd-notifications-controller",
+            "argocd-redis",
+            "argocd-server"
+          ]
+        },
+        {
+          "apiGroups": [
+            "rbac.authorization.k8s.io"
+          ],
+          "resources": [
+            "rolebindings"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "argocd-application-controller",
+            "argocd-applicationset-controller",
+            "argocd-dex-server",
+            "argocd-notifications-controller",
+            "argocd-redis",
+            "argocd-server"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "argocd-cm",
+            "argocd-cmd-params-cm",
+            "argocd-gpg-keys-cm",
+            "argocd-notifications-cm",
+            "argocd-rbac-cm",
+            "argocd-ssh-known-hosts-cm",
+            "argocd-tls-certs-cm"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "argocd-applicationset-controller",
+            "argocd-dex-server",
+            "argocd-metrics",
+            "argocd-notifications-controller-metrics",
+            "argocd-redis",
+            "argocd-repo-server",
+            "argocd-server",
+            "argocd-server-metrics"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "deployments"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "argocd-applicationset-controller",
+            "argocd-dex-server",
+            "argocd-notifications-controller",
+            "argocd-redis",
+            "argocd-repo-server",
+            "argocd-server"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "statefulsets"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "argocd-application-controller"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "networkpolicies"
+          ],
+          "verbs": [
+            "get"
+          ],
+          "resourceNames": [
+            "argocd-application-controller-network-policy",
+            "argocd-applicationset-controller-network-policy",
+            "argocd-dex-server-network-policy",
+            "argocd-notifications-controller-network-policy",
+            "argocd-redis-network-policy",
+            "argocd-repo-server-network-policy",
+            "argocd-server-network-policy"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "services"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "deployments"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "statefulsets"
+          ],
+          "verbs": [
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            "networking.k8s.io"
+          ],
+          "resources": [
+            "networkpolicies"
+          ],
+          "verbs": [
+            "create"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "opensphere-platform-support-core-executor",
+        "namespace": "argocd"
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "opensphere-platform-support-core-executor"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-platform-support-runtime",
+          "namespace": "opensphere-console"
+        }
+      ]
+    }
+  ]
+}

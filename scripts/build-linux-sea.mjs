@@ -2,6 +2,7 @@
 import { chmod, mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
+import {argocdObserverSeaAssets} from './argocd-observer-build-assets.mjs';
 
 function option(name) {
   const index = process.argv.indexOf(name);
@@ -33,6 +34,7 @@ await writeFile(configPath, `${JSON.stringify({
   useCodeCache: false,
   execArgvExtension: 'none',
   assets: {
+    ...argocdObserverSeaAssets(root),
     'New-Certificates.ps1': resolve(root, 'src', 'New-Certificates.ps1'),
     'Install-LocalDevelopmentCa.ps1': resolve(root, 'src', 'Install-LocalDevelopmentCa.ps1')
   }
