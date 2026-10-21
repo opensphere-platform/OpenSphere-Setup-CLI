@@ -1,4 +1,28 @@
-# OpenSphere Setup CLI 0.5.0-edge.39
+# OpenSphere Setup CLI 0.5.0-edge.40
+
+Add the explicit `prepare-argocd-observer` command for Setup-owned Argo read
+preparation. It verifies 12 fixed source assets from PSSS commit
+`65d8bbfdddefafd1d1146b4ac73f8bda8f517a9f` before execution. Every operation
+requires an explicit kubeconfig, context and expected cluster UID; writes also
+require a freshly reviewed plan digest. Existing Core preparation guards remain.
+
+The staged procedure covers durable internal TLS, a seven-day read-only apiKey,
+finite local namespace cache scope, and only the fixed demo Project's generated
+ReplicaSet/Pod observation. Source validation still rejects direct ReplicaSet/Pod
+deployment, and controller writes remain denied. Cutover removes signing Secret
+read/create authority. Token cleanup resumes only after exact account metadata
+proves revocation; private material remains in memory and Secret stdin.
+
+The native Linux SEA smoke check loads the verified observer assets and confirms
+that missing cluster identity fails before Kubernetes access. Only the used Linux
+amd64 archive and SHA256SUMS are published. Publication does not itself install a
+module, change Console or complete application acceptance. The edge pointer is
+promoted separately after the immutable asset digests are verified.
+
+See [the operator runbook](argocd-observer-preparation.md) for stage ordering,
+partial-outcome handling, renewal and remaining TLS rotation work.
+
+## Earlier edge.39 preparation retained
 
 Fresh bootstrap now prepares the fixed 96-resource HISS execution profile,
 including cert-manager controller authority and fixed service accounts. Existing

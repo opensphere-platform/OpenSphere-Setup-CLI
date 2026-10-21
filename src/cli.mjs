@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import setupPackage from '../package.json' with { type: 'json' };
+import {runArgocdObserverPreparation} from './argocd-observer-preparation.mjs';
 import {prepareInstalledHiss} from './prepare-installed-hiss.mjs';
 import {prepareCephExecutionProfile} from './ceph-prerequisites.mjs';
 import {createPsssArgoRbacClient} from './psss-argocd-rbac-transition.mjs';
@@ -168,6 +169,10 @@ Usage:
        [--registry-username <github-login> --registry-token-stdin]
        [--no-open-browser] [--trust-local-ca]
        [--non-interactive --yes --console <origin> --storage-class <name>]
+  opensphere-setup prepare-argocd-observer --mode <plan|core-credentials|tls-prepare|cluster-scope|project-observation|apply|renew|cutover|revoke>
+      --kubeconfig <file> --context <kube-context> --expected-cluster-uid <kube-system-uid>
+      [--argocd <pinned-cli> --argocd-sha256 <sha256> --openssl <pinned-openssl> --openssl-sha256 <sha256>]
+      [--approve-plan <sha256> --compat-source <commit> --compat-digest <sha256> --authenticated-proof <policy-sha256>]
   opensphere-setup prepare-psss-argocd --context <kube-context> --cluster-uid <kube-system-uid>
       --console <https-origin> --channel edge [--kubectl-bin <path> --kubeconfig <path>]
       [--apply --plan-revision <sha256> --reviewed-at <ISO-8601> --reason <text>]
@@ -236,6 +241,15 @@ function installationProgress(command,channel) {
 
 async function main() {
   const command = process.argv[2] ?? 'help';
+  if (command === 'prepare-argocd-observer') {
+    try {
+      console.log(JSON.stringify(runArgocdObserverPreparation(process.argv.slice(3))));
+      return;
+    } catch (error) {
+      if (error.code === 'PreparationRejected') throw error;
+      throw new Error('Argo observer Setup preparation failed; potentially credential-bearing diagnostics withheld');
+    }
+  }
   const channel = option(['--release', '-r'], 'stable');
   const lockPath = resolve(option('--lock', `.opensphere-setup/${channel}-release-lock.json`));
   const explicitLock = hasOption('--lock');

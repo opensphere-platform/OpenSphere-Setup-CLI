@@ -3,11 +3,29 @@
 OpenSphere OS Console의 신뢰 가능한 최초 설치, 재개, 검증, 업그레이드 및 제거를 담당한다.
 현재 정본은 **Supabase Data & Identity Backbone + 별도 Gitea Change Authority**이다.
 
+## Argo CD 관측 준비 — edge.40 소스
+
+`prepare-argocd-observer`는 기존 설치의 내부 TLS, 전용 읽기 계정, namespace cache 범위와
+고정 demo 자식 관측을 준비하는 명시적 Setup 명령이다. 기본 `plan`은 읽기 전용이며
+`--kubeconfig`, `--context`, `--expected-cluster-uid`를 모두 요구한다. `apply`, `renew`,
+`cluster-scope`, `project-observation`, `cutover`는 새 plan digest를 검토한 뒤 각각 요청한다.
+임의 manifest/토큰 인수, 인증서 검증 해제, controller workload write 권한 추가는 지원하지 않는다.
+
+```powershell
+node src/cli.mjs prepare-argocd-observer --mode plan --kubeconfig '<파일>' --context '<문맥>' --expected-cluster-uid '<확인한 kube-system UID>'
+```
+
+[단계별 준비·검증·갱신 절차](docs/argocd-observer-preparation.md)를 따른다. 준비 성공은
+모든 화면·API 수용 완료를 뜻하지 않는다. 이 소스는 PSSS의 고정 commit에서 검증된 12개
+자산만 실행하며 기존 Console/Core 준비 guard는 유지한다. edge.40 공개 발행·자산 검증 전에는
+기존 `edge` 포인터를 바꾸지 않는다. 이번 발행 대상은 실제 사용 중인 Linux amd64 archive와
+SHA256SUMS 두 개이며, 아래 Windows/macOS 다운로드 설명은 이전 포터블 배포의 기록이다.
+
 ## 다운로드 후 바로 실행
 
 Setup CLI는 Windows에 설치해 상시 사용하는 프로그램이 아니다. 필요한 때 실행해 Kubernetes의 Console을 준비·설치·검증하고 종료한다. **Setup 설치, PATH 등록, 서비스 등록은 하지 않는다.**
 
-현재 소스 버전은 `0.5.0-edge.33`입니다. 기존 OAuth·포터블 실행 계약을 유지하며 **Ceph 연결 준비를 22 → OS Shell → Cluster Manager로 실행하기 위한 고정 Job 프로필**을 포함합니다. [이번 변경과 경계](docs/CEPH-REPRESENTATIVE-EDGE33.md)를 참고하십시오.
+현재 소스 버전은 `0.5.0-edge.40`입니다. 기존 OAuth·포터블 실행 계약을 유지합니다. 이전 edge.33에서 추가한 **Ceph 연결 준비를 22 → OS Shell → Cluster Manager로 실행하기 위한 고정 Job 프로필**도 유지합니다. [해당 변경과 경계](docs/CEPH-REPRESENTATIVE-EDGE33.md)를 참고하십시오.
 
 Setup은 최초 Console bootstrap에서 실행 프로필만 준비합니다. Rook·CSI의 실제 설치는 Console의 22 또는 같은 OS Shell 명령으로 요청합니다. **어느 Ceph에 연결할지는 OS가 기동한 뒤 Console 설정으로 정하며, Setup과 프로필에는 특정 Ceph가 없습니다.** 이미 설치된 edge Console에는 아래 명령으로 프로필을 보완할 수 있습니다.
 

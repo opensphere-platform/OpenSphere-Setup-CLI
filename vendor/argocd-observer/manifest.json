@@ -1,0 +1,21 @@
+{
+  "schema": "opensphere.setup.argocd-observer-assets/v1",
+  "sourceRepository": "https://github.com/opensphere-platform/OpenSphere-Platform-Support",
+  "sourceKind": "content-addressed-source-snapshot",
+  "sourceTreeSha256": "1ce1770be7b8ce8bc893b5d20a779f64054769ef4956097fd8ece8b01ac13a04",
+  "files": {
+    "tools/prepare-argocd-observer.cjs": "d2068e3b55d14c0c5d4aa09451bc9c1aa527037c296fd4ad0022cdf1fd7d8cde",
+    "owner/argocd-core.cjs": "f097b64899084ae310fae6fcdc259bd65104d3bac7064907fdaf94b8c0a45344",
+    "owner/argocd-observer-policy.cjs": "aab9b4c28f85d94a9cb6ec12eebba71313a4565e4928559c87e7e63bf72e9de4",
+    "owner/argocd-policy-overlay.cjs": "da917d699262993b10af1e4748951b48d2816be1ea1ee98f9b9c96841bd178fe",
+    "owner/argocd-security.cjs": "65a4aa17345a8b6beb15fd4dbfe063db5eba674bb2c2db6ac793298a16250869",
+    "owner/argocd-repository-credential.cjs": "2323dd3beafa8061c71bf563de719b3d73d83c9a989997df9ccd30a5d5f589f9",
+    "contracts/argocd-core.bundle.json": "4de1062ff6a421de65455e3da739d152fd9f6fb547cb50a99377e1d67548e380",
+    "contracts/argocd-executor-authority.json": "24136502c2c34be8dfab48ea5621683e47f6b704bc0dba8d768267530c1eb888",
+    "contracts/argocd-executor-authority-legacy.json": "915c3afcdbceb447d4132933677bc425d218fae089cb26e45e32f0c319ec571f",
+    "contracts/argocd-first-delivery-policy.json": "0de9b616331d43d1bae5857d3705b4e4f8ddb19cb7e61c3107f3f06272eba3ae",
+    "LICENSE-ARGO-CD.txt": "c996fc213c94f4a4a838407d355b081226caa7b103a4f239bb87fb8f1d8e3a60",
+    "contracts/argocd-demo-observation-project-policy-legacy.json": "59ab39730e9365f10bce1bfb888672e22175debf7ce575b1af6a4bf09bffb4cb"
+  },
+  "sourceRevision": "65d8bbfdddefafd1d1146b4ac73f8bda8f517a9f"
+}
