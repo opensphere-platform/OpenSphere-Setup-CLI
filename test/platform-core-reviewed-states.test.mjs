@@ -30,6 +30,32 @@ function client(present){let serial=0;const state=new Map(),creates=[],patches=[
 }
 // Live state after `prepare-psss-argocd`: the six Argo roles carry the PSSS policy v2 rules.
 function narrowed(profile){return profile.resources.map(r=>{const row=ARGO.resources.find(row=>argoKey(row)===id(r));return row?{...structuredClone(r),rules:structuredClone(row.next)}:structuredClone(r);});}
+const executor='rbac.authorization.k8s.io/v1/Role/argocd/opensphere-platform-support-core-executor';
+const reducedExecutor=JSON.parse(readFileSync(resolve(import.meta.dirname,'../vendor/argocd-observer/contracts/argocd-executor-authority.json'),'utf8')).resources[0];
+function reduced(profile){return narrowed(profile).map(r=>id(r)===executor?{...r,rules:structuredClone(reducedExecutor.rules)}:r);}
+
+test('observer cutover is an exact preserved successor for full preparation and replay, with no authority writes',async()=>{
+ const c=client(reduced(JSON.parse(oldRaw))),before=structuredClone(c.state.get(executor));
+ for(let i=0;i<2;i++){const result=await preparePlatformCorePrerequisites(oldRaw,scope,{client:c,apply:true});assert.equal(result.status,'Prepared');assert.ok(result.reviewedSuccessors.includes(executor));assert.equal(result.preserved.length,53);}
+ assert.deepEqual(c.state.get(executor),before);assert.equal(c.creates.length+c.patches.length,0);assert.ok(!c.state.get(executor).rules.some(r=>r.resources?.includes('secrets')));
+ const legacy=client(narrowed(JSON.parse(oldRaw)));const original=structuredClone(legacy.state.get(executor));assert.equal((await preparePlatformCorePrerequisites(oldRaw,scope,{client:legacy,apply:true})).status,'Prepared');assert.deepEqual(legacy.state.get(executor),original);assert.equal(legacy.creates.length+legacy.patches.length,0);
+});
+
+test('an almost-reduced executor or foreign identity never qualifies as the approved successor',async()=>{
+ for(const mutate of [
+  r=>r.rules.push({apiGroups:[''],resources:['secrets'],verbs:['get'],resourceNames:['argocd-secret']}),
+  r=>r.rules[0].verbs.push('patch'),r=>r.rules[0].resourceNames.push('*'),
+  r=>r.rules[0].resourceNames.pop(),r=>r.rules.pop(),
+  r=>{r.aggregationRule={clusterRoleSelectors:[{matchLabels:{foreign:'true'}}]};},
+  r=>{r.metadata.deletionTimestamp='2026-10-21T00:00:00Z';},
+ ]){const c=client(reduced(JSON.parse(oldRaw)));mutate(c.state.get(executor));await assert.rejects(preparePlatformCorePrerequisites(oldRaw,scope,{client:c,apply:true}),{code:'PRECONDITION_FAILED'});assert.equal(c.creates.length+c.patches.length,0);}
+ for(const mutate of [r=>{r.metadata.namespace='other';},r=>{r.metadata.name='other';},r=>{r.kind='ClusterRole';}]){const c=client(reduced(JSON.parse(oldRaw)));mutate(c.state.get(executor));await assert.rejects(preparePlatformCorePrerequisites(oldRaw,scope,{client:c,apply:true}),{code:'OBSERVATION_UNAVAILABLE'});assert.equal(c.creates.length+c.patches.length,0);}
+});
+
+test('replacement of the approved reduced executor during preparation stops without restoring legacy rules',async()=>{
+ const c=client(reduced(JSON.parse(oldRaw))),read=c.read;let seen=0;c.read=async items=>{if(++seen===2)c.state.get(executor).metadata.uid='replacement';return read(items);};
+ await assert.rejects(preparePlatformCorePrerequisites(oldRaw,scope,{client:c,apply:true}),{code:'PREPARATION_INCOMPLETE'});assert.equal(c.creates.length+c.patches.length,0);assert.ok(!c.state.get(executor).rules.some(r=>r.resources?.includes('secrets')));
+});
 
 test('narrowed Argo roles are a reviewed later state, not a conflict, and are never widened back',async()=>{
  const c=client(narrowed(JSON.parse(oldRaw)));
@@ -48,7 +74,7 @@ test('an Argo role with any other rules still blocks every write',async()=>{
 });
 test('the new profile replaces exactly the earlier reviewed reader rules under a guarded patch',{skip:!source&&'OPENSPHERE_CONSOLE_SOURCE not set'},async()=>{
  const old=JSON.parse(oldRaw),next=JSON.parse(newRaw);
- const c=client(narrowed(old));
+ const c=client(reduced(old)),executorBefore=structuredClone(reducedExecutor.rules);
  const plan=await preparePlatformCorePrerequisites(newRaw,scope,{client:c});
  assert.equal(plan.status,'NeedsPreparation');assert.deepEqual(plan.reviewedUpdates,[READER]);assert.equal(c.patches.length,0);
  const done=await preparePlatformCorePrerequisites(newRaw,scope,{client:c,apply:true});
@@ -60,6 +86,7 @@ test('the new profile replaces exactly the earlier reviewed reader rules under a
  // Rollback to the earlier release keeps the newer reviewed reader instead of removing the fence read.
  const rollback=await preparePlatformCorePrerequisites(oldRaw,scope,{client:c,apply:true});
  assert.equal(rollback.status,'Prepared');assert.ok(rollback.reviewedSuccessors.includes(READER));assert.equal(c.patches.length,1);
+ assert.ok(rollback.reviewedSuccessors.includes(executor));assert.deepEqual(c.state.get(executor).rules,executorBefore);assert.ok(c.patches.every(p=>p.identity!==executor));
 });
 test('an unreviewed reader, a missing patch client, or an unknown patch outcome stop without a blind retry',{skip:!source&&'OPENSPHERE_CONSOLE_SOURCE not set'},async()=>{
  const old=JSON.parse(oldRaw);
