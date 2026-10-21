@@ -106,6 +106,40 @@ export function releaseIncludes(manifests, entries) {
     .some((m) => m.globalId === e.globalId && m.semanticKey === e.semanticKey && m.sha256 === e.sha256)));
 }
 
+// Completing the unchanged baseline after an interrupted upgrade is not a rollback across a
+// cutover already committed before that upgrade. The transition's claim alone proves nothing:
+// the live, complete ledger must fit the verified baseline chain and every migration owner's
+// immutable source must contain the exact cutover file. Newly crossed or unknown boundaries fail.
+export function assertHistoricalCompletionFits(interrupted, manifest, ownerManifests, rows) {
+  const entries = interrupted?.migrations;
+  const committed = interrupted?.committedAtStart;
+  if (!Array.isArray(entries) || !entries.length
+    || entries.some(e => !e || typeof e.globalId !== 'string' || !Object.hasOwn(ONE_WAY_MIGRATIONS, e.semanticKey))
+    || new Set(entries.map(e => e.globalId)).size !== entries.length
+    || new Set(entries.map(e => e.semanticKey)).size !== entries.length
+    || !Array.isArray(committed) || !committed.length
+    || committed.some(id => typeof id !== 'string' || !entries.some(e => e.globalId === id))
+    || new Set(committed).size !== committed.length) {
+    throw new Error('The historical one-way boundary is missing or malformed');
+  }
+  if (manifest?.schemaVersion !== 1 || chainVerdict(manifest, rows).kind !== 'fits') {
+    throw new Error('The baseline migration chain does not exactly fit the live ledger');
+  }
+  const baseline = oneWayEntries(manifest);
+  if (committed.some(id => !entries.some(e => e.globalId === id
+      && baseline.some(b => b.globalId === id && b.semanticKey === e.semanticKey)))) {
+    throw new Error('A recorded historical boundary is absent from the verified baseline');
+  }
+  const crossed = entries.filter(e => rows.some(r => r[0] === e.globalId || r[1] === e.semanticKey));
+  if (!crossed.length || crossed.some(e => !committed.includes(e.globalId)
+    || !baseline.some(b => b.globalId === e.globalId && b.semanticKey === e.semanticKey))) {
+    throw new Error('An interrupted upgrade crossed a new or inconsistent one-way boundary');
+  }
+  if (!baseline.length || !releaseIncludes(ownerManifests, baseline)) {
+    throw new Error('A migration owner does not contain the exact verified baseline cutover');
+  }
+}
+
 export function describeOneWay(entries) {
   return entries.map((e) => `${ONE_WAY_MIGRATIONS[e.semanticKey]} (${e.globalId})`).join(', ');
 }

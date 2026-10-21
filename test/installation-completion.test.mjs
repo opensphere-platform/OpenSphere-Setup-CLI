@@ -133,3 +133,85 @@ test('only an interrupted claim of the same, previously verified release yields 
   {phase:'Failed',releaseDigest:lock.releaseDigest},
  ]) assert.equal(verifiedStateBeforeClaim(state,lock),state);
 });
+
+// A later component upgrade may fail before changing any workload, although the baseline already
+// includes the 0080 cutover. Its old Ready installation is completed only with source + full ledger
+// proof, never by trusting committedAtStart or observing one matching semantic key.
+const historicalCutover={globalId:'opensphere-console/20260924/0080',semanticKey:'console.osdst.task_engine_cutover',
+ predecessorGlobalId:'',sha256:'8'.repeat(64),sourceRevision:'a'.repeat(40),setDigest:'sha256:'+'b'.repeat(64),setSize:1};
+const historicalAfter={...historicalCutover,globalId:'opensphere-console/20260924/0081',semanticKey:'console.fixture.after_cutover',
+ predecessorGlobalId:historicalCutover.globalId,sha256:'9'.repeat(64),setSize:2};
+const historicalManifest={schemaVersion:1,migrations:[historicalCutover,historicalAfter]};
+const migrationRow=e=>[e.globalId,e.semanticKey,e.predecessorGlobalId,e.sha256,e.sourceRevision,e.setDigest,String(e.setSize)];
+function historicalFixture(){
+ const f=fixture();const transition={runId:'b19681d0-97fe-4221-b15d-7394047b6e3d',mode:'upgrade',previousReleaseDigest:lock.releaseDigest,
+  previousState:'Ready',previousVerifiedAt:'2026-10-20T00:00:00Z',targetReleaseDigest:'sha256:'+'e'.repeat(64),
+  oneWay:{migrations:[{globalId:historicalCutover.globalId,semanticKey:historicalCutover.semanticKey}],committedAtStart:[historicalCutover.globalId]}};
+ f.record.data['state.json']=JSON.stringify({phase:'Installing',releaseDigest:lock.releaseDigest,transition});
+ f.rows=historicalManifest.migrations.map(migrationRow);f.sourceReads=[];f.ledgerReads=0;f.verifyCalls=0;
+ f.runtime.readMigrationLedger=()=>{f.ledgerReads++;return structuredClone(f.rows);};
+ f.runtime.readRollbackMigrationChain=async(supplied,options)=>{assert.equal(supplied,lock);f.sourceReads.push(options);return structuredClone(historicalManifest);};
+ f.runtime.readReleaseMigrationManifests=async(supplied,options)=>{assert.equal(supplied,lock);f.sourceReads.push(options);return [structuredClone(historicalManifest)];};
+ const write=f.runtime.recordInstallationState;
+ f.runtime.recordInstallationState=(...args)=>{const result=write(...args);if(args[7].transition)result.state.transition=args[7].transition;
+  f.record.data['state.json']=JSON.stringify(result.state);return result;};
+ const verify=f.runtime.verifyInstallation;
+ f.runtime.verifyInstallation=async(...args)=>{f.verifyCalls++;return verify(...args);};
+ f.transition=transition;f.setTransition=()=>{f.record.data['state.json']=JSON.stringify({phase:'Installing',releaseDigest:lock.releaseDigest,transition});};
+ return f;
+}
+test('historical cutover completion verifies the baseline and every owner source, rechecks all ledger columns and retains CAS',async()=>{
+ const f=historicalFixture(),credential=Object.freeze({type:'synthetic-read-handle'});
+ await completeInstallationVerification(lock,{sourceArtifactCredential:credential,runtime:f.runtime});
+ assert.deepEqual(f.sourceReads,[{sourceArtifactCredential:credential},{sourceArtifactCredential:credential}]);
+ assert.equal(f.ledgerReads,4);assert.equal(f.verifyCalls,1);assert.deepEqual(f.phases,['Installing','Ready']);
+ assert.equal(JSON.parse(f.record.data['state.json']).transition,undefined);
+});
+test('historical proof refuses every changed ledger column, lost/ahead rows and malformed answers before writes',async()=>{
+ const mutations=[...Array.from({length:7},(_,index)=>f=>{f.rows[0][index]+='changed';}),
+  f=>{f.rows.pop();},f=>{f.rows.push(migrationRow({...historicalAfter,globalId:'later'}));},
+  f=>{f.rows=[['unreadable']];},f=>{f.runtime.readMigrationLedger=()=>{throw Error('unavailable');};}];
+ for(const mutate of mutations){const f=historicalFixture();mutate(f);
+  await assert.rejects(completeInstallationVerification(lock,{runtime:f.runtime}),/Strict historical baseline proof/);
+  assert.deepEqual(f.phases,[]);assert.equal(f.verifyCalls,0);}
+});
+test('committedAtStart cannot grant completion for new, duplicate, unknown or mismatched cutovers',async()=>{
+ for(const mutate of [f=>{f.transition.oneWay.committedAtStart=[];},
+  f=>{f.transition.oneWay.committedAtStart.push(historicalCutover.globalId);},
+  f=>{f.transition.oneWay.committedAtStart=['unknown'];},
+  f=>{f.transition.oneWay.migrations.push({...f.transition.oneWay.migrations[0]});},
+  f=>{f.transition.oneWay.migrations[0].globalId='unknown';f.transition.oneWay.committedAtStart=['unknown'];},
+  f=>{f.transition.oneWay.migrations[0].semanticKey='unknown';},
+  f=>{f.transition.previousReleaseDigest='different';},f=>{f.transition.previousState='Failed';},
+  f=>{f.transition.previousVerifiedAt=null;},f=>{f.transition.previousVerifiedAt=1;},f=>{f.transition.mode='one-way-recovery';}]){
+  const f=historicalFixture();mutate(f);f.setTransition();
+  await assert.rejects(completeInstallationVerification(lock,{runtime:f.runtime}),/Strict historical baseline proof/);
+  assert.deepEqual(f.phases,[]);assert.equal(f.verifyCalls,0);
+ }
+});
+test('missing or incompatible immutable source proof never completes a historical baseline',async()=>{
+ for(const mutate of [f=>{f.runtime.readRollbackMigrationChain=async()=>{throw Error('source unavailable');};},
+  f=>{f.runtime.readReleaseMigrationManifests=async()=>[];},
+  f=>{f.runtime.readReleaseMigrationManifests=async()=>[{schemaVersion:1,migrations:[historicalAfter]}];},
+  f=>{f.runtime.readReleaseMigrationManifests=async()=>[{schemaVersion:1,migrations:[{...historicalCutover,sha256:'different'}]}];},
+  f=>{f.runtime.readReleaseMigrationManifests=async()=>[historicalManifest,{schemaVersion:1,migrations:[historicalAfter]}];},
+  f=>{f.runtime.readRollbackMigrationChain=async()=>({schemaVersion:1,migrations:[historicalAfter]});}]){
+  const f=historicalFixture();mutate(f);
+  await assert.rejects(completeInstallationVerification(lock,{runtime:f.runtime}),/Strict historical baseline proof/);
+  assert.deepEqual(f.phases,[]);assert.equal(f.verifyCalls,0);
+ }
+});
+test('ledger drift during source reads, before verification or before Ready is not accepted',async()=>{
+ for(const stage of [2,3,4]){const f=historicalFixture();const read=f.runtime.readMigrationLedger;
+  f.runtime.readMigrationLedger=()=>{if(f.ledgerReads+1===stage)f.rows[0][3]='changed';return read();};
+  await assert.rejects(completeInstallationVerification(lock,{runtime:f.runtime}),/Strict historical baseline proof/);
+  assert.deepEqual(f.phases,stage===2?[]:['Installing','Failed']);
+  assert.equal(f.verifyCalls,stage===4?1:0);
+  if(stage!==2)assert.equal(JSON.parse(f.record.data['state.json']).transition.runId,f.transition.runId);
+ }
+});
+test('concurrent record change while reading historical source proof remains protected by UID/RV CAS',async()=>{
+ const f=historicalFixture();f.runtime.readRollbackMigrationChain=async()=>{f.record.metadata.resourceVersion='99';return historicalManifest;};
+ await assert.rejects(completeInstallationVerification(lock,{runtime:f.runtime}),/changed during verification completion/);
+ assert.deepEqual(f.phases,[]);assert.equal(f.verifyCalls,0);
+});

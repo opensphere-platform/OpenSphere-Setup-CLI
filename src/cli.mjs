@@ -714,6 +714,7 @@ async function main() {
   if (command === 'verify') {
     assertKubectl();
     const complete=hasOption('--complete-installation');
+    const sourceArtifactCredential=complete?takeSourceArtifactCredential():null;
     const migrated = complete ? false : await migrateLegacyInstallationLock();
     if (migrated) console.log(`[마이그레이션] 기존 설치 잠금을 provenance 검증 후 ${migrated.releaseDigest}로 갱신`);
     const lock = readInstallationLock();
@@ -721,7 +722,7 @@ async function main() {
     const evidence = await (complete ? completeInstallationVerification : verifyInstallation)(lock, {
       requireZeroRestarts: hasOption('--require-zero-restarts'),
       consoleUrl: suppliedConsoleUrl,
-      ...(complete ? {} : { mode: 'installed' })
+      ...(complete ? {sourceArtifactCredential} : { mode: 'installed' })
     });
     console.log(`[완료] ${evidence.channel} ${evidence.releaseDigest} 검증`);
     console.log(`${evidence.podCount} pods / ${evidence.serviceCount} services / runtime images locked`);
