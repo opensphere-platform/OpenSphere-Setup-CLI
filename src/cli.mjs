@@ -169,7 +169,7 @@ Usage:
        [--registry-username <github-login> --registry-token-stdin]
        [--no-open-browser] [--trust-local-ca]
        [--non-interactive --yes --console <origin> --storage-class <name>]
-  opensphere-setup prepare-argocd-observer --mode <plan|core-credentials|tls-prepare|apply|renew|cutover|revoke>
+  opensphere-setup prepare-argocd-observer --mode <plan|core-credentials|tls-prepare|cluster-scope|project-observation|apply|renew|cutover|revoke>
       --kubeconfig <file> --context <kube-context> --expected-cluster-uid <kube-system-uid>
       [--argocd <pinned-cli> --argocd-sha256 <sha256> --openssl <pinned-openssl> --openssl-sha256 <sha256>]
       [--approve-plan <sha256> --compat-source <commit> --compat-digest <sha256> --authenticated-proof <policy-sha256>]

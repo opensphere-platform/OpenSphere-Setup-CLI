@@ -173,6 +173,8 @@ jobs:
         shell: pwsh
         run: |
           npm run build:bundle
+          node --test test/argocd-observer-bundle.integration.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Bundled Argo observer preparation verification failed' }
           New-Item -ItemType Directory -Force .release/sea | Out-Null
           $extension = if ('${{ matrix.platform }}' -eq 'windows') { '.exe' } else { '' }
           node scripts/build-linux-sea.mjs `
@@ -279,6 +281,22 @@ jobs:
           if ($setupExitCode -ne 0 -or $actual -ne $expected) {
             throw "Setup smoke test failed with exit code ${setupExitCode}: $actual (expected $expected)"
           }
+          # Load every fixed observer asset through the actual native SEA. A
+          # missing cluster identity must stop before any Kubernetes command.
+          $observerStart = [System.Diagnostics.ProcessStartInfo]::new((Get-Item -LiteralPath $setup).FullName)
+          $observerStart.UseShellExecute = $false
+          $observerStart.CreateNoWindow = $true
+          $observerStart.RedirectStandardOutput = $true
+          $observerStart.RedirectStandardError = $true
+          foreach ($argument in @('prepare-argocd-observer', '--mode', 'plan')) { $observerStart.ArgumentList.Add($argument) }
+          $observerProcess = [System.Diagnostics.Process]::Start($observerStart)
+          $observerOut = $observerProcess.StandardOutput.ReadToEndAsync()
+          $observerError = $observerProcess.StandardError.ReadToEndAsync()
+          $observerProcess.WaitForExit()
+          if ($observerProcess.ExitCode -ne 1 -or $observerError.GetAwaiter().GetResult() -notmatch 'Missing --kubeconfig' -or $observerOut.GetAwaiter().GetResult().Trim()) {
+            throw 'Packaged observer command did not reject a missing explicit cluster identity'
+          }
+          $observerProcess.Dispose()
           & $pwsh -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.ToString()'
           if ($LASTEXITCODE -ne 0) { throw 'Bundled PowerShell smoke test failed' }
           & $kubectl version --client -o json

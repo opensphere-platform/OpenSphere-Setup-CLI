@@ -73,7 +73,13 @@ function dedicatedProject(v){
  const kinds=spec.namespaceResourceWhitelist;
  if(!Array.isArray(kinds)||kinds.length!==1||kinds[0].group!==''||
    kinds[0].kind!=='ConfigMap'||Object.keys(kinds[0]).length!==2)return 'Unsafe';
+ const demo=v.items.find(item=>item.metadata?.name==='psss-opensphere-adoption-demo');
+ if(demo&&!demoObservationProject(demo))return 'Unsafe';
  return 'Pass';
+}
+function demoObservationProject(project){
+ const spec={sourceRepos:[repositoryUrl],destinations:[{server:'https://kubernetes.default.svc',namespace:'opensphere-platform-delivery'}],clusterResourceWhitelist:[],namespaceResourceWhitelist:[{group:'apps',kind:'Deployment'},{group:'',kind:'Service'},{group:'',kind:'ConfigMap'},{group:'apps',kind:'ReplicaSet'},{group:'',kind:'Pod'}],orphanedResources:{warn:true}};
+ return project?.kind==='AppProject'&&project.apiVersion==='argoproj.io/v1alpha1'&&project.metadata?.name==='psss-opensphere-adoption-demo'&&project.metadata.namespace==='argocd'&&project.metadata.labels?.['opensphere.io/managed-by']==='platform-support'&&!project.metadata.deletionTimestamp&&!project.metadata.finalizers?.length&&!project.metadata.ownerReferences?.length&&canonical(project.spec)===canonical(spec);
 }
 function serverIngress(v){
  if(v.kind!=='NetworkPolicy'||v.spec?.podSelector?.matchLabels?.['app.kubernetes.io/name']!=='argocd-server'||
@@ -150,4 +156,4 @@ function assess(raw,coreState){
  return {schema:'opensphere.argocd-delivery-security/v1',state,checks,
   firstDeliveryReady:false,firstDeliveryComplete:false};
 }
-module.exports={paths,assess,dedicatedProject,serverIngress,privilegedAuthority,reviewedAuthority,reviewedDeliveryAdmission,binding};
+module.exports={paths,assess,dedicatedProject,demoObservationProject,serverIngress,privilegedAuthority,reviewedAuthority,reviewedDeliveryAdmission,binding};

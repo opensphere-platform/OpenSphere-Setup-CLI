@@ -10,8 +10,8 @@ test('the real ncc Setup bundle retains normal help and dispatches observer vali
  const help=spawnSync(process.execPath,[bundle,'help'],{encoding:'utf8',windowsHide:true});assert.equal(help.status,0,help.stderr);assert.match(help.stdout,/prepare-argocd-observer/);assert.ok(!help.stderr.includes('Unknown release readiness command'));
  const plan=spawnSync(process.execPath,[bundle,'prepare-argocd-observer','--mode','plan'],{encoding:'utf8',windowsHide:true});assert.equal(plan.status,1);assert.match(plan.stderr,/Missing --kubeconfig/);
 });
-test('plain runtime and SEA package the same verified 11 source assets plus manifest',()=>{
- const receipt=verifyArgocdObserverAssets(assets),sea=argocdObserverSeaAssets(root);assert.equal(receipt.fileCount,11);assert.equal(Object.keys(sea).length,12);assert.ok(Object.hasOwn(sea,'argocd-observer/tools/prepare-argocd-observer.cjs'));assert.ok(Object.keys(sea).every(name=>name.startsWith('argocd-observer/')&&!name.includes('..')));
+test('plain runtime and SEA package the same verified 12 source assets plus manifest',()=>{
+ const receipt=verifyArgocdObserverAssets(assets),sea=argocdObserverSeaAssets(root);assert.equal(receipt.fileCount,12);assert.equal(Object.keys(sea).length,13);assert.ok(Object.hasOwn(sea,'argocd-observer/tools/prepare-argocd-observer.cjs'));assert.ok(Object.keys(sea).every(name=>name.startsWith('argocd-observer/')&&!name.includes('..')));
 });
 test('an altered emitted runtime asset fails before bundled helper execution',()=>{
  const file=resolve(assets,'owner/argocd-observer-policy.cjs'),original=readFileSync(file);
