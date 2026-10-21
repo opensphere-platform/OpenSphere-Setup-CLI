@@ -35,10 +35,10 @@ test('the explicit project-observation mode never dispatches observer rotation o
 });
 test('the observer entry point requires explicit cluster identity without weakening the existing reviewed Core guard',()=>{
  assert.throws(()=>runArgocdObserverPreparation(['--mode','plan']),/Missing --kubeconfig/);
- const old=readFileSync(resolve(import.meta.dirname,'../src/platform-core-prerequisites.mjs'),'utf8');assert.match(old,/installTarget\(scope\)/);assert.match(old,/if\(blocked\)throw fail\('PRECONDITION_FAILED'/);assert.ok(!old.includes('argocd-observer'));
+ const old=readFileSync(resolve(import.meta.dirname,'../src/platform-core-prerequisites.mjs'),'utf8');assert.match(old,/installTarget\(scope\)/);assert.match(old,/if\(blocked\)throw fail\('PRECONDITION_FAILED'/);
 });
 
-test('old Core preparation refuses the reduced observer executor before writing and never restores Secret authority',async()=>{
+test('Core preparation preserves only the approved reduced observer executor without restoring Secret authority',async()=>{
  const raw=readFileSync(resolve(import.meta.dirname,'fixtures/console-contract-v66/deploy/installation-profiles/platform-core.json'),'utf8'),profile=JSON.parse(raw);
  const authority=JSON.parse(readFileSync(resolve(import.meta.dirname,'../vendor/argocd-observer/contracts/argocd-executor-authority.json'),'utf8'));
  const reduced=authority.resources.find(r=>r.kind==='Role'&&r.metadata.namespace==='argocd'&&r.metadata.name==='opensphere-platform-support-core-executor');
@@ -46,7 +46,7 @@ test('old Core preparation refuses the reduced observer executor before writing 
  const id=r=>`${r.apiVersion}/${r.kind}/${r.metadata.namespace||''}/${r.metadata.name}`;
  const target=id(reduced),existing=new Map(profile.resources.map(r=>[id(r),r]));assert.ok(existing.has(target));existing.set(target,reduced);
  let writes=0;const client={read:async requested=>requested.map(r=>{const copy=structuredClone(existing.get(id(r))||r);copy.metadata.uid='uid-'+id(r);return copy;}),create:async()=>{writes++;throw Error('Must not create');},patchRules:async()=>{writes++;throw Error('Must not patch');}};
- await assert.rejects(preparePlatformCorePrerequisites(raw,{context:'rke2',channel:'edge',consoleUrl:'https://console.opensphere.test'},{client,apply:true}),error=>error.code==='PRECONDITION_FAILED'&&error.evidence.conflicts.includes(target));
+ const result=await preparePlatformCorePrerequisites(raw,{context:'rke2',channel:'edge',consoleUrl:'https://console.opensphere.test'},{client,apply:true});assert.equal(result.status,'Prepared');assert.ok(result.reviewedSuccessors.includes(target));assert.ok(result.preserved.includes(target));
  assert.equal(writes,0);
 });
 test('the real Setup CLI dispatches the dedicated command without a default cluster and redacts unknown credential arguments',()=>{

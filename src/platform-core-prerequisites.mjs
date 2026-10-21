@@ -3,6 +3,8 @@ import {installTarget,profileChannel} from './install-target.mjs';
 import {createHissPrerequisiteClient} from './hiss-prerequisites.mjs';
 import {run} from './process.mjs';
 import {PROFILE as PSSS_ARGO_AUTHORITY} from './psss-argocd-rbac-profile.mjs';
+import legacyExecutorAuthority from '../vendor/argocd-observer/contracts/argocd-executor-authority-legacy.json' with {type:'json'};
+import reducedExecutorAuthority from '../vendor/argocd-observer/contracts/argocd-executor-authority.json' with {type:'json'};
 // Explicitly approved 2026-09-07. Setup prepares fixed authority only;
 // actual Core workload installation remains 22 -> OS Shell -> existing owner.
 // The bytes stay pinned; since 2026-09-23 the target cluster is not (install-target.mjs).
@@ -26,7 +28,7 @@ export function verifyPlatformCoreProfile(raw,scope){
  if(typeof raw!=='string'||Buffer.byteLength(raw)>4*1024*1024||!Object.hasOwn(PLATFORM_CORE_APPROVED_SHA256,createHash('sha256').update(raw).digest('hex')))throw fail('UNTRUSTED_PROFILE','Core preparation bytes differ from the explicitly approved artifact');
  const p=JSON.parse(raw);if(p.schema!=='opensphere.platform-core-preparation/v1'||profileChannel(p.scope)!=='edge'||p.resources.length!==53)throw fail('UNTRUSTED_PROFILE','Unexpected Core envelope');return p;
 }
-// Core preparation is create-only: an existing object must equal the profile. Two reviewed steps legitimately
+// Core preparation is create-only: an existing object must equal the profile. Reviewed steps legitimately
 // move a Core identity past the profile an installation was first prepared with (localhost upgrade 2026-09-29):
 //  - `prepare-psss-argocd` narrows the six Argo roles to PSSS policy v2 (the pinned transition's `next` rules).
 //    Core preparation accepts exactly those rules and never widens them back.
@@ -36,8 +38,12 @@ export function verifyPlatformCoreProfile(raw,scope){
 //  - `transfer-psss-crossplane-writer` moves the executor and recorder bindings from CM to PSSS: same roleRef,
 //    the single subject becomes the PSSS runtime account. Core preparation keeps them and never moves them back
 //    (localhost 2026-09-29: the first Console upgrade after the transfer stopped here).
+//  - The approved observer cutover removes signing Secret get/create from the fixed Argo Core executor.
+//    Only its exact reduced successor is preserved; accepting it never patches either Role's rules.
 // Anything else stays a conflict.
 const PSSS_ARGO_AUTHORITY_SHA256='b2ae3e74b70bd617f08cab5ef2a7e555bc0d586d0e9feefa4520e922488fa012';
+const EXECUTOR_ID='rbac.authorization.k8s.io/v1/Role/argocd/opensphere-platform-support-core-executor';
+const EXECUTOR_ROLE_SHA256={legacy:'a0654d3d5008413760bdd12a5abbfd73cc22773bd25271a0450520c5be7bb4a4',reduced:'01e1f5bf65c7e04f69d3bfda98ef8e3368cb2216e25f675af509ccba7d12d017'};
 const READER_ID='rbac.authorization.k8s.io/v1/ClusterRole//opensphere-platform-support-core-reader';
 const FENCE_READ={apiGroups:['admissionregistration.k8s.io'],resources:['validatingadmissionpolicies','validatingadmissionpolicybindings'],
  verbs:['get'],resourceNames:['opensphere-psss-crossplane-writer-fence']};
@@ -49,7 +55,14 @@ const READER_RULES_SHA256={withoutFence:'ca4cb150bac3556674ac438b19bcd4aead8253f
  withFence:'3a2d5fe91b31812aeea50fa1994bfb968d163fec5a813b9bc18b5b128cb8817c'};
 function reviewedStates(resources){
  if(sha(PSSS_ARGO_AUTHORITY)!==PSSS_ARGO_AUTHORITY_SHA256)throw fail('UNTRUSTED_PROFILE','Pinned PSSS Argo authority transition differs from the reviewed source');
+ const legacyExecutor=legacyExecutorAuthority.resources?.[0],reducedExecutor=reducedExecutorAuthority.resources?.[0];
+ if(sha(legacyExecutor)!==EXECUTOR_ROLE_SHA256.legacy||sha(reducedExecutor)!==EXECUTOR_ROLE_SHA256.reduced)
+  throw fail('UNTRUSTED_PROFILE','Pinned observer executor transition differs from the approved Role definitions');
  const states=new Map(),byId=new Map(resources.map(r=>[id(r),r]));
+ // Bind the successor to the exact expected legacy Role as well as the exact
+ // reduced Role. No generic subset, namespace or verb comparison qualifies.
+ if(canonical(byId.get(EXECUTOR_ID)?.rules)===canonical(legacyExecutor.rules))
+  states.set(EXECUTOR_ID,{successor:{rules:reducedExecutor.rules}});
  for(const row of PSSS_ARGO_AUTHORITY.resources){
   const key=`rbac.authorization.k8s.io/v1/${row.kind}/${row.namespace||''}/${row.name}`;
   if(canonical(byId.get(key)?.rules)===canonical(row.previous))states.set(key,{successor:{rules:row.next}});

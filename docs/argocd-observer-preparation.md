@@ -127,11 +127,46 @@ $plan
 
 ## 최초 설치와 갱신
 
-최초 설치에는 observer token이 아직 없어도 된다. Setup의 `core-credentials`를 먼저 실행하여
-signing/notifications Secret을 새로 만들거나 기존 값을 보존하고 공개 준비 marker를 둔다.
-Core runtime 설치 → 영속 TLS 준비 → observer 및 namespace cluster 범위 준비 → 인증된 수용 →
-cutover 순서로 진행한다.
-observer 인증 실패가 최초 Core 설치의 선행 blocker가 되는 순환은 만들지 않는다.
+최초 설치는 다음 순서를 따른다. observer token을 Core 설치의 선행 조건으로 만들지 않는다.
+아래 단계는 자동으로 한 번에 실행되는 installer가 아니며, 각 plan과 현재 준비 상태를 확인한다.
+
+1. **Console의 서명된 target release를 적용한다.** 그 릴리스의 extension-controller profile과
+   `apps/extension-controller/deploy.yaml`이 동일한 승인 PSSS admission 계약을 포함해야 한다.
+   새 VAP/VAPBinding은 demo Project를 만들기 전에 이 manifest에서 준비된다.
+   `deploy/installation-profiles/platform-core.json`의 53개에는 VAP가 없다.
+   Setup의 `console-source.lock.json`은 빌드 검증 기준이며 runtime manifest는 선택한 release의
+   고정 sourceRevision에서 읽는다. Platform Support 모듈도 OS Shell 명령을 제공할 수 있는
+   정상 등록·기동 상태여야 한다.
+2. **기존 `prepare-psss-argocd`를 먼저 검토·적용한다.** raw 53개 준비 profile의 Argo 6개
+   Role/ClusterRole은 Core가 요구하는 제한된 v2 정책과 다르다. 이 명령만 승인된 정확한
+   이전/다음 rules로 축소하고 고정 bootstrap 객체를 준비한다. `bootstrap`은 이 전환을
+   자동 호출하지 않는다. 충돌·관측 실패는 부재로 취급하지 않는다.
+
+   ```powershell
+   $coreArgs = @('--context', 'rke2', '--cluster-uid', '8cdee47b-abb7-4dba-b989-cf9ca292efcb',
+     '--console', 'https://console.opensphere.triangles.com', '--channel', 'edge',
+     '--kubeconfig', 'C:/Users/cmars/.kube/rke2.yaml')
+   $corePlan = node src/cli.mjs prepare-psss-argocd @coreArgs | ConvertFrom-Json
+   $corePlan
+   # NeedsPreparation인 계획의 대상·변경을 검토한 뒤, 같은 관측 시각으로 5분 안에 실행한다.
+   node src/cli.mjs prepare-psss-argocd @coreArgs --apply --plan-revision $corePlan.planRevision --reviewed-at $corePlan.observedAt --reason '승인된 Argo Core 최소 권한 준비'
+   ```
+
+   `Prepared`이면 기존 정확한 준비를 보존한다. `Blocked`이면 강제 적용하지 않는다.
+3. **신규 helper `plan` → `core-credentials`를 실행한다.** signing/notifications Secret은
+   새로 만들거나 기존 값을 보존하고 공개 준비 marker를 둔다. observer token이나 이미
+   실행 중인 Argo 서버는 이 단계의 조건이 아니다.
+4. **OS Shell의 Core plan → install → inspect로 실제 Argo runtime을 설치·검증한다.**
+   방금 검토한 plan과 관리자 사유를 사용한다. 권한 준비만으로 Argo가 설치된 것은 아니다.
+5. **영속 TLS → observer 준비 → 실제 읽기 수용 → cutover를 진행한다.** 위의 기존 설치
+   절차와 같이 매 단계 새 plan을 사용한다. namespace `cluster-scope`는 실제 승인 Application의
+   target inventory가 갖춰진 뒤 준비한다. inventory가 없으면 의도적으로 거부하며,
+   기존 descriptor의 범위 변경도 자동 확대하지 않는다. 나중에 승인 target namespace가 추가되면
+   별도 검토가 필요하므로 현재 절차가 모든 향후 topology 변경을 자동 처리한다고 주장하지 않는다.
+   새 demo Project는 처음부터 5종 관측 whitelist로 생성된다. `project-observation`은 기존
+   3종 Project가 있는 설치의 정확한 전환에 사용하며, Project 부재를 억지로 해소하지 않는다.
+
+이 순서 및 별도 클린 설치 수용을 실제로 검증하기 전에는 전체 설치 재현 완료로 표시하지 않는다.
 
 토큰 유효기간은 7일이다. 갱신은 최신 plan과 동일한 deployed compatibility proof를 사용하여
 `--mode renew`로 한다. 새 토큰은 메모리에서 Secret stdin으로만 저장한다. 이전 토큰은
@@ -150,10 +185,24 @@ signing key나 전체 signing Secret을 읽지 않는다. Secret 값은 메모�
 
 ## 기존 권한 준비와 재현성
 
-실제 origin/main의 기존 `preparePlatformCorePrerequisites`는 이미 승인된 target 및 정해진
-Argo v2/reader-fence 전환만 허용한다. 이번 reduced executor가 기존 전환 목록과 다르면
-`PRECONDITION_FAILED`로 **쓰기 전에 중단**한다. 축소된 Role을 legacy로 되돌리지 않는다.
-이를 정상 진행으로 오해해서 scope guard나 equality 검사를 제거하지 않는다.
+edge.40의 `preparePlatformCorePrerequisites`는 승인된 Argo v2/reader-fence 전환을 인식하지만
+새 reduced executor는 아직 충돌로 거부한다. 따라서 그 버전의 full upgrade/recovery는 권한을
+복원하지 않고 쓰기 전에 중단한다. extension-controller 단독 component 업데이트는 이 full
+Core 준비 경로를 실행하지 않는다.
+
+후속 소스는 정확한 `argocd/opensphere-platform-support-core-executor` Role의 승인 reduced
+rules를 읽기 전용 successor로 추가한다. 원래 expected Role도 고정 legacy 정의와 일치해야
+하며 두 Role 정의의 전체 digest를 검사한다. 일치하면 UID·rules를 보존하고, Secret get/create를
+다시 넣거나 Role patch를 하지 않는다. 다른 name/namespace/kind, verbs/resourceNames 변경,
+규칙 누락·추가, 삭제 중 객체·관측 실패는 계속 차단한다. 기존 scope guard나 일반 mismatch
+검사를 제거하지 않는다. 이 후속 소스는 이미 발행된 edge.40 자산을 변경하지 않으며 공개하려면
+새 immutable edge 버전과 전체 발행 검증이 필요하다.
+
+후속 coherence 소스의 전체 회귀는 673건 중 670건 통과, 실패 0, 위와 같은 기존 fixture
+3건 skip이다. 별도로 Console Git object를 지정하여 두 승인 profile 및 reader/successor 전환
+11/11을 skip 없이 확인했다. source CLI 8/8과 실제 ncc bundle 3/3도 통과했다. 이 시험은
+실제 full upgrade나 클린 설치를 실행한 것이 아니다. 기존 edge.40 발행과 채널은 수정하지 않았고,
+실행 동작이 바뀌므로 공개하려면 새 immutable edge.41 등 별도 발행이 필요하다.
 
 격리된 origin/main 기반 edge.40 소스의 전체 Setup 회귀는 670건 중 667건 통과, 실패 0,
 기존 Console source 환경 미설정으로 3건 skip이다. 신규 source CLI 8/8 및
