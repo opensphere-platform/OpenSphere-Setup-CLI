@@ -1,4 +1,21 @@
-# OpenSphere Setup CLI 0.5.0-edge.40
+# OpenSphere Setup CLI 0.5.0-edge.41
+
+Full preparation and recovery now preserve the exact approved Argo Core executor
+Role after the observer cutover removed signing Secret get/create. The expected
+legacy and reduced definitions are both pinned; other identities or rule changes
+still fail before writes. The transition does not patch or restore authority.
+
+The fresh-install runbook now includes the existing reviewed six-role
+`prepare-psss-argocd` transition before `core-credentials` and OS Shell Core
+installation. Console's generated profile and extension-controller manifest
+prepare the matching delivery VAP before a demo Project is created.
+
+This is a new immutable Setup source version. Existing edge.40 assets are not
+replaced, the PSSS65d8 observer snapshot remains unchanged, and the edge pointer
+is promoted only after separate publication and asset verification. Source tests
+do not claim an accepted real full recovery or independent clean installation.
+
+## Earlier edge.40 observer preparation retained
 
 Add the explicit `prepare-argocd-observer` command for Setup-owned Argo read
 preparation. It verifies 12 fixed source assets from PSSS commit
