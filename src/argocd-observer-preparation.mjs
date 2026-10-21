@@ -8,7 +8,7 @@ import {createHash} from 'node:crypto';
 import {createRequire} from 'node:module';
 import {isSea,getAsset} from 'node:sea';
 
-export const ARGO_OBSERVER_ASSET_MANIFEST_SHA256='e63ed20f420e7cbed142803e915e2e4ea294e04439901d5bbfc1510d80bbfbe9';
+export const ARGO_OBSERVER_ASSET_MANIFEST_SHA256='7aa755dc715c5c7ebbdacd01ca0ec825a50205f2b8487aaaf5bc0bc09d36bd31';
 const assetRoot=resolve(import.meta.dirname,'../vendor/argocd-observer');
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 export function verifyArgocdObserverAssets(root=assetRoot){

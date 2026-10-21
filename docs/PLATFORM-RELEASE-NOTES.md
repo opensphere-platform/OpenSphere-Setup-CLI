@@ -1,4 +1,31 @@
-# OpenSphere Setup CLI 0.5.0-edge.41
+# OpenSphere Setup CLI 0.5.0-edge.42
+
+Observer replacements now remove the client-side apply tracking annotation before
+kubectl runs. Otherwise kubectl refreshes an existing last-applied value from the
+complete live input, including server UID/resourceVersion/status or sealed Secret
+data. That poisoned baseline blocked both a later official Console component
+upgrade and its rollback. Existing contaminated metadata needs a separately
+reviewed, UID/resourceVersion-bound annotation repair; the helper does not delete
+admission policies, loosen their specifications or silently perform that repair.
+
+The fixed 12-asset snapshot is re-pinned to PSSS commit
+`fc136f54df1b2c1346cb6cb70d0195b3caf305ff`; only the helper's content changed.
+This is tool provenance, not a new deployed PSSS image. Compatibility arguments
+must continue to identify the actual Current Registration (PSSS 20 source
+`65d8bbfdddefafd1d1146b4ac73f8bda8f517a9f` for the verified deployment).
+
+Baseline completion also distinguishes an old committed one-way migration from
+a boundary newly crossed by the current attempt. Historical state alone no
+longer blocks completion, but it must match the selected release's verified
+cutover and baseline evidence. The strict checks and refusal of actual unsafe
+rollback remain; no migration ledger or database entry is edited to bypass them.
+
+Only Setup source/tooling changes are included. No Console or PSSS image rebuild,
+runtime permission expansion, existing immutable asset replacement or channel
+promotion is part of this candidate. Publication and actual installation
+acceptance are reported separately.
+
+## Earlier edge.41 preparation retained
 
 Full preparation and recovery now preserve the exact approved Argo Core executor
 Role after the observer cutover removed signing Secret get/create. The expected
