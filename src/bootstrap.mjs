@@ -1,4 +1,4 @@
-import { LedgerMismatch, chainVerdict, describeChainVerdict, oneWayBoundary, progressAfterFailure, releaseIncludes, describeOneWay, transitionOneWay } from './one-way-migrations.mjs';
+import { LedgerMismatch, chainVerdict, describeChainVerdict, oneWayBoundary, progressAfterFailure, releaseIncludes, describeOneWay, transitionOneWay, assertHistoricalCompletionFits } from './one-way-migrations.mjs';
 import {KUBERNETES_EGRESS_SLOT,discoverRegistryKubernetesEgress,renderRegistryKubernetesEgress,discoverKubernetesApiCiliumPolicy} from './registry-runtime-access.mjs';
 import {FOUNDATION_BOOTSTRAP_PATH,planFoundationRuntimeRbac,applyComponentRuntimePrerequisites,describeComponentRuntimePrerequisite} from './component-runtime-prerequisites.mjs';
 import {setTimeout as registryDelay} from 'node:timers/promises';
@@ -2298,10 +2298,10 @@ function readControllerDeployment(){
   return JSON.parse(kubectl(['-n','opensphere-console','get','deployment','opensphere-extension-controller','-o','json'],{capture:true}));
 }
 
-export async function completeInstallationVerification(lock, {consoleUrl, requireZeroRestarts=false, runtime={}}={}) {
+export async function completeInstallationVerification(lock, {consoleUrl, requireZeroRestarts=false, sourceArtifactCredential=null, runtime={}}={}) {
   // The recorded release, as readInstallationLock() admits it; it may predate the worker.
   validateLock(lock, { allowLegacyComponentSet: true, allowInstalledAgentIdentityCutover: true });
-  const ops={readInstallationRecord,readReleaseInventory,recordInstallationState,verifyInstallation,readMigrationLedger,readBeszelBootstrapHistory,readControllerDeployment,...runtime};
+  const ops={readInstallationRecord,readReleaseInventory,recordInstallationState,verifyInstallation,readMigrationLedger,readReleaseMigrationManifests,readRollbackMigrationChain,readBeszelBootstrapHistory,readControllerDeployment,...runtime};
   const original=ops.readInstallationRecord();
   const config=JSON.parse(original.data['config.json']),state=JSON.parse(original.data['state.json']);
   if (JSON.parse(original.data['release.json']).releaseDigest!==lock.releaseDigest
@@ -2311,12 +2311,33 @@ export async function completeInstallationVerification(lock, {consoleUrl, requir
   // Re-review N3: a Console Knowledge release holds this record until its own completion.
   if (knowledgeInstallation.isKnowledgeClaim(state)) throw Error(`A Console Knowledge release (operation ${state.transition?.runId ?? state.knowledgeUpdate?.operationId ?? 'unknown'}) holds the installation record; let it complete in Console. Setup does not complete or clear it.`);
   // An upgrade to another release was interrupted while it could cross a one-way migration. The
-  // recorded release may be completed only while the ledger shows none of them applied.
+  // recorded release may be completed only before a new boundary, or with strict proof that the
+  // entire live ledger still fits its baseline and the cutover predates this interrupted claim.
   const interrupted=state.transition&&state.transition.targetReleaseDigest!==lock.releaseDigest?state.transition.oneWay:null;
+  let recheckHistoricalLedger=null;
   if (interrupted?.migrations?.length) {
     let rows=null;try{rows=ops.readMigrationLedger();}catch{}
-    const crossed=!Array.isArray(rows)||interrupted.migrations.some(m=>rows.some(r=>Array.isArray(r)&&(r[0]===m.globalId||r[1]===m.semanticKey)));
-    if (crossed) throw Error(`An upgrade to ${state.transition.targetReleaseDigest} was interrupted and the database has passed, or may have passed, ${interrupted.migrations.map(m=>m.globalId).join(', ')}; completing this earlier release would put it on data it does not fit. Review the record and run upgrade --one-way-recovery.`);
+    const crossed=!Array.isArray(rows)||rows.some(r=>!Array.isArray(r)||r.length!==7||r.some(v=>typeof v!=='string'))
+      ||interrupted.migrations.some(m=>rows.some(r=>r[0]===m.globalId||r[1]===m.semanticKey));
+    if (crossed) {
+      const unsafe=()=>Error(`An upgrade to ${state.transition.targetReleaseDigest} was interrupted and the database has passed, or may have passed, ${interrupted.migrations.map(m=>m.globalId).join(', ')}; completing this earlier release would put it on data it does not fit. Strict historical baseline proof is unavailable or inconsistent. Review the record and run upgrade --one-way-recovery.`);
+      try {
+        if (state.transition.mode!=='upgrade'
+          || state.transition.previousReleaseDigest!==lock.releaseDigest || state.transition.previousState!=='Ready'
+          || typeof state.transition.previousVerifiedAt!=='string'
+          || !state.transition.previousVerifiedAt || !Number.isFinite(Date.parse(state.transition.previousVerifiedAt))) throw unsafe();
+        const [manifest,owners]=await Promise.all([
+          ops.readRollbackMigrationChain(lock,{sourceArtifactCredential}),
+          ops.readReleaseMigrationManifests(lock,{sourceArtifactCredential})
+        ]);
+        assertHistoricalCompletionFits(interrupted,manifest,owners,rows);
+        recheckHistoricalLedger=()=>{
+          try { assertHistoricalCompletionFits(interrupted,manifest,owners,ops.readMigrationLedger()); }
+          catch { throw unsafe(); }
+        };
+        recheckHistoricalLedger();
+      } catch { throw unsafe(); }
+    }
   }
   if (consoleUrl && normalizeConsoleUrl(consoleUrl)!==normalizeConsoleUrl(config.consoleUrl)) throw Error('Verification completion cannot change the Console URL');
   const repair=original.data['repair.json']?JSON.parse(original.data['repair.json']):undefined;
@@ -2342,8 +2363,10 @@ export async function completeInstallationVerification(lock, {consoleUrl, requir
   const kept=state.transition?{transition:state.transition}:{};
   write('Installing',kept);
   try {
+    recheckHistoricalLedger?.();
     const evidence=await ops.verifyInstallation(lock,{consoleUrl:config.consoleUrl,requireZeroRestarts,mode:'installed',bootstrapHistory});
     if(evidence.releaseDigest!==lock.releaseDigest||!evidence.verifiedAt) throw Error('Verification returned a different release');
+    recheckHistoricalLedger?.();
     write('Ready',{verification:{evidenceConfigMap:'opensphere-installation-evidence',verifiedAt:evidence.verifiedAt},
       ...(original.data[CONTROLLER_SOURCE_KEY]?{controllerDeployment:ops.readControllerDeployment()}:{})});
     return evidence;
