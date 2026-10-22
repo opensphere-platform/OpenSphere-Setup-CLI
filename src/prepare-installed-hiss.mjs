@@ -2,7 +2,8 @@ import profile from './hiss-preparation-profile.json' with {type:'json'};
 import validation from './hiss-validation-artifact.json' with {type:'json'};
 import storageObservation from './hiss-storage-observation-artifact.json' with {type:'json'};
 import bindingCrd from './hiss-observability-binding-crd-artifact.json' with {type:'json'};
-import {createHissPrerequisiteClient,prepareHissObservabilityBindingCrd,prepareHissPrerequisites,prepareHissStorageObservation,prepareHissValidation,verifyHissObservabilityBindingCrd,verifyHissStorageObservationArtifact,verifyHissValidationArtifact} from './hiss-prerequisites.mjs';
+import operatorStackgres from './hiss-operator-stackgres-artifact.json' with {type:'json'};
+import {createHissPrerequisiteClient,prepareHissObservabilityBindingCrd,prepareHissOperatorStackgres,prepareHissPrerequisites,prepareHissStorageObservation,prepareHissValidation,verifyHissObservabilityBindingCrd,verifyHissOperatorStackgresArtifact,verifyHissStorageObservationArtifact,verifyHissValidationArtifact} from './hiss-prerequisites.mjs';
 import {run} from './process.mjs';
 import {installTarget} from './install-target.mjs';
 
@@ -24,6 +25,7 @@ export async function prepareInstalledHiss({context,apply=false,runner=run,onPro
   verifyHissValidationArtifact(validation.yaml);
   verifyHissStorageObservationArtifact(storageObservation.yaml);
   verifyHissObservabilityBindingCrd(bindingCrd.yaml);
+  verifyHissOperatorStackgresArtifact(operatorStackgres.yaml);
   const assertTarget=()=>{if(JSON.stringify(observe())!==JSON.stringify(target))throw Error('Installation or cluster changed; no further HISS preparation writes allowed');};
   const result=await prepareHissPrerequisites(JSON.stringify(profile,null,2)+'\n',target.scope,{apply,onProgress,client:{
     read:resources=>{assertTarget();return client.read(resources);},
@@ -35,5 +37,8 @@ export async function prepareInstalledHiss({context,apply=false,runner=run,onPro
   const storageResult=prepareHissStorageObservation(storageObservation.yaml,target.scope,{runner,apply});
   assertTarget();
   const crdResult=prepareHissObservabilityBindingCrd(bindingCrd.yaml,target.scope,{runner,apply});
-  assertTarget();return {...result,target,validation:validationResult,storageObservation:storageResult,observabilityBindingCrd:crdResult};
+  assertTarget();
+  // PostgreSQL Provider P2: the StackGres operator facility's namespaces, RBAC and write guards (hiss-operator-stackgres-v1).
+  const stackgresResult=prepareHissOperatorStackgres(operatorStackgres.yaml,target.scope,{runner,apply});
+  assertTarget();return {...result,target,validation:validationResult,storageObservation:storageResult,observabilityBindingCrd:crdResult,operatorStackgres:stackgresResult};
 }
