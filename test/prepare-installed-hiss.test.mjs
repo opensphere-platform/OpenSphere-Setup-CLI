@@ -48,7 +48,8 @@ test('installed HISS preparation binds managed identity, creates missing objects
  assert.ok(JSON.parse(f.fenceApplies[0]).items.every(o=>o.kind==='ValidatingAdmissionPolicy'));
  assert.ok(JSON.parse(f.fenceApplies[1]).items.every(o=>o.kind==='ValidatingAdmissionPolicyBinding'));
  assert.ok(JSON.parse(f.fenceApplies[2]).items.every(o=>o.kind==='Namespace'));
- assert.equal(first.executionCoverage.state,'Covered');assert.deepEqual(first.executionCoverage.namespaces.map(n=>[n.namespace,n.state]),[['monitoring','Covered']]);
+ // F1 bindings are Warn: covered, reported as Warn only, not blocking.
+ assert.equal(first.executionCoverage.state,'Covered');assert.deepEqual(first.executionCoverage.namespaces.map(n=>[n.namespace,n.state,n.enforcement]),[['monitoring','CoveredWarnOnly','Warn,Audit']]);
  assert.equal(second.chartExecutionFence.state,'Present');
 });
 test('a plan counts the fence as pending, and an uncovered Pod-producing right blocks preparation',async()=>{

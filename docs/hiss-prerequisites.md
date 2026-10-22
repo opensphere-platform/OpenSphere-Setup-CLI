@@ -43,7 +43,7 @@ Setup은 설치 시 고정된 실행 준비물만 마련한다. 이후 HISS 설�
 설계: `foundation-decoupling-20261011/hiss-readiness/CM-PRIVILEGED-WRITE-FENCE-DESIGN-20261022.md`. 대표 결정 "권고대로, 실험·구현 진행 (권장)" (D-F1–D-F12).
 
 - 원본: Cluster Manager `deploy/hiss-chart-execution-fence.yaml`. Setup은 `src/hiss-chart-execution-fence-artifact.json`에 바이트를 고정하고 sha256으로 확인한다(`HISS_CHART_EXECUTION_FENCE`).
-- 객체 31개: admission 정책 14개와 같은 이름의 binding 14개(F1은 `Warn`, `Audit`), `cert-manager`·`metrics-server`(restricted)·`ingress-nginx`(baseline) namespace의 Pod Security `warn`·`audit` 라벨.
+- 객체 35개: admission 정책 16개와 같은 이름의 binding 16개(F1은 `Warn`, `Audit`), `cert-manager`·`metrics-server`(restricted)·`ingress-nginx`(baseline) namespace의 Pod Security `warn`·`audit` 라벨.
 - `prepare-hiss`(계획)는 읽기만 한다. 정책·binding이 하나도 없으면 `NeedsPreparation`, 일부만 있거나 다르면 `NeedsUpdate`, 같으면 `Present`. 라벨 대상 namespace가 없으면 `Blocked`.
 - `prepare-hiss --apply`는 server-side apply(`opensphere-setup-hiss`, conflict 강제 안 함)를 정책 → type-check 경고 없음 확인 → binding → 라벨 순서로 한다. 정책에 경고가 있으면 binding을 만들지 않는다. 이미 `Present`이면 쓰지 않는다.
 - 계획 불변식 F-6(`hissExecutionCoverage`): Cluster Manager 런타임 계정에 걸린 RBAC를 읽고, Pod가 되는 종류마다 SubjectAccessReview를 보낸다. 그런 권한이 있는 namespace마다 울타리가 있어야 한다. 덮이지 않은 namespace, cluster 전체 권한, 표에 없는 종류가 있으면 전체 결과가 `Blocked`(`blockedBy: ExecutionCoverage`)다. 이 판에서 적용할 정책은 계획에서 `Pending`으로 센다.

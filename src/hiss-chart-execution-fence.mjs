@@ -12,9 +12,9 @@ export const HISS_CHART_EXECUTION_FENCE = Object.freeze({
   id: 'hiss-chart-execution-fence-v1',
   sourceRepository: 'opensphere-platform/OpenSphere-shell-clusterManager',
   sourcePath: 'deploy/hiss-chart-execution-fence.yaml',
-  sourceRevision: '9541f28dcb66cfa9bc60dfdd9375e9ad63f11dc2',
-  sha256: '0b0ac99913f64df8660fe33761e64762e9e08ce0d669970c5469b4256a0e6700',
-  resourceCount: 31,
+  sourceRevision: 'e2a3e9a0da9f54d619f9cd7698a41dd254631da4',
+  sha256: '97b5bc0323af7005b942864e0f8c96e051f81340e625283cabf11ae2dc6591e9',
+  resourceCount: 35,
 });
 // Namespaces whose Pod Security labels the artifact sets; they must exist (the HISS execution profile creates them).
 const LABELLED_NAMESPACES = Object.freeze(['cert-manager', 'metrics-server', 'ingress-nginx']);
@@ -48,6 +48,16 @@ function holds(live, wanted) {
 }
 const emptySelector = (v) => v === undefined || v === null || (typeof v === 'object' && Object.entries(v).every(([k, x]) =>
   x === undefined || x === null || (Array.isArray(x) && !x.length) || (k === 'matchPolicy' && x === 'Equivalent') || emptySelector(x)));
+// matchConstraints compared exactly, after the API server's defaults (adversarial review 2026-10-23 #12): a live policy
+// narrowed by resourceNames, a namespace expression or an object selector does not count as prepared.
+function constraints(c) {
+  const out = structuredClone(c || {});
+  if (out.matchPolicy === 'Equivalent') delete out.matchPolicy;
+  for (const key of ['objectSelector', 'namespaceSelector']) if (out[key] && !Object.keys(out[key]).length) delete out[key];
+  for (const r of out.resourceRules || []) { if (r.scope === '*') delete r.scope; if (Array.isArray(r.resourceNames) && !r.resourceNames.length) delete r.resourceNames; }
+  if (Array.isArray(out.excludeResourceRules) && !out.excludeResourceRules.length) delete out.excludeResourceRules;
+  return out;
+}
 export function fenceMatches(document, live) {
   if (!live?.metadata?.uid || live.metadata.deletionTimestamp) return false;
   if (document.kind === 'Namespace') return holds(live.metadata.labels || {}, document.metadata.labels || {});
@@ -55,7 +65,7 @@ export function fenceMatches(document, live) {
   if (document.kind === 'ValidatingAdmissionPolicy') {
     const same = (key) => canonical(live.spec?.[key] ?? null) === canonical(document.spec[key] ?? null);
     return holds(live.spec, document.spec) && ['matchConditions', 'variables', 'validations', 'paramKind', 'auditAnnotations'].every(same)
-      && emptySelector(live.spec?.matchConstraints?.excludeResourceRules) && (document.spec.matchConstraints?.objectSelector ? true : emptySelector(live.spec?.matchConstraints?.objectSelector));
+      && canonical(constraints(live.spec?.matchConstraints)) === canonical(constraints(document.spec.matchConstraints));
   }
   return holds(live.spec, document.spec) && live.spec?.paramRef === undefined && emptySelector(live.spec?.matchResources)
     && canonical(live.spec?.validationActions) === canonical(document.spec.validationActions);
@@ -142,7 +152,7 @@ export const NON_POD = Object.freeze([
   ['snapshot.storage.k8s.io', 'volumesnapshots'], ['coordination.k8s.io', 'leases'], ['events.k8s.io', 'events'],
   ['stackgres.io', 'sgconfigs'], ['stackgres.io', 'sgpgconfigs'], ['stackgres.io', 'sginstanceprofiles'], ['stackgres.io', 'sgpoolconfigs'],
   ['stackgres.io', 'sgobjectstorages'], ['stackgres.io', 'sgscripts'],
-  ['opensphere.io', 'observabilitybindings'], ['opensphere.io', 'observabilitybindings/status'],
+  ['observability.opensphere.io', 'observabilitybindings'], ['observability.opensphere.io', 'observabilitybindings/status'],
 ]);
 // Cluster-scoped kinds: no Pod of their own; fenced by F-4 and the earlier Ceph storage policies.
 export const CLUSTER_SCOPED = Object.freeze([
@@ -155,15 +165,16 @@ export const CLUSTER_SCOPED = Object.freeze([
 // A namespace with Pod-producing rights counts as covered by one of these (design F-6). A fence counts when its policy and
 // a binding of the same name exist; the binding's actions are reported (Warn during F1-F2, Deny from F3).
 export const COVERAGE = Object.freeze([
-  ...['monitoring', 'cert-manager', 'ingress-nginx', 'metrics-server'].map((namespace) => ({ namespace, policy: `opensphere-hiss-workload-shape-${namespace}`, source: 'chart-execution-fence' })),
-  { namespace: 'opensphere-node-maintenance', policy: 'opensphere-hiss-node-maintenance-workload', source: 'node-maintenance' },
+  ...['monitoring', 'cert-manager', 'ingress-nginx', 'metrics-server'].map((namespace) => ({ namespace, policy: `opensphere-hiss-workload-shape-${namespace}`, source: 'chart-execution-fence', podShapes: true })),
+  { namespace: 'opensphere-node-maintenance', policy: 'opensphere-hiss-node-maintenance-workload', source: 'node-maintenance', podShapes: true },
   { namespace: 'opensphere-console', policy: 'opensphere-ceph-preparation-job', source: 'ceph-preparation' },
   { namespace: 'rook-ceph', policy: 'opensphere-hiss-ceph-cluster-cm', source: 'chart-execution-fence' },
-  { namespace: 'opensphere-stackgres', policy: 'opensphere-hiss-stackgres-operator-workload', source: 'operator-stackgres' },
+  { namespace: 'opensphere-stackgres', policy: 'opensphere-hiss-stackgres-operator-workload', source: 'operator-stackgres', podShapes: true },
   // PSA restricted, and the only ServiceAccount there is a default one with no rights (design F-6).
   { namespace: 'opensphere-hiss-validation', restrictedDefaultOnly: true },
   { namespace: 'opensphere-ceph-verification', restrictedDefaultOnly: true },
 ]);
+const WRITE_VERBS = Object.freeze(['create', 'update', 'patch', '*']);
 const key = (g, r) => `${g}/${r}`;
 const POD_KEYS = new Set(POD_PRODUCING.map(([g, r]) => key(g, r)));
 const NON_POD_KEYS = new Set(NON_POD.map(([g, r]) => key(g, r)));
@@ -171,14 +182,15 @@ const CLUSTER_KEYS = new Set(CLUSTER_SCOPED.map(([g, r]) => key(g, r)));
 const subjectMatches = (s) => (s.kind === 'ServiceAccount' && s.name === CM_RUNTIME.name && (s.namespace || '') === CM_RUNTIME.namespace)
   || (s.kind === 'Group' && CM_GROUPS.includes(s.name)) || (s.kind === 'User' && s.name === CM_USER);
 
-// Every (scope, group, resource) the Cluster Manager runtime may create according to RBAC. scope is a namespace or '*'.
+// Every (scope, group, resource) the Cluster Manager runtime may write according to RBAC. scope is a namespace or '*'.
+// create, update, patch and * all count: updating an existing workload or operator object also makes Pods (review #11).
 export function cmCreateGrants({ clusterRoleBindings, roleBindings, clusterRoles, roles }) {
   const cr = new Map(clusterRoles.map((r) => [r.metadata.name, r]));
   const rl = new Map(roles.map((r) => [`${r.metadata.namespace}/${r.metadata.name}`, r]));
   const grants = [];
   const take = (scope, role) => {
     for (const rule of role?.rules || []) {
-      if (!(rule.verbs || []).some((v) => v === 'create' || v === '*')) continue;
+      if (!(rule.verbs || []).some((v) => WRITE_VERBS.includes(v))) continue;
       for (const g of rule.apiGroups || ['']) for (const r of rule.resources || []) grants.push({ scope, group: g, resource: r, named: (rule.resourceNames || []).length > 0 });
     }
   };
@@ -208,13 +220,13 @@ export function hissExecutionCoverage(scope, { runner = run, pendingPolicies = [
   const { podScopes, unknown } = classifyGrants(cmCreateGrants(rbac));
   // The API server's answer for every Pod-producing kind, cluster-wide and in each namespace RBAC names.
   const namespaces = podScopes.filter((s) => s !== '*');
-  const reviews = ['', ...new Set([...namespaces, ...COVERAGE.map((c) => c.namespace)])].flatMap((namespace) => POD_PRODUCING.map(([group, resource]) => ({
+  const reviews = ['', ...new Set([...namespaces, ...COVERAGE.map((c) => c.namespace)])].flatMap((namespace) => POD_PRODUCING.flatMap(([group, resource]) => ['create', 'update', 'patch'].map((verb) => ({
     apiVersion: 'authorization.k8s.io/v1', kind: 'SubjectAccessReview',
-    spec: { user: CM_USER, groups: [...CM_GROUPS], resourceAttributes: { namespace, verb: 'create', group, resource } } })));
+    spec: { user: CM_USER, groups: [...CM_GROUPS], resourceAttributes: { namespace, verb, group, resource } } }))));
   const answers = parseStream(k(['create', '-f', '-', '-o', 'json', '--request-timeout=60s'], { input: `${JSON.stringify({ apiVersion: 'v1', kind: 'List', items: reviews })}\n` }));
   if (answers.length !== reviews.length) throw fail('OBSERVATION_UNAVAILABLE', 'SubjectAccessReview answers are incomplete; coverage cannot be judged');
   const allowed = new Map();
-  answers.forEach((a, i) => { if (a.status?.allowed) { const r = reviews[i].spec.resourceAttributes; (allowed.get(r.namespace) || allowed.set(r.namespace, []).get(r.namespace)).push(r.resource); } });
+  answers.forEach((a, i) => { if (a.status?.allowed) { const r = reviews[i].spec.resourceAttributes; const list = allowed.get(r.namespace) || allowed.set(r.namespace, []).get(r.namespace); if (!list.includes(r.resource)) list.push(r.resource); } });
   const clusterWide = allowed.get('') || [];
   const policies = new Map(items(['get', 'validatingadmissionpolicies']).map((p) => [p.metadata.name, p]));
   const bindings = items(['get', 'validatingadmissionpolicybindings']);
@@ -223,17 +235,28 @@ export function hissExecutionCoverage(scope, { runner = run, pendingPolicies = [
     const cover = COVERAGE.find((c) => c.namespace === namespace);
     let state = 'Uncovered', enforcement = null;
     if (cover?.policy) {
-      const b = bindings.find((x) => x.spec?.policyName === cover.policy);
-      if (policies.has(cover.policy) && b) { state = 'Covered'; enforcement = (b.spec.validationActions || []).join(','); }
-      else if (pendingPolicies.includes(cover.policy)) state = 'Pending';
+      // The policy must match every granted kind (or Pods, which every such kind becomes), apply to the whole namespace
+      // through an unnarrowed binding, and fail closed (adversarial review 2026-10-23 #10).
+      const p = policies.get(cover.policy);
+      const b = bindings.find((x) => x.spec?.policyName === cover.policy && emptySelector(x.spec?.matchResources) && x.spec?.paramRef === undefined);
+      const matched = new Set((p?.spec?.matchConstraints?.resourceRules || []).flatMap((r) => r.resources || []));
+      const kindsMatched = kinds.every((kind) => matched.has(kind) || matched.has('*') || (kind !== 'pods' && matched.has('pods') && cover.podShapes));
+      if (p && b && p.spec?.failurePolicy === 'Fail' && kindsMatched) {
+        const actions = b.spec.validationActions || [];
+        state = actions.includes('Deny') ? 'Covered' : 'CoveredWarnOnly'; enforcement = actions.join(',');
+      } else if (pendingPolicies.includes(cover.policy)) state = 'Pending';
+      else if (p && b) state = 'Uncovered';
     } else if (cover?.restrictedDefaultOnly) {
       const ns = items(['get', 'namespace', namespace])[0];
       const accounts = items(['get', 'serviceaccounts', '-n', namespace]).map((s) => s.metadata.name);
-      const defaultBound = rbac.roleBindings.concat(rbac.clusterRoleBindings).some((b) => (b.subjects || []).some((s) => s.kind === 'ServiceAccount' && s.namespace === namespace));
+      // Any binding to a ServiceAccount of the namespace, or to its ServiceAccount group, gives 'default' rights (review #12).
+      const defaultBound = rbac.roleBindings.concat(rbac.clusterRoleBindings).some((b) => (b.subjects || []).some((s) =>
+        (s.kind === 'ServiceAccount' && s.namespace === namespace) || (s.kind === 'Group' && s.name === `system:serviceaccounts:${namespace}`)));
       if (ns?.metadata?.labels?.['pod-security.kubernetes.io/enforce'] === 'restricted' && canonical(accounts) === canonical(['default']) && !defaultBound) state = 'Covered';
     }
     report.push({ namespace, kinds: kinds.sort(), state, ...(cover?.policy ? { policy: cover.policy } : {}), ...(enforcement ? { enforcement } : {}) });
   }
+  // CoveredWarnOnly is not blocking: F1 and F2 run the fence as Warn; the report says so.
   const blocked = clusterWide.length > 0 || unknown.length > 0 || report.some((r) => r.state === 'Uncovered');
   return { state: blocked ? 'Blocked' : report.some((r) => r.state === 'Pending') ? 'NeedsPreparation' : 'Covered',
     ...(clusterWide.length ? { clusterWide } : {}), ...(unknown.length ? { unknown } : {}), namespaces: report };

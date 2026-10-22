@@ -13,7 +13,7 @@ test('the pinned bytes are the approved fence: policies, bindings and Pod Securi
   assert.match(HISS_CHART_EXECUTION_FENCE.sourceRevision, /^[a-f0-9]{40}$/);
   assert.throws(() => verifyHissChartExecutionFence(`${artifact.yaml}\n`), /differ from the approved contract/);
   const bindings = all.filter((d) => d.kind === 'ValidatingAdmissionPolicyBinding');
-  assert.equal(bindings.length, 14);
+  assert.equal(bindings.length, 16);
   for (const b of bindings) assert.deepEqual(b.spec.validationActions, ['Warn', 'Audit'], 'F1 is Warn; Deny is a later revision');
   for (const p of all.filter((d) => d.kind === 'ValidatingAdmissionPolicy')) assert.equal(p.spec.failurePolicy, 'Fail');
 });
@@ -31,6 +31,12 @@ test('a live policy or binding that is narrowed or weakened does not count as pr
   assert.equal(fenceMatches(binding, live(binding)), true);
   const selected = live(binding); selected.spec.matchResources = { namespaceSelector: { matchLabels: { x: 'y' } } };
   assert.equal(fenceMatches(binding, selected), false);
+  const named = live(policy); named.spec.matchConstraints.resourceRules[0].resourceNames = ['only-this'];
+  assert.equal(fenceMatches(policy, named), false, 'resourceNames narrow a policy');
+  const defaulted = live(policy); defaulted.spec.matchConstraints.matchPolicy = 'Equivalent';
+  for (const r of defaulted.spec.matchConstraints.resourceRules) r.scope = '*';
+  defaulted.spec.matchConstraints.objectSelector = {};
+  assert.equal(fenceMatches(policy, defaulted), true, 'server defaults are not drift');
   const deny = live(binding); deny.spec.validationActions = ['Deny'];
   assert.equal(fenceMatches(binding, deny), false, 'a different revision of the bindings is NeedsUpdate');
   assert.equal(fenceMatches(policy, { ...live(policy), metadata: { ...live(policy).metadata, deletionTimestamp: 'now' } }), false);
@@ -99,4 +105,8 @@ test('F-6 grants: Pod-producing scopes, known kinds, and anything unknown or wil
   assert.deepEqual(c.podScopes, ['monitoring']);
   assert.deepEqual(c.unknown, ['team:example.io/widgets']);
   assert.deepEqual(classifyGrants([{ scope: '*', group: '*', resource: 'pods' }]).unknown, ['*:*/pods']);
+  // update and patch of an existing workload also make Pods (review #11).
+  const patchOnly = cmCreateGrants({ clusterRoleBindings: [], clusterRoles: [], roles: [{ metadata: { name: 'p', namespace: 'ns1' }, rules: [{ apiGroups: ['apps'], resources: ['daemonsets'], resourceNames: ['x'], verbs: ['patch'] }] }],
+    roleBindings: [{ metadata: { namespace: 'ns1' }, roleRef: { kind: 'Role', name: 'p' }, subjects: [sa] }] });
+  assert.deepEqual(classifyGrants(patchOnly).podScopes, ['ns1']);
 });
