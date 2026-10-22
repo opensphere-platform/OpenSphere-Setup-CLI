@@ -105,7 +105,8 @@ test('capture refuses unrelated revision, BOM substitution and literal credentia
 test('capture permits fixed projected file references only with their reviewed read-only audience mount',()=>{
  const f=fixture(),d=structuredClone(f.deployment),pod=d.spec.template.spec,c=pod.containers[0];
  const names=[['CONSOLE_PROVIDER_DISPATCH_TOKEN_FILE','provider-dispatch','opensphere-foundation-dispatch'],
-   ['CONSOLE_PROVIDER_ENGINE_TOKEN_FILE','provider-engine','opensphere-provider-engine-evidence']];
+   ['CONSOLE_PROVIDER_ENGINE_TOKEN_FILE','provider-engine','opensphere-provider-engine-evidence'],
+   ['CONSOLE_PROVIDER_LIFECYCLE_TOKEN_FILE','provider-lifecycle','opensphere-foundation-lifecycle']];
  c.volumeMounts=[];pod.volumes=[];
  for(const [name,volume,audience] of names){
    c.env.push({name,value:'/var/run/opensphere/'+volume+'/token'});
@@ -122,6 +123,9 @@ test('capture permits fixed projected file references only with their reviewed r
   p=>p.volumes[0].projected.sources[0].serviceAccountToken.expirationSeconds=86400,
   p=>p.volumes[0].projected.sources.push({secret:{name:'caller'}}),
   p=>p.volumes[0]={name:'provider-dispatch',secret:{secretName:'caller'}},
+  // Y1: the lifecycle token keeps its own audience; another reviewed audience under its name is refused.
+  p=>p.volumes[2].projected.sources[0].serviceAccountToken.audience='opensphere-foundation-dispatch',
+  p=>p.containers[0].env.at(-1).value='/var/run/opensphere/provider-dispatch/token',
  ]){const changed=structuredClone(d);mutate(changed.spec.template.spec);assert.throws(()=>capture(changed),/ControllerSourceMismatch/);}
 });
 test('standard Pod service-account injection and scheduling defaults are narrowly accepted',()=>{
