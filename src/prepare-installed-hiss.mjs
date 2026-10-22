@@ -3,6 +3,8 @@ import validation from './hiss-validation-artifact.json' with {type:'json'};
 import storageObservation from './hiss-storage-observation-artifact.json' with {type:'json'};
 import bindingCrd from './hiss-observability-binding-crd-artifact.json' with {type:'json'};
 import {createHissPrerequisiteClient,prepareHissObservabilityBindingCrd,prepareHissPrerequisites,prepareHissStorageObservation,prepareHissValidation,verifyHissObservabilityBindingCrd,verifyHissStorageObservationArtifact,verifyHissValidationArtifact} from './hiss-prerequisites.mjs';
+import chartExecutionFence from './hiss-chart-execution-fence-artifact.json' with {type:'json'};
+import {hissExecutionCoverage,prepareHissChartExecutionFence,verifyHissChartExecutionFence} from './hiss-chart-execution-fence.mjs';
 import {run} from './process.mjs';
 import {installTarget} from './install-target.mjs';
 
@@ -24,6 +26,7 @@ export async function prepareInstalledHiss({context,apply=false,runner=run,onPro
   verifyHissValidationArtifact(validation.yaml);
   verifyHissStorageObservationArtifact(storageObservation.yaml);
   verifyHissObservabilityBindingCrd(bindingCrd.yaml);
+  const fenceDocuments=verifyHissChartExecutionFence(chartExecutionFence.yaml);
   const assertTarget=()=>{if(JSON.stringify(observe())!==JSON.stringify(target))throw Error('Installation or cluster changed; no further HISS preparation writes allowed');};
   const result=await prepareHissPrerequisites(JSON.stringify(profile,null,2)+'\n',target.scope,{apply,onProgress,client:{
     read:resources=>{assertTarget();return client.read(resources);},
@@ -35,5 +38,15 @@ export async function prepareInstalledHiss({context,apply=false,runner=run,onPro
   const storageResult=prepareHissStorageObservation(storageObservation.yaml,target.scope,{runner,apply});
   assertTarget();
   const crdResult=prepareHissObservabilityBindingCrd(bindingCrd.yaml,target.scope,{runner,apply});
-  assertTarget();return {...result,target,validation:validationResult,storageObservation:storageResult,observabilityBindingCrd:crdResult};
+  assertTarget();
+  // CM privileged-write fence (design 2026-10-22): the chart execution fence, then the plan invariant F-6. A namespace
+  // where Cluster Manager may create something that becomes a Pod must be covered by an admission fence; a policy this
+  // revision would apply counts as pending in a plan, and anything still uncovered makes the whole preparation Blocked.
+  const fenceResult=prepareHissChartExecutionFence(chartExecutionFence.yaml,target.scope,{runner,apply});
+  assertTarget();
+  const pendingPolicies=apply?[]:fenceDocuments.filter(d=>d.kind==='ValidatingAdmissionPolicy').map(d=>d.metadata.name);
+  const coverage=hissExecutionCoverage(target.scope,{runner,pendingPolicies});
+  assertTarget();
+  return {...result,...(coverage.state==='Blocked'?{status:'Blocked',blockedBy:'ExecutionCoverage'}:{}),target,validation:validationResult,
+    storageObservation:storageResult,observabilityBindingCrd:crdResult,chartExecutionFence:fenceResult,executionCoverage:coverage};
 }
