@@ -9,7 +9,7 @@
     "apiVersion": "release.opensphere.io/v1alpha1",
     "kind": "OpenSphereReleaseLock",
     "channel": "edge",
-    "releaseDigest": "sha256:9a0df4c153755cc059d61ec3042e0474158982c79cfb0af17162d071b86dc600",
+    "releaseDigest": "sha256:6705327d7cd4fb31631b064aed730b6177e5d1e9bfecfdba9cf2fb11736e1414",
     "resolvedAt": "2026-09-10T00:00:00Z",
     "source": "https://github.com/opensphere-platform/OpenSphere-console",
     "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -52,9 +52,9 @@
         "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "registryCredentialsRequired": false
       },
-      "r2d2HermesWorker": {
-        "repository": "opensphere-console-r2d2-hermes-worker",
-        "image": "ghcr.io/opensphere-platform/opensphere-console-r2d2-hermes-worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "r2d2OpenClawGateway": {
+        "repository": "opensphere-console-r2d2-openclaw",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-r2d2-openclaw@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "registryCredentialsRequired": false
       },
@@ -178,7 +178,7 @@
     "apiVersion": "release.opensphere.io/v1alpha1",
     "kind": "OpenSphereReleaseLock",
     "channel": "edge",
-    "releaseDigest": "sha256:d9d0be24c3a69c53bff3a0e9e9ab56d557bb7f129c6182fe04d3c398e5cf3538",
+    "releaseDigest": "sha256:5f79ee09c92e2d2a22a7bc5a0dde4ee72571f87ddb2c1cfe143e57a5f32f84fa",
     "resolvedAt": "2026-09-26T00:00:00.000Z",
     "source": "https://github.com/opensphere-platform/OpenSphere-console",
     "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -191,7 +191,7 @@
       "gaEligible": false
     },
     "releaseScope": "component",
-    "baseReleaseDigest": "sha256:9a0df4c153755cc059d61ec3042e0474158982c79cfb0af17162d071b86dc600",
+    "baseReleaseDigest": "sha256:6705327d7cd4fb31631b064aed730b6177e5d1e9bfecfdba9cf2fb11736e1414",
     "changedComponents": [],
     "knowledge": {
       "schema": "opensphere.knowledge-lock/v1",
@@ -259,9 +259,9 @@
         "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "registryCredentialsRequired": false
       },
-      "r2d2HermesWorker": {
-        "repository": "opensphere-console-r2d2-hermes-worker",
-        "image": "ghcr.io/opensphere-platform/opensphere-console-r2d2-hermes-worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "r2d2OpenClawGateway": {
+        "repository": "opensphere-console-r2d2-openclaw",
+        "image": "ghcr.io/opensphere-platform/opensphere-console-r2d2-openclaw@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "registryCredentialsRequired": false
       },
@@ -350,7 +350,7 @@
       "apiVersion": "release.opensphere.io/v1alpha1",
       "kind": "OpenSphereReleaseLock",
       "channel": "edge",
-      "releaseDigest": "sha256:9a0df4c153755cc059d61ec3042e0474158982c79cfb0af17162d071b86dc600",
+      "releaseDigest": "sha256:6705327d7cd4fb31631b064aed730b6177e5d1e9bfecfdba9cf2fb11736e1414",
       "resolvedAt": "2026-09-10T00:00:00Z",
       "source": "https://github.com/opensphere-platform/OpenSphere-console",
       "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -393,9 +393,9 @@
           "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "registryCredentialsRequired": false
         },
-        "r2d2HermesWorker": {
-          "repository": "opensphere-console-r2d2-hermes-worker",
-          "image": "ghcr.io/opensphere-platform/opensphere-console-r2d2-hermes-worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "r2d2OpenClawGateway": {
+          "repository": "opensphere-console-r2d2-openclaw",
+          "image": "ghcr.io/opensphere-platform/opensphere-console-r2d2-openclaw@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "registryCredentialsRequired": false
         },
@@ -518,7 +518,7 @@
       "apiVersion": "bootstrap.opensphere.io/v1alpha1",
       "kind": "OpenSphereInstallationState",
       "phase": "Installing",
-      "releaseDigest": "sha256:9a0df4c153755cc059d61ec3042e0474158982c79cfb0af17162d071b86dc600",
+      "releaseDigest": "sha256:6705327d7cd4fb31631b064aed730b6177e5d1e9bfecfdba9cf2fb11736e1414",
       "managedNamespaces": [
         "opensphere-console"
       ],
@@ -527,11 +527,11 @@
       "knowledgeUpdate": {
         "schema": "opensphere.knowledge-installation-transition/v1",
         "operationId": "33333333-3333-4333-8333-333333333333",
-        "baseReleaseDigest": "sha256:9a0df4c153755cc059d61ec3042e0474158982c79cfb0af17162d071b86dc600",
-        "targetReleaseDigest": "sha256:d9d0be24c3a69c53bff3a0e9e9ab56d557bb7f129c6182fe04d3c398e5cf3538",
+        "baseReleaseDigest": "sha256:6705327d7cd4fb31631b064aed730b6177e5d1e9bfecfdba9cf2fb11736e1414",
+        "targetReleaseDigest": "sha256:5f79ee09c92e2d2a22a7bc5a0dde4ee72571f87ddb2c1cfe143e57a5f32f84fa",
         "historicalBootstrap": {
           "scope": "historical-beszel-bootstrap",
-          "releaseDigest": "sha256:9a0df4c153755cc059d61ec3042e0474158982c79cfb0af17162d071b86dc600",
+          "releaseDigest": "sha256:6705327d7cd4fb31631b064aed730b6177e5d1e9bfecfdba9cf2fb11736e1414",
           "verifiedAt": "2026-09-26T00:00:00.000Z",
           "images": {
             "beszelHub": "ghcr.io/opensphere-platform/opensphere-console-beszel-hub@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -541,13 +541,13 @@
           "bootstrapJobComplete": true,
           "agentPublicKeyPublished": true
         },
-        "baseEvidenceSha256": "sha256:108a5f63f1485ae976e5dc15a99561372d9aad4fcb5e0b14693f1bfa81db6300"
+        "baseEvidenceSha256": "sha256:efea4134b1bbe0d450ac4f2d5df1843e955a0552615daf201fba937da4256fc3"
       },
       "transition": {
         "runId": "33333333-3333-4333-8333-333333333333",
         "mode": "knowledge",
-        "previousReleaseDigest": "sha256:9a0df4c153755cc059d61ec3042e0474158982c79cfb0af17162d071b86dc600",
-        "targetReleaseDigest": "sha256:d9d0be24c3a69c53bff3a0e9e9ab56d557bb7f129c6182fe04d3c398e5cf3538",
+        "previousReleaseDigest": "sha256:6705327d7cd4fb31631b064aed730b6177e5d1e9bfecfdba9cf2fb11736e1414",
+        "targetReleaseDigest": "sha256:5f79ee09c92e2d2a22a7bc5a0dde4ee72571f87ddb2c1cfe143e57a5f32f84fa",
         "previousState": "Ready",
         "previousVerifiedAt": "2026-09-26T00:00:00.000Z",
         "startedAt": "2026-09-26T00:05:00.000Z",
@@ -561,7 +561,7 @@
       "apiVersion": "release.opensphere.io/v1alpha1",
       "kind": "OpenSphereReleaseLock",
       "channel": "edge",
-      "releaseDigest": "sha256:d9d0be24c3a69c53bff3a0e9e9ab56d557bb7f129c6182fe04d3c398e5cf3538",
+      "releaseDigest": "sha256:5f79ee09c92e2d2a22a7bc5a0dde4ee72571f87ddb2c1cfe143e57a5f32f84fa",
       "resolvedAt": "2026-09-26T00:00:00.000Z",
       "source": "https://github.com/opensphere-platform/OpenSphere-console",
       "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -574,7 +574,7 @@
         "gaEligible": false
       },
       "releaseScope": "component",
-      "baseReleaseDigest": "sha256:9a0df4c153755cc059d61ec3042e0474158982c79cfb0af17162d071b86dc600",
+      "baseReleaseDigest": "sha256:6705327d7cd4fb31631b064aed730b6177e5d1e9bfecfdba9cf2fb11736e1414",
       "changedComponents": [],
       "knowledge": {
         "schema": "opensphere.knowledge-lock/v1",
@@ -642,9 +642,9 @@
           "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "registryCredentialsRequired": false
         },
-        "r2d2HermesWorker": {
-          "repository": "opensphere-console-r2d2-hermes-worker",
-          "image": "ghcr.io/opensphere-platform/opensphere-console-r2d2-hermes-worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "r2d2OpenClawGateway": {
+          "repository": "opensphere-console-r2d2-openclaw",
+          "image": "ghcr.io/opensphere-platform/opensphere-console-r2d2-openclaw@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "sourceRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "registryCredentialsRequired": false
         },
@@ -732,7 +732,7 @@
       "apiVersion": "bootstrap.opensphere.io/v1alpha1",
       "kind": "OpenSphereInstallationState",
       "phase": "Installing",
-      "releaseDigest": "sha256:d9d0be24c3a69c53bff3a0e9e9ab56d557bb7f129c6182fe04d3c398e5cf3538",
+      "releaseDigest": "sha256:5f79ee09c92e2d2a22a7bc5a0dde4ee72571f87ddb2c1cfe143e57a5f32f84fa",
       "managedNamespaces": [
         "opensphere-console"
       ],
@@ -741,11 +741,11 @@
       "knowledgeUpdate": {
         "schema": "opensphere.knowledge-installation-transition/v1",
         "operationId": "33333333-3333-4333-8333-333333333333",
-        "baseReleaseDigest": "sha256:9a0df4c153755cc059d61ec3042e0474158982c79cfb0af17162d071b86dc600",
-        "targetReleaseDigest": "sha256:d9d0be24c3a69c53bff3a0e9e9ab56d557bb7f129c6182fe04d3c398e5cf3538",
+        "baseReleaseDigest": "sha256:6705327d7cd4fb31631b064aed730b6177e5d1e9bfecfdba9cf2fb11736e1414",
+        "targetReleaseDigest": "sha256:5f79ee09c92e2d2a22a7bc5a0dde4ee72571f87ddb2c1cfe143e57a5f32f84fa",
         "historicalBootstrap": {
           "scope": "historical-beszel-bootstrap",
-          "releaseDigest": "sha256:9a0df4c153755cc059d61ec3042e0474158982c79cfb0af17162d071b86dc600",
+          "releaseDigest": "sha256:6705327d7cd4fb31631b064aed730b6177e5d1e9bfecfdba9cf2fb11736e1414",
           "verifiedAt": "2026-09-26T00:00:00.000Z",
           "images": {
             "beszelHub": "ghcr.io/opensphere-platform/opensphere-console-beszel-hub@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -755,13 +755,13 @@
           "bootstrapJobComplete": true,
           "agentPublicKeyPublished": true
         },
-        "baseEvidenceSha256": "sha256:108a5f63f1485ae976e5dc15a99561372d9aad4fcb5e0b14693f1bfa81db6300"
+        "baseEvidenceSha256": "sha256:efea4134b1bbe0d450ac4f2d5df1843e955a0552615daf201fba937da4256fc3"
       },
       "transition": {
         "runId": "33333333-3333-4333-8333-333333333333",
         "mode": "knowledge",
-        "previousReleaseDigest": "sha256:9a0df4c153755cc059d61ec3042e0474158982c79cfb0af17162d071b86dc600",
-        "targetReleaseDigest": "sha256:d9d0be24c3a69c53bff3a0e9e9ab56d557bb7f129c6182fe04d3c398e5cf3538",
+        "previousReleaseDigest": "sha256:6705327d7cd4fb31631b064aed730b6177e5d1e9bfecfdba9cf2fb11736e1414",
+        "targetReleaseDigest": "sha256:5f79ee09c92e2d2a22a7bc5a0dde4ee72571f87ddb2c1cfe143e57a5f32f84fa",
         "previousState": "Ready",
         "previousVerifiedAt": "2026-09-26T00:00:00.000Z",
         "startedAt": "2026-09-26T00:05:00.000Z",

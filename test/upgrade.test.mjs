@@ -354,7 +354,7 @@ function profiledUpgradeFixture() {
         ...(component === 'osaaGateway' ? { env: [{ name: 'R2D2_HERMES_ENABLED', value: 'true' }] } : {})
       })) } } }
   });
-  const live = [workload('c-ai', ['osaaGateway', 'r2d2HermesWorker']),
+  const live = [workload('c-ai', ['osaaGateway', 'r2d2OpenClawGateway']),
     workload('c-dst', ['osdst']), workload('c-shell', ['osaaGovernedAdapter'])];
   const rendered = structuredClone(live);
   for (const w of rendered) {
@@ -677,7 +677,7 @@ function preWorkerLock() {
   const previous = lock('1'.repeat(40), 'a');
   previous.trust = LOCAL_EDGE_TRUST;
   delete previous.releaseBom;
-  delete previous.components.r2d2HermesWorker;
+  delete previous.components.r2d2OpenClawGateway;
   previous.releaseDigest = calculateReleaseDigest('edge', previous.components, previous.trust, undefined, { auxiliaryArtifacts: previous.auxiliaryArtifacts });
   return previous;
 }
@@ -688,15 +688,36 @@ test('integrated upgrade adds the R2D2 Hermes worker to a pre-worker installatio
   target.trust = LOCAL_EDGE_TRUST;
   delete target.releaseBom;
   target.releaseDigest = calculateReleaseDigest('edge', target.components, target.trust, undefined, { auxiliaryArtifacts: target.auxiliaryArtifacts });
-  assert.equal(Object.hasOwn(target.components, 'r2d2HermesWorker'), true);
+  assert.equal(Object.hasOwn(target.components, 'r2d2OpenClawGateway'), true);
   const events = [];
   const result = await upgrade(previous, target, { runtime: runtime(previous, events) });
   assert.equal(result.changed, true);
-  assert.equal(result.lock.components.r2d2HermesWorker.image, target.components.r2d2HermesWorker.image);
+  assert.equal(result.lock.components.r2d2OpenClawGateway.image, target.components.r2d2OpenClawGateway.image);
   assert.ok(events.includes(`supply:${previous.sourceRevision}:true`));
   assert.ok(events.includes(`supply:${target.sourceRevision}:false`));
   assert.ok(events.includes(`install:업그레이드:${target.sourceRevision}`));
   assert.ok(events.includes(`record:${target.sourceRevision}`));
+});
+
+test('failed retired-to-native cutover keeps the target and never reinstalls the retired engine',async()=>{
+ const previous=preWorkerLock(),target=localEdge(lock('2'.repeat(40),'b'));
+ previous.components.r2d2HermesWorker={repository:'opensphere-console-r2d2-hermes-worker',image:`ghcr.io/opensphere-platform/opensphere-console-r2d2-hermes-worker@sha256:${'a'.repeat(64)}`,sourceRevision:previous.sourceRevision};
+ previous.releaseDigest=calculateReleaseDigest(previous.channel,previous.components,previous.trust,undefined,{auxiliaryArtifacts:previous.auxiliaryArtifacts});
+ const events=[],operations=runtime(previous,events,{failTarget:true});
+ await assert.rejects(upgrade(previous,target,{runtime:operations}),/native-runtime-forward-repair-required/);
+ assert.equal(operations.store.release.releaseDigest,target.releaseDigest);
+ assert.equal(operations.store.state.phase,'Failed');
+ assert.equal(operations.store.state.failureCode,'native-runtime-forward-repair-required');
+ assert.ok(!events.some(x=>x.startsWith('install:롤백')||x.startsWith('install-component:롤백')||x.startsWith('prune:')));
+ assert.ok(!events.includes('prepare:'+previous.sourceRevision),'retired installer is not even materialized for activation');
+});
+
+test('native preparation failure leaves all services and the installation record untouched',async()=>{
+ const previous=preWorkerLock(),target=localEdge(lock('2'.repeat(40),'b')),events=[],operations=runtime(previous,events);
+ operations.prepareRelease=async()=>{throw Error('Explicit reviewed runtime policy is required');};
+ await assert.rejects(upgrade(previous,target,{runtime:operations}),/reviewed runtime policy/);
+ assert.equal(operations.store.rv,1);assert.equal(operations.store.release,previous);
+ assert.ok(!events.some(x=>/^(install:|install-component:|record:|inventory:|prune:)/.test(x)));
 });
 
 test('a component-scope release cannot introduce the R2D2 Hermes worker', async () => {
@@ -704,11 +725,11 @@ test('a component-scope release cannot introduce the R2D2 Hermes worker', async 
   const target = structuredClone(previous);
   target.releaseScope = RELEASE_SCOPE_COMPONENT;
   target.baseReleaseDigest = previous.releaseDigest;
-  target.changedComponents = ['r2d2HermesWorker'];
+  target.changedComponents = ['r2d2OpenClawGateway'];
   target.sourceRevision = '2'.repeat(40);
-  target.components.r2d2HermesWorker = {
-    repository: COMPONENTS.r2d2HermesWorker,
-    image: `ghcr.io/opensphere-platform/${COMPONENTS.r2d2HermesWorker}@sha256:${'c'.repeat(64)}`,
+  target.components.r2d2OpenClawGateway = {
+    repository: COMPONENTS.r2d2OpenClawGateway,
+    image: `ghcr.io/opensphere-platform/${COMPONENTS.r2d2OpenClawGateway}@sha256:${'c'.repeat(64)}`,
     sourceRevision: target.sourceRevision
   };
   target.releaseDigest = calculateReleaseDigest(target.channel, target.components, target.trust, undefined, {
@@ -720,17 +741,17 @@ test('a component-scope release cannot introduce the R2D2 Hermes worker', async 
   const events = [];
   await assert.rejects(
     upgrade(previous, target, { runtime: runtime(previous, events) }),
-    /cannot change the installed component set/u
+    /engine replacement requires an integrated upgrade/u
   );
   assert.deepEqual(events, []);
 });
 
-test('worker and Gateway component releases apply the complete shared Gateway manifest', () => {
+test('native image and C_AI component releases apply the complete control-plane manifest', () => {
   const previous = lock('1'.repeat(40), 'a');
   previous.trust = LOCAL_EDGE_TRUST;
   delete previous.releaseBom;
   previous.releaseDigest = calculateReleaseDigest('edge', previous.components, previous.trust, undefined, { auxiliaryArtifacts: previous.auxiliaryArtifacts });
-  for (const changed of [['r2d2HermesWorker'], ['osaaGateway'], ['osaaGateway', 'r2d2HermesWorker']]) {
+  for (const changed of [['r2d2OpenClawGateway'], ['osaaGateway'], ['osaaGateway', 'r2d2OpenClawGateway']]) {
     const target = componentTarget(previous, '2'.repeat(40), changed);
     const specs = componentReleaseManifestSpecs(target);
     assert.deepEqual(specs.foundation, []);
@@ -739,19 +760,21 @@ test('worker and Gateway component releases apply the complete shared Gateway ma
     const yaml = [
       'apiVersion: v1',
       'kind: ServiceAccount',
-      'metadata: { name: opensphere-console-osaa-gateway }',
+      'metadata: { name: opensphere-console-osaa-gateway, namespace: opensphere-console }',
       '---',
       'apiVersion: apps/v1',
       'kind: Deployment',
-      'metadata: { name: opensphere-console-osaa-gateway }',
+      'metadata: { name: opensphere-console-osaa-gateway, namespace: opensphere-console }',
       'spec:',
       '  template:',
       '    spec:',
       '      containers:',
       '        - name: gateway',
       `          image: ${target.components.osaaGateway.image}`,
-      '        - name: hermes-worker',
-      `          image: ${target.components.r2d2HermesWorker.image}`,
+      '          env:',
+      '            - { name: R2D2_BACKEND, value: openclaw-native }',
+      `            - { name: R2D2_NATIVE_GATEWAY_IMAGE, value: ${target.components.r2d2OpenClawGateway.image} }`,
+      `            - { name: R2D2_NATIVE_BRIDGE_IMAGE, value: ${target.components.osaaGateway.image} }`,
       ''
     ].join('\n');
     const selected = componentReleaseWorkloadManifests(target, {
@@ -761,6 +784,17 @@ test('worker and Gateway component releases apply the complete shared Gateway ma
     assert.equal(selected.length, 1);
     assert.equal(selected[0].yaml, yaml);
     assert.match(selected[0].yaml, /kind: ServiceAccount/u);
+    if(changed.includes('r2d2OpenClawGateway'))for(const bad of[
+      yaml.replace('namespace: opensphere-console','namespace: foreign').replace('namespace: opensphere-console','namespace: foreign'),
+      yaml.replace('name: R2D2_NATIVE_GATEWAY_IMAGE','name: FOREIGN_NATIVE_IMAGE'),
+      yaml.replace('name: R2D2_BACKEND, value: openclaw-native','name: R2D2_BACKEND, value: disabled'),
+      yaml.replace(`name: R2D2_NATIVE_BRIDGE_IMAGE, value: ${target.components.osaaGateway.image}`,`name: R2D2_NATIVE_BRIDGE_IMAGE, value: ${previous.components.osaaGateway.image}`),
+    ]){
+      // If the old/new C_AI digest is intentionally unchanged (native-only),
+      // that last replacement is the same admitted reference, not a negative.
+      if(bad===yaml)continue;
+      assert.throws(()=>componentReleaseWorkloadManifests(target,{foundation:{release:[]},base:[{path:'apps/osaa-gateway/deploy.yaml',yaml:bad}]}),/does not expose workload image/);
+    }
   }
 });
 
@@ -781,7 +815,7 @@ test('component rollout mapping covers bootstrap workloads and the activated OSA
   assert.deepEqual(COMPONENT_ROLLOUTS.osaaGateway, [
     ['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']
   ]);
-  assert.deepEqual(COMPONENT_ROLLOUTS.r2d2HermesWorker, [
+  assert.deepEqual(COMPONENT_ROLLOUTS.r2d2OpenClawGateway, [
     ['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']
   ]);
   assert.equal(Object.hasOwn(COMPONENT_ROLLOUTS, 'backend'), false);
@@ -1171,7 +1205,9 @@ function cutoverRuntime(previous, target, events, {
 }
 const installs = (events) => events.filter((e) => e.startsWith('install'));
 const earlierInstalls = (events) => events.filter((e) => e.startsWith('install:롤백') || e.startsWith('install-component:롤백'));
-const activation = () => ({ previous: preWorkerLock(), target: localEdge(lock('2'.repeat(40), 'b')) });
+// Isolate historical DB cutover tests from the independently tested engine
+// replacement. Both releases here already have the native image inventory.
+const activation = () => ({ previous: localEdge(lock('1'.repeat(40), 'a')), target: localEdge(lock('2'.repeat(40), 'b')) });
 function assertTargetKept(events, store, target, failureCode) {
   assert.deepEqual(earlierInstalls(events), [], 'no earlier release is installed after the cutover');
   assert.equal(events.some((e) => e.startsWith('prune:')), false, 'nothing is pruned, the worker included');

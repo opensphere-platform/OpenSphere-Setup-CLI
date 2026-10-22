@@ -121,7 +121,6 @@ const WORKLOADS = Object.freeze([
   { component: 'consoleApi', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-api', container: 'api' },
   { component: 'extensionController', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-extension-controller', container: 'controller' },
   { component: 'osaaGateway', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-osaa-gateway', container: 'gateway' },
-  { component: 'r2d2HermesWorker', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-console-osaa-gateway', container: 'hermes-worker' },
   { component: 'osdst', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-osdst', container: 'osdst' },
   { artifact: 'osShellControl', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-shell-api', container: 'api' },
   { artifact: 'osShellControl', namespace: 'opensphere-console', kind: 'deployment', name: 'opensphere-shell-gateway', container: 'gateway' },
@@ -454,6 +453,23 @@ export function verifyShellRuntimeReferences(lock, container) {
   return true;
 }
 
+export function verifyNativeRuntimeReferences(lock,container,{policy,identity,clusterUid}={}){
+  const expected=lock.components?.r2d2OpenClawGateway?.image;if(!expected)return false;
+  const one=name=>{const found=(container.env??[]).filter(x=>x.name===name);if(found.length!==1)throw Error('Native runtime reference is missing or duplicated: '+name);return found[0];};
+  if(one('R2D2_BACKEND').value!=='openclaw-native'||one('R2D2_NATIVE_GATEWAY_IMAGE').value!==expected
+    ||one('R2D2_NATIVE_BRIDGE_IMAGE').value!==lock.components.osaaGateway.image)throw Error('Native runtime images differ from the exact release');
+  for(const[name,key]of[['OPENSPHERE_INSTALLATION_ID','installationId'],['R2D2_NATIVE_RUNTIME_POLICY','policy.json']]){
+    const ref=one(name).valueFrom?.configMapKeyRef;
+    if(ref?.name!=='opensphere-r2d2-runtime-policy'||ref.key!==key||ref.optional===true||one(name).value!==undefined)throw Error('Native runtime policy reference differs');
+  }
+  let value;try{value=JSON.parse(policy?.data?.['policy.json']);}catch{throw Error('Native runtime policy is not valid JSON');}
+  if(policy.metadata?.labels?.['app.kubernetes.io/managed-by']!=='opensphere-setup'||identity?.immutable!==true
+    ||identity.data?.clusterUid!==clusterUid||policy.data.installationId!==identity.data?.installationId
+    ||value.installationId!==identity.data.installationId||value.image!==expected||value.bridgeImage!==lock.components.osaaGateway.image)throw Error('Native runtime policy/installation binding differs');
+  if((container.env??[]).some(x=>x.name.startsWith('R2D2_HERMES_')))throw Error('Retired Hermes activation is forbidden');
+  return true;
+}
+
 function verifyWorkloads(lock, {
   requireZeroRestarts,
   componentSelection = null,
@@ -462,6 +478,7 @@ function verifyWorkloads(lock, {
   historicalBootstrapVerified = false
 }) {
   const selectedComponents = componentSelection ? new Set(componentSelection) : null;
+  if(selectedComponents?.has('r2d2OpenClawGateway'))selectedComponents.add('osaaGateway');
   const expected = new Set();
   const resources = [];
   const selectedWorkloads = [];
@@ -497,6 +514,16 @@ function verifyWorkloads(lock, {
       // The session runtime is launched on demand by these controllers. Its
       // verified reference represents this artifact; there is no base Deployment.
       expected.add(lock.auxiliaryArtifacts.osShellRuntime.image);
+    }
+    if(spec.component==='osaaGateway'&&lock.components.r2d2OpenClawGateway){
+      verifyNativeRuntimeReferences(lock,container,{
+        policy:getJson(['-n','opensphere-console','get','configmap','opensphere-r2d2-runtime-policy']),
+        identity:getJson(['-n','opensphere-console','get','configmap','opensphere-installation-identity']),
+        clusterUid:kubectl(['get','namespace','kube-system','-o','jsonpath={.metadata.uid}'],{capture:true})});
+      if((podSpec.containers??[]).some(x=>/hermes/i.test(x.name))||(podSpec.volumes??[]).some(x=>/hermes|ipc/i.test(x.name)))throw Error('Retired shared runtime sidecar/IPC is forbidden');
+      // Like OS Shell runtime images, this is an on-demand image reference,
+      // not a claim that a personal Pod exists before a user starts one.
+      expected.add(lock.components.r2d2OpenClawGateway.image);
     }
     const pullSecrets = (podSpec?.imagePullSecrets ?? []).map(({ name }) => name);
     if (!pullSecrets.includes(REGISTRY_PULL_SECRET)) {

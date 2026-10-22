@@ -7,12 +7,14 @@ import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { isIP } from 'node:net';
 import { readFileSync } from 'node:fs';
+import {parseAllDocuments} from 'yaml';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { kubectl, run } from './process.mjs';
 import { ensureInstallationIdentity } from './installation-identity.mjs';
+import {NATIVE_RUNTIME_RENDERER,needsNativeRuntimePreparation,isLegacyNativeCutover,prepareNativeRuntimePrerequisites,applyNativeRuntimePrerequisites,bootstrapNativeRegistryCredential} from './r2d2-native-prerequisites.mjs';
 import {captureControllerSource,controllerSourceData,CONTROLLER_SOURCE_KEY} from './controller-source.mjs';
 import { CLUSTER_SCOPED_MANAGED_CRDS, listManagedClusterResiduals, assertNoManagedClusterResiduals, assertManagedAdmissionParameters } from './installation-residuals.mjs';
 import {purgeBeszelHostState,purgeExternalConsoleRbac} from './uninstall-residuals.mjs';
@@ -465,15 +467,12 @@ export const BESZEL_MANIFEST = Object.freeze({
 // is present in the installed release lock, its own component release still
 // needs an authoritative manifest and rollout contract so Setup can update it
 // without rebuilding or reapplying the Console core.
-// The R2D2 Hermes worker is the `hermes-worker` sidecar of this Deployment.
-// Its image slot is not a strict replacement: Console sources that predate
-// the worker (an explicit rollback baseline) have no such placeholder, and
-// renderManifest resolves it only when the source exposes it.  Either owner's
-// component release applies the complete Gateway manifest.
-export const R2D2_HERMES_WORKER_IMAGE_PLACEHOLDER = '__OPENSPHERE_R2D2_HERMES_WORKER_IMAGE__';
+// C_AI provisions the governed native image in private per-user Pods.
+// Both image owners change the C_AI Deployment's exact policy/image binding.
+export const R2D2_OPENCLAW_GATEWAY_IMAGE_PLACEHOLDER = '__OPENSPHERE_R2D2_OPENCLAW_GATEWAY_IMAGE__';
 export const OSAA_GATEWAY_MANIFEST = Object.freeze({
   path: 'apps/osaa-gateway/deploy.yaml',
-  componentOwners: ['osaaGateway', 'r2d2HermesWorker'],
+  componentOwners: ['osaaGateway', 'r2d2OpenClawGateway'],
   applyCompleteForComponentOwners: true,
   replacements: [['__OPENSPHERE_OSAA_GATEWAY_IMAGE__', 'osaaGateway']]
 });
@@ -512,6 +511,7 @@ const LEGACY_SUPABASE_MANIFEST = Object.freeze({
 });
 
 export const FOUNDATION_ARTIFACT_PATHS = Object.freeze([
+  NATIVE_RUNTIME_RENDERER,
   PLATFORM_CORE_ARTIFACT,
   HISS_EXECUTION_PROFILE.consoleArtifactPath,
   HISS_VALIDATION_ARTIFACT,
@@ -744,7 +744,7 @@ export const COMPONENT_ROLLOUTS = Object.freeze({
   beszelAgent: [['opensphere-monitoring', 'daemonset/beszel-agent', '600s']],
   beszelBootstrap: [],
   osaaGateway: [['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']],
-  r2d2HermesWorker: [['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']],
+  r2d2OpenClawGateway: [['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']],
   osdst: [['opensphere-console', 'deployment/opensphere-osdst', '600s']],
   osaaGovernedAdapter: [],
   notificationDispatcher: [],
@@ -912,17 +912,18 @@ function ensureExternalShellTlsSecret(reference, source) {
 
 // A successful host supply-chain login does not establish runtime pull access.
 // Reuse the existing owner observation; do not copy temporary OAuth credentials.
-export function assertManagedRegistryReady(owner, pullSecrets, {now=Date.now()}={}) {
+export function assertManagedRegistryReady(owner, pullSecrets, {now=Date.now(),retiredNativeNamespaceBootstrap=false}={}) {
   const observed=Date.parse(owner?.observation?.verifiedAt || '');
   const expires=owner?.credentials?.lifecycle?.expiresAt;
-  const expected=[...REGISTRY_NAMESPACES].sort();
+  const namespaces=retiredNativeNamespaceBootstrap?REGISTRY_NAMESPACES.filter(n=>n!=='opensphere-r2d2'):REGISTRY_NAMESPACES;
+  const expected=[...namespaces].sort();
   const actual=owner?.observation?.namespaces;
   if(owner?.phase!=='Ready' || !owner.credentials || !Number.isFinite(observed)
     || observed>now+30000 || now-observed>=20*60*1000
     || (expires!=null && (!Number.isFinite(Date.parse(expires)) || Date.parse(expires)<=now))
     || owner.observation.generation!==owner.generation
     || !Array.isArray(actual) || JSON.stringify([...actual].sort())!==JSON.stringify(expected)
-    || REGISTRY_NAMESPACES.some(namespace=>{
+    || namespaces.some(namespace=>{
       const secret=pullSecrets.get(namespace);
       return !secretHasGhcrCredential(secret) || secret.metadata?.annotations?.[GENERATION_ANNOTATION]!==owner.generation;
     })) {
@@ -930,15 +931,17 @@ export function assertManagedRegistryReady(owner, pullSecrets, {now=Date.now()}=
   }
 }
 
-export function ensureRegistryPullSecrets(lock, suppliedCredentials, {lifecycleEnabled=false,requireRuntimeReady=false}={}) {
+export function ensureRegistryPullSecrets(lock, suppliedCredentials, {lifecycleEnabled=false,requireRuntimeReady=false,retiredNativeNamespaceBootstrap=false}={}) {
+  if(retiredNativeNamespaceBootstrap&&!lock.components?.r2d2OpenClawGateway)throw Error('Native namespace bootstrap requires the governed native target');
+  const namespaces=retiredNativeNamespaceBootstrap?REGISTRY_NAMESPACES.filter(n=>n!=='opensphere-r2d2'):REGISTRY_NAMESPACES;
   if(suppliedCredentials)validateCredential(suppliedCredentials);
   if(suppliedCredentials?.lifecycle?.mode==='github-device' && !lifecycleEnabled)throw new Error('Target Console has not enabled registry-auth/v1; OAuth runtime handoff is blocked');
   const requiresCredentials = releaseNeedsRegistryCredentials(lock);
-  const existing = new Map(REGISTRY_NAMESPACES.map((namespace) => {
+  const existing = new Map(namespaces.map((namespace) => {
     try { return [namespace, readSecret(namespace, REGISTRY_PULL_SECRET)]; }
     catch { return [namespace, null]; }
   }));
-  const everyNamespaceReady = REGISTRY_NAMESPACES.every((namespace) =>
+  const everyNamespaceReady = namespaces.every((namespace) =>
     requiresCredentials
       ? secretHasGhcrCredential(existing.get(namespace))
       : Boolean(existing.get(namespace))
@@ -947,7 +950,7 @@ export function ensureRegistryPullSecrets(lock, suppliedCredentials, {lifecycleE
   if(ownerJson.trim()){
     const owner=parseRegistryState(JSON.parse(ownerJson));
     if(!everyNamespaceReady)throw new Error('Runtime-owned registry pull Secrets are incomplete; repair through Console or an explicit recovery procedure');
-    if(requireRuntimeReady && requiresCredentials)assertManagedRegistryReady(owner,existing);
+    if(requireRuntimeReady && requiresCredentials)assertManagedRegistryReady(owner,existing,{retiredNativeNamespaceBootstrap});
     return {credentialsRequired:requiresCredentials,credentialSource:'console-managed',lifecycleGeneration:owner.generation};
   }
   if (!suppliedCredentials && everyNamespaceReady && !lifecycleEnabled) {
@@ -961,7 +964,7 @@ export function ensureRegistryPullSecrets(lock, suppliedCredentials, {lifecycleE
   if (requiresCredentials && !credentials) {
     throw new Error('This release contains private GHCR packages; provide --registry-username with --registry-token-stdin or authenticate gh with read:packages');
   }
-  for (const namespace of REGISTRY_NAMESPACES) {
+  for (const namespace of namespaces) {
     if (!credentials && existing.get(namespace)) continue;
     const manifest=registryPullSecretManifest(namespace, credentials);
     if(state){manifest.data=pullSecretData(credentials,state.generation);manifest.metadata.annotations={[GENERATION_ANNOTATION]:state.generation};}
@@ -1068,12 +1071,15 @@ export function renderManifest(
     }
     yaml = yaml.replaceAll('__OPENSPHERE_CONSOLE_INDEX_CONTENT_IMAGE__', image);
   }
-  if (yaml.includes(R2D2_HERMES_WORKER_IMAGE_PLACEHOLDER)) {
-    const image = lock.components?.r2d2HermesWorker?.image;
-    if (!/^ghcr\.io\/opensphere-platform\/opensphere-console-r2d2-hermes-worker@sha256:[a-f0-9]{64}$/.test(image ?? '')) {
-      throw new Error(`Manifest ${spec.path} requires a digest-pinned r2d2HermesWorker component`);
+  if (yaml.includes(R2D2_OPENCLAW_GATEWAY_IMAGE_PLACEHOLDER)) {
+    const image = lock.components?.r2d2OpenClawGateway?.image;
+    if (!/^ghcr\.io\/opensphere-platform\/opensphere-console-r2d2-openclaw@sha256:[a-f0-9]{64}$/.test(image ?? '')) {
+      throw new Error(`Manifest ${spec.path} requires a digest-pinned r2d2OpenClawGateway component`);
     }
-    yaml = yaml.replaceAll(R2D2_HERMES_WORKER_IMAGE_PLACEHOLDER, image);
+    yaml = yaml.replaceAll(R2D2_OPENCLAW_GATEWAY_IMAGE_PLACEHOLDER, image);
+  }
+  if(yaml.includes('__OPENSPHERE_R2D2_HERMES_WORKER_IMAGE__')) {
+    throw new Error('Retired Hermes runtime manifests cannot be activated; independent Console/OS Shell repair remains available');
   }
   yaml = yaml.replaceAll('__OPENSPHERE_SUPABASE_NAMESPACE__', 'opensphere-console-data');
   yaml = yaml.replaceAll('https://localhost:8090', normalizedConsoleUrl);
@@ -1422,8 +1428,8 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
     '-KnowledgePackageDirectory', foundation.knowledgeDirectory,
     '-OsaaGatewayImage', lock.components.osaaGateway.image,
     // Older Console installers (rollback baselines) have no worker parameter.
-    ...(lock.components.r2d2HermesWorker
-      ? ['-R2d2HermesWorkerImage', lock.components.r2d2HermesWorker.image]
+    ...(lock.components.r2d2OpenClawGateway
+      ? ['-R2d2OpenClawGatewayImage', lock.components.r2d2OpenClawGateway.image]
       : []),
     '-OsdstImage', lock.components.osdst.image,
     '-OsShellControlImage', lock.auxiliaryArtifacts.osShellControl.image,
@@ -1647,6 +1653,18 @@ function escapeExpression(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+function nativeImageReferenceInManifest(source,lock){
+ if(source.path!==OSAA_GATEWAY_MANIFEST.path)return false;
+ const docs=parseAllDocuments(source.yaml).map(doc=>{if(doc.errors.length)throw Error('Native image reference manifest is invalid YAML');return doc.toJS();});
+ const deployments=docs.filter(d=>d?.kind==='Deployment'&&d.metadata?.namespace==='opensphere-console'&&d.metadata?.name==='opensphere-console-osaa-gateway');
+ if(deployments.length!==1)return false;
+ const containers=deployments[0].spec?.template?.spec?.containers??[];
+ if(containers.length!==1||containers[0].name!=='gateway'||containers[0].image!==lock.components.osaaGateway.image)return false;
+ const env=containers[0].env??[];
+ return [['R2D2_BACKEND','openclaw-native'],['R2D2_NATIVE_GATEWAY_IMAGE',lock.components.r2d2OpenClawGateway.image],['R2D2_NATIVE_BRIDGE_IMAGE',lock.components.osaaGateway.image]]
+  .every(([name,value])=>{const matches=env.filter(e=>e.name===name);return matches.length===1&&matches[0].value===value&&matches[0].valueFrom===undefined;});
+}
+
 export function componentReleaseWorkloadManifests(
   lock,
   prepared,
@@ -1682,7 +1700,7 @@ export function componentReleaseWorkloadManifests(
       }
       if (completeOwners.has(component)
           && (completeOwners.size === 1 || releaseSpec?.applyCompleteForComponentOwners === true)) {
-        if (!imageLine.test(source.yaml)) continue;
+        if(component==='r2d2OpenClawGateway'?!nativeImageReferenceInManifest(source,lock):!imageLine.test(source.yaml))continue;
         found = true;
         selected.set(`${source.path}#complete`, {
           path: `${source.path}#${component}`,
@@ -1764,6 +1782,10 @@ function installPreparedComponentRelease(
   progress,
   { applyMigrations = true, onPrerequisite = () => {} } = {}
 ) {
+  if(prepared.foundation.nativeRuntime){
+    if(!prepared.foundation.nativePrerequisitesApplied)applyNativeRuntimePrerequisites(prepared.foundation.nativeRuntime);
+    bootstrapNativeRegistryCredential(prepared.foundation.nativeRuntime);
+  }
   if (applyMigrations) runComponentMigrations(prepared.foundation, progress);
   const release = componentReleaseWorkloadManifests(lock, prepared, changedComponents);
   // Before the first workload manifest: a new extension controller verifies the Foundation runtime RBAC on
@@ -2658,6 +2680,9 @@ async function prepareRelease(
       options.registryCredentials
     )
   ]);
+  if(needsNativeRuntimePreparation(lock)&&!options.rollbackEvidenceOnly)foundation.nativeRuntime=prepareNativeRuntimePrerequisites(lock,{
+    inputPath:options.r2d2RuntimePolicyPath,input:options.r2d2RuntimePolicy,
+    rendererPath:join(root,NATIVE_RUNTIME_RENDERER),manifest:foundation.migration?.manifest});
   return { foundation, base, all: [...foundation.release, ...base] };
 }
 
@@ -2687,7 +2712,10 @@ export async function prepareComponentRelease(
     verifiedBom,
     // The release currently on the cluster. Its controller's Foundation profile decides whether this
     // release changes it; without one (forward repair) the target profile is always applied.
-    installedLock = null
+    installedLock = null,
+    r2d2RuntimePolicyPath,
+    r2d2RuntimePolicy,
+    rollbackEvidenceOnly=false
   } = {}
 ) {
   const specs = componentReleaseManifestSpecs(lock, changedComponents);
@@ -2752,6 +2780,15 @@ export async function prepareComponentRelease(
   }
   const foundation = { root, release: foundationRelease, migration,controllerSource,
     ...(foundationRuntimeRbac ? { foundationRuntimeRbac } : {}) };
+  if(needsNativeRuntimePreparation(lock,changedComponents)&&!rollbackEvidenceOnly){
+    const renderer=await fetchReleaseArtifact(lock,NATIVE_RUNTIME_RENDERER,{sourceRevision:lock.components.osaaGateway.sourceRevision,sourceArtifactCredential});
+    await writeReleaseArtifact(root,NATIVE_RUNTIME_RENDERER,renderer);
+    // An image-only native update still proves the registered journal from
+    // the release source; it does not infer it from a running Pod.
+    const nativeManifest=migration?.manifest??(await readVerifiedMigrationManifest(lock,lock.components.osaaGateway.sourceRevision,undefined,SUPABASE_MIGRATION_MANIFEST,{sourceArtifactCredential})).manifest;
+    foundation.nativeRuntime=prepareNativeRuntimePrerequisites(lock,{inputPath:r2d2RuntimePolicyPath,input:r2d2RuntimePolicy,
+      rendererPath:join(root,NATIVE_RUNTIME_RENDERER),manifest:nativeManifest});
+  }
   return { foundation, base, all: [...foundationRelease, ...base] };
 }
 
@@ -2786,6 +2823,10 @@ export async function preflightReleaseArtifacts(lock, {
 }
 
 async function installPreparedRelease(lock, prepared, storageClass, consoleUrl, label, progress) {
+  if(prepared.foundation.nativeRuntime){
+    if(!prepared.foundation.nativePrerequisitesApplied)applyNativeRuntimePrerequisites(prepared.foundation.nativeRuntime);
+    bootstrapNativeRegistryCredential(prepared.foundation.nativeRuntime);
+  }
   const options = { preserveHostLocalEdgeTrust: lock.channel === 'edge' };
   const prerequisitePaths = prepared.foundation.target ? [
     'apps/extension-controller/crds/ui-plugin-crds.yaml',
@@ -2836,6 +2877,7 @@ export async function bootstrap(lock, {
   shellTlsSecret,
   registryCredentials,
   sourceArtifactCredential = null,
+  r2d2RuntimePolicyPath,
   requiredPlatforms,
   progress
 } = {}) {
@@ -2938,7 +2980,7 @@ export async function bootstrap(lock, {
       cluster.storageClass,
       effectiveConsoleUrl,
       effectiveAuthEnvironment,
-      { sourceArtifactCredential, registryCredentials,verifiedBom }
+      { sourceArtifactCredential, registryCredentials,verifiedBom,r2d2RuntimePolicyPath }
     );
     progress?.done(`${installArtifactCount(lock, prepared.foundation?.installerArtifactPaths) + Number(prepared.foundation?.migration?.manifest?.migrationCount || 0)} artifacts, ${prepared.all.length} manifest groups`);
 
@@ -2950,6 +2992,7 @@ export async function bootstrap(lock, {
     if (externalShellTls) inspectExternalShellTlsSecret(externalShellTls, effectiveConsoleUrl);
     progress?.step('관리 namespace, installation lock과 GHCR image pull 경로 준비');
     ensureNamespace('opensphere-console');
+    if(prepared.foundation.nativeRuntime)ensureInstallationIdentity({adoptInstallationId:prepared.foundation.nativeRuntime.installationId});
     recordInstallationState(
       lock,
       cluster.storageClass,
@@ -2966,6 +3009,10 @@ export async function bootstrap(lock, {
     for (const namespace of MANAGED_NAMESPACES.filter((name) => name !== 'opensphere-console')) {
       ensureNamespace(namespace);
       progress?.item('namespace', namespace);
+    }
+    if(prepared.foundation.nativeRuntime){
+      applyNativeRuntimePrerequisites(prepared.foundation.nativeRuntime);
+      prepared.foundation.nativePrerequisitesApplied=true;
     }
     const registry = ensureRegistryPullSecrets(lock, registryCredentials, {lifecycleEnabled:registryLifecycleEnabled});
     progress?.done(`GHCR credentials=${registry.credentialSource}`);
@@ -3142,6 +3189,7 @@ export async function upgrade(
     consoleUrl,
     registryCredentials,
     sourceArtifactCredential = null,
+    r2d2RuntimePolicyPath,
     requiredPlatforms,
     forwardRepairRecordDigest,
     oneWayRecoveryRecordDigest,
@@ -3264,6 +3312,7 @@ export async function upgrade(
     return current?.metadata?.uid === owner.uid && current.metadata.resourceVersion === owner.resourceVersion;
   };
   operations.preflight({ storageClass: config.storageClass, channel: targetLock.channel });
+  const legacyNativeCutover=isLegacyNativeCutover(previousLock,targetLock);
   if (!profiledAdoption) {
     operations.ensureManagedNamespaces();
     // OAuth here authenticates supply-chain reads only. Preserve the installed
@@ -3271,7 +3320,7 @@ export async function upgrade(
     operations.ensureRegistryPullSecrets(
       targetLock,
       registryCredentials?.lifecycle?.mode === 'github-device' ? null : registryCredentials,
-      {requireRuntimeReady: true}
+      {requireRuntimeReady: true,...(legacyNativeCutover?{retiredNativeNamespaceBootstrap:true}:{})}
     );
   }
   const initialAdmin = config.initialAdmin;
@@ -3301,7 +3350,7 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           config.authEnvironment,
-          { changedComponents: changedWorkloadComponents, includeMigrations: true, sourceArtifactCredential, registryCredentials, verifiedBom:targetVerifiedBom,
+          { changedComponents: changedWorkloadComponents, includeMigrations: true, sourceArtifactCredential, registryCredentials, verifiedBom:targetVerifiedBom,r2d2RuntimePolicyPath,
             installedLock: repair ? null : previousLock }
         ),
         rollbackChangedComponents.length > 0
@@ -3314,6 +3363,7 @@ export async function upgrade(
             {
               changedComponents: rollbackChangedComponents,
               includeMigrations: false,
+              rollbackEvidenceOnly:true,
               sourceArtifactCredential,
               registryCredentials,
               // A rollback runs over the target, so it restores the previous profile exactly as the
@@ -3334,15 +3384,16 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           config.authEnvironment,
-          { sourceArtifactCredential, registryCredentials,verifiedBom:targetVerifiedBom }
+          { sourceArtifactCredential, registryCredentials,verifiedBom:targetVerifiedBom,r2d2RuntimePolicyPath }
         ),
-        recovery ? Promise.resolve({ foundation: { root: rollbackWork, release: [], migration: null }, base: [], all: [] }) : operations.prepareRelease(
+        recovery||legacyNativeCutover ? Promise.resolve({ foundation: { root: rollbackWork, release: [], migration: null }, base: [], all: [] }) : operations.prepareRelease(
           previousLock,
           rollbackWork,
           config.storageClass,
           effectiveConsoleUrl,
           config.authEnvironment,
           {
+            rollbackEvidenceOnly:true,
             optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS,
             migrationSourceRevision: targetLock.sourceRevision,
             migrationEvidence: targetLock.releaseBom?.migrationManifest,
@@ -3360,7 +3411,7 @@ export async function upgrade(
       operations.ensureManagedNamespaces();
       operations.ensureRegistryPullSecrets(targetLock,
         registryCredentials?.lifecycle?.mode === 'github-device' ? null : registryCredentials,
-        {requireRuntimeReady: true});
+        {requireRuntimeReady: true,...(legacyNativeCutover?{retiredNativeNamespaceBootstrap:true}:{})});
     }
     const recordedInventory = operations.readReleaseInventory();
     if (componentTransition && !recordedInventory && !repair) {
@@ -3378,7 +3429,7 @@ export async function upgrade(
     }
     // A recovery never goes back, so it prunes only what the record says the installation owns.
     const previousInventory = recordedInventory ?? recoveredInventory?.inventory
-      ?? (recovery ? [] : operations.releaseResourceInventory(rollback.all));
+      ?? (recovery||legacyNativeCutover ? [] : operations.releaseResourceInventory(rollback.all));
     const previousComponentInventory = componentTransition && rollback.all.length > 0
       ? operations.releaseResourceInventory(rollback.all)
       : [];
@@ -3425,7 +3476,7 @@ export async function upgrade(
     // the same source and checks the rollback preparation uses (readRollbackMigrationChain), not the
     // migration owners' chains, which answer a different question (previousFits above). Not being
     // able to read either is its own error, never a verdict.
-    const needsOwnChainRollback = Boolean(boundary?.pending.length && !componentTransition);
+    const needsOwnChainRollback = Boolean(boundary?.pending.length && !componentTransition&&!legacyNativeCutover);
     let rollbackChain = null;
     let rollbackVerdict = null;
     if (needsOwnChainRollback && (!recovery || startState?.phase === 'Ready')) {
@@ -3453,7 +3504,7 @@ export async function upgrade(
       }
       ownChainRollback = await operations.prepareRelease(previousLock, ownChainRollbackWork, config.storageClass,
         effectiveConsoleUrl, config.authEnvironment,
-        { optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS, sourceArtifactCredential, registryCredentials });
+        { optionalArtifacts: LEGACY_ROLLBACK_OPTIONAL_ARTIFACTS, sourceArtifactCredential, registryCredentials,rollbackEvidenceOnly:true });
       // The prepared installers must carry exactly the judged chain.
       const prepared = ownChainRollback.foundation?.migration?.manifest?.migrations;
       if (!Array.isArray(prepared) || JSON.stringify(prepared) !== JSON.stringify(rollbackChain.migrations)) {
@@ -3468,7 +3519,7 @@ export async function upgrade(
       previousVerifiedAt: startState?.phase === 'Ready' ? startState.verification?.verifiedAt ?? null : null,
       targetReleaseDigest: targetLock.releaseDigest,
       startedAt: new Date().toISOString(),
-      rollback: recovery ? 'never' : boundary?.pending.length ? 'decided-after-failure' : 'available',
+      rollback: recovery||legacyNativeCutover||target.foundation?.nativeRuntime ? 'never' : boundary?.pending.length ? 'decided-after-failure' : 'available',
       ...(boundary ? { oneWay: transitionOneWay(boundary) } : {})
     };
     // Re-review N2: what this run has already done, for an exact account when it must stop.
@@ -3525,6 +3576,7 @@ export async function upgrade(
     }
     let agentIdentityMigrationCommitted = false;
     let forwardRepairStarted = false;
+    let nativeTargetApplyStarted=false;
     const repairStateOptions = (extra = {}) => {
       if (!repair) return extra;
       const record = operations.readInstallationRecord();
@@ -3549,6 +3601,7 @@ export async function upgrade(
         forwardRepairStarted = true;
         repair.bootstrap=operations.runForwardRepairBootstrap(targetLock,repairResources);
       }
+      nativeTargetApplyStarted=legacyNativeCutover||!!target.foundation?.nativeRuntime;
       if (componentTransition) {
         operations.installPreparedComponentRelease(
           targetLock,
@@ -3628,6 +3681,15 @@ export async function upgrade(
       // Never act on an installation another writer changed meanwhile.
       if (!ownsRecord()) {
         throw new Error(`Upgrade failed (${upgradeError.message}); ${lostOwnership('meanwhile').message.replace(/^The/, 'the')}`);
+      }
+      if(nativeTargetApplyStarted){
+        // The retired autonomous engine is never an automatic fallback.
+        // A policy/image transition also cannot silently restore earlier quota
+        // or credentials. Keep management services for explicit forward repair.
+        operations.recordReleaseInventory(targetLock,targetInventory);
+        ownedWrite(targetLock,'Failed',{failureCode:'native-runtime-forward-repair-required',transition:{...transition,outcome:{
+          failedAt:new Date().toISOString(),rollbackAvailable:false,reason:'Native runtime transition started; no retired engine or previous runtime policy was automatically activated',inventoryVerified:false}}});
+        throw new Error('native-runtime-forward-repair-required: target retained; no retired engine was restarted or Console/OS Shell resource removed. Explicit management recovery is required; overall readiness is not claimed: '+upgradeError.message);
       }
       if (agentIdentityCutover) {
         if (agentIdentityMigrationCommitted) {

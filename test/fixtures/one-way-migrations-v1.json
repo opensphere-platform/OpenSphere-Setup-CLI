@@ -9,6 +9,14 @@
       "path": "migrations/versions/0080_osdst_task_engine_cutover.sql",
       "sha256": "e4d02ae65e9c2c6b25d7e81d4239720fdbd329773494f789abf3ed42a739358a",
       "reason": "R2D2 task engine cutover: LangGraph tasks move to Hermes and releases built before it refuse to create tasks on the database."
+    },
+    {
+      "globalId": "opensphere-console/20261022/0148",
+      "semanticKey": "console.r2d2.native_request_journal",
+      "predecessorGlobalId": "opensphere-console/20261019/0143",
+      "path": "migrations/versions/0148_r2d2_native_request_journal.sql",
+      "sha256": "e09b640c851179e4adc174a1cb9ceca7be9769ac757f264ce52a515f91470133",
+      "reason": "Native OpenClaw cutover: earlier engines are not reinstalled after native request journal activation; explicit forward recovery retains Console management services."
     }
   ]
 }

@@ -11,7 +11,7 @@ assert.ok(begin>=0 && end>begin);
 const production=source.slice(begin,end);
 const names=['gitea','giteaPostgres','consoleApi','extensionController','supabasePostgres',
   'supabaseAuth','supabaseRest','supabaseStorage','beszelHub','beszelAgent','beszelBootstrap',
-  'osaaGateway','osdst'];
+  'osaaGateway','r2d2OpenClawGateway','osdst'];
 const lock={
   channel:'edge',
   releaseDigest:'sha256:'+'d'.repeat(64),
@@ -156,17 +156,14 @@ test('HISS authority preparation is awaited and a conflict prevents later Main S
   const failed=preparedHarness({failHiss:true});await assert.rejects(failed.run(prepared),/HISS preparation conflict/);
   assert.equal(failed.state.validation,undefined);assert.ok(!failed.state.applied.includes('deploy/opensphere-console.yaml'));
 });
-test('native installer receives the R2D2 Hermes worker image only from a lock that governs it',()=>{
-  const preWorker=harness();
-  preWorker.run(lock,foundation,'standard','https://localhost:1114',preWorker.progress);
-  assert.equal(preWorker.state.nativeArgs.includes('-R2d2HermesWorkerImage'),false);
-
-  const workerImage=`ghcr.io/fixture/r2d2HermesWorker@sha256:${'f'.repeat(64)}`;
-  const current={...lock,components:{...lock.components,r2d2HermesWorker:{image:workerImage}}};
+test('native installer receives the admitted personal Gateway image exactly once and never a legacy worker flag',()=>{
+  const nativeImage='ghcr.io/opensphere-platform/opensphere-console-r2d2-openclaw@sha256:'+'f'.repeat(64);
+  const current={...lock,components:{...lock.components,r2d2OpenClawGateway:{image:nativeImage}}};
   const h=harness();
   h.run(current,foundation,'standard','https://localhost:1114',h.progress);
   const args=h.state.nativeArgs;
-  assert.equal(args.filter(arg=>arg==='-R2d2HermesWorkerImage').length,1);
-  assert.equal(args[args.indexOf('-R2d2HermesWorkerImage')+1],workerImage);
+  assert.equal(args.filter(arg=>arg==='-R2d2OpenClawGatewayImage').length,1);
+  assert.equal(args[args.indexOf('-R2d2OpenClawGatewayImage')+1],nativeImage);
   assert.equal(args[args.indexOf('-OsaaGatewayImage')+1],current.components.osaaGateway.image);
+  assert.equal(args.includes('-R2d2HermesWorkerImage'),false);
 });
