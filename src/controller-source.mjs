@@ -17,11 +17,13 @@ const stable = v => Array.isArray(v) ? v.map(stable) : v && typeof v === 'object
 const json = v => JSON.stringify(stable(v));
 const fail = () => {throw Error('ControllerSourceMismatch');};
 // A projected credential's fixed, read-only file reference is safe to capture;
-// credential bytes are not. Only the two reviewed C_EXT audience projections
-// qualify, with their exact mount, path and bounded lifetime.
+// credential bytes are not. Only the three reviewed C_EXT audience projections
+// qualify, with their exact mount, path and bounded lifetime. Y1 (plan §2 ★, approved
+// 2026-10-20): C_EXT calls Foundation's lifecycle event API with opensphere-foundation-lifecycle.
 const PROVIDER_FILES={
   CONSOLE_PROVIDER_DISPATCH_TOKEN_FILE:{name:'provider-dispatch',audience:'opensphere-foundation-dispatch'},
   CONSOLE_PROVIDER_ENGINE_TOKEN_FILE:{name:'provider-engine',audience:'opensphere-provider-engine-evidence'},
+  CONSOLE_PROVIDER_LIFECYCLE_TOKEN_FILE:{name:'provider-lifecycle',audience:'opensphere-foundation-lifecycle'},
 };
 function projectedProviderFile(env,container,pod) {
   const approved=PROVIDER_FILES[env.name];if(!approved)return false;
