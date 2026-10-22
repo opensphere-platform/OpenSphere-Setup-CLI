@@ -37,7 +37,11 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     "addonofferings.catalog.opensphere.io",
     "addonplans.catalog.opensphere.io",
     "postgresruntimecatalogs.catalog.opensphere.io",
-    "addoninstalls.catalog.opensphere.io"
+    "addoninstalls.catalog.opensphere.io",
+    // PFSS Provider lifecycle records Foundation writes (Y1, user decision 2026-10-19 D-Y2; Foundation
+    // contracts/crds/provider-lifecycle.crds.json vendored into Console foundation-bootstrap.json and deploy.yaml).
+    "providerlifecycles.foundation.opensphere.io",
+    "provideroperations.foundation.opensphere.io"
   ]),
   clusterRbac: Object.freeze([
     'clusterrole/opensphere-cluster-manager-read',
