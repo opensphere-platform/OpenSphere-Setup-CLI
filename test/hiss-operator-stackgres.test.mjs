@@ -10,7 +10,8 @@ import { HISS_OPERATOR_STACKGRES, prepareHissOperatorStackgres, verifyHissOperat
 const scope = { context: 'rke2', channel: 'edge', consoleUrl: 'https://console.example.test' };
 const documents = () => parseAllDocuments(artifact.yaml).map((d) => d.toJSON()).filter(Boolean);
 const id = (o) => `${o.kind}/${o.metadata?.namespace || ''}/${o.metadata?.name}`;
-const GUARDS = ['opensphere-pfss-pg-writers', 'opensphere-pfss-pg-cluster-scope', 'opensphere-pfss-pg-foundation-names', 'opensphere-pfss-pg-sgclusters', 'opensphere-pfss-pg-cluster-objects', 'opensphere-pfss-pg-cluster-services'];
+const GUARDS = ['opensphere-pfss-pg-writers', 'opensphere-pfss-pg-cluster-scope', 'opensphere-pfss-pg-foundation-names', 'opensphere-pfss-pg-sgclusters', 'opensphere-pfss-pg-cluster-objects', 'opensphere-pfss-pg-cluster-services',
+  'opensphere-hiss-stackgres-operator-workload', 'opensphere-hiss-stackgres-operator-extension'];
 
 function cluster({ warnings = false, probe = 'denied', drift = null, narrow = false } = {}) {
   const state = new Map(), calls = [];
@@ -55,13 +56,13 @@ function cluster({ warnings = false, probe = 'denied', drift = null, narrow = fa
 }
 const quick = { sleep: () => {}, attempts: 6 };
 
-test('the artifact is pinned: 45 objects from Cluster Manager deploy/hiss-operator-stackgres.yaml', () => {
+test('the artifact is pinned: 49 objects from Cluster Manager deploy/hiss-operator-stackgres.yaml', () => {
   assert.equal(createHash('sha256').update(artifact.yaml).digest('hex'), HISS_OPERATOR_STACKGRES.sha256);
-  assert.equal(verifyHissOperatorStackgresArtifact(artifact.yaml).length, 45);
+  assert.equal(verifyHissOperatorStackgresArtifact(artifact.yaml).length, 49);
   assert.throws(() => verifyHissOperatorStackgresArtifact(artifact.yaml.replace('verbs: [get, list]', 'verbs: [get, list, create]')), { code: 'UNTRUSTED_PROFILE' });
   assert.match(HISS_OPERATOR_STACKGRES.sourceRevision, /^[a-f0-9]{40}$/);
   const kinds = documents().reduce((m, d) => ({ ...m, [d.kind]: (m[d.kind] || 0) + 1 }), {});
-  assert.deepEqual(kinds, { Namespace: 3, NetworkPolicy: 2, ClusterRole: 2, ClusterRoleBinding: 2, Role: 12, RoleBinding: 12, ValidatingAdmissionPolicy: 6, ValidatingAdmissionPolicyBinding: 6 });
+  assert.deepEqual(kinds, { Namespace: 3, NetworkPolicy: 2, ClusterRole: 2, ClusterRoleBinding: 2, Role: 12, RoleBinding: 12, ValidatingAdmissionPolicy: 8, ValidatingAdmissionPolicyBinding: 8 });
   // Nothing here lets any account escalate, bind or impersonate, and the operator's ClusterRole only reads.
   for (const d of documents().filter((x) => x.rules)) for (const r of d.rules) assert.ok(r.verbs.every((v) => !['*', 'escalate', 'bind', 'impersonate'].includes(v)));
   assert.ok(documents().find((d) => d.kind === 'ClusterRole' && d.metadata.name === 'opensphere-stackgres-operator').rules.every((r) => r.verbs.every((v) => ['get', 'list'].includes(v))));
@@ -70,10 +71,10 @@ test('the artifact is pinned: 45 objects from Cluster Manager deploy/hiss-operat
 test('plan only reads; apply creates, reads back, waits for type checking and proves the Secret name guard', () => {
   const c = cluster();
   assert.deepEqual(prepareHissOperatorStackgres(artifact.yaml, scope, { runner: c.runner, ...quick }),
-    { state: 'NeedsPreparation', applied: false, resourceCount: 45, missing: 45, differs: 0 });
+    { state: 'NeedsPreparation', applied: false, resourceCount: 49, missing: 49, differs: 0 });
   assert.deepEqual(c.calls, ['get -f - --ignore-not-found -o json']);
   const applied = prepareHissOperatorStackgres(artifact.yaml, scope, { runner: c.runner, apply: true, ...quick });
-  assert.deepEqual(applied, { state: 'Applied', applied: true, resourceCount: 45, created: 45, updated: 0, guardProbe: 'denied' });
+  assert.deepEqual(applied, { state: 'Applied', applied: true, resourceCount: 49, created: 49, updated: 0, guardProbe: 'denied' });
   // The guards (and namespaces) are applied and type-checked before any RBAC or NetworkPolicy exists.
   assert.deepEqual(c.calls.filter((x) => x.startsWith('applied ')), ['applied Namespace,ValidatingAdmissionPolicy,ValidatingAdmissionPolicyBinding', 'applied NetworkPolicy,ClusterRole,ClusterRoleBinding,Role,RoleBinding']);
   assert.ok(c.calls.findIndex((x) => x.startsWith('get validatingadmissionpolicy')) < c.calls.findIndex((x) => x.startsWith('applied NetworkPolicy')));
@@ -103,4 +104,22 @@ test('changed live RBAC is reported as NeedsUpdate and a read-back that differs 
 
 test('the explicit target is required before any kubectl call', () => {
   assert.throws(() => prepareHissOperatorStackgres(artifact.yaml, { ...scope, context: '' }, { runner: () => assert.fail('unexpected I/O') }));
+});
+
+test('D-F8: the opensphere-stackgres fence is part of the pinned prerequisites, binds every requester and starts as Warn and Audit', () => {
+  const fences = ['opensphere-hiss-stackgres-operator-workload', 'opensphere-hiss-stackgres-operator-extension'];
+  for (const name of fences) {
+    const policy = documents().find((d) => d.kind === 'ValidatingAdmissionPolicy' && d.metadata.name === name);
+    const binding = documents().find((d) => d.kind === 'ValidatingAdmissionPolicyBinding' && d.metadata.name === name);
+    assert.equal(policy.spec.failurePolicy, 'Fail', name);
+    assert.deepEqual(binding.spec, { policyName: name, validationActions: ['Warn', 'Audit'] }, name);
+    assert.ok(!(policy.spec.matchConditions || []).some((c) => /userInfo/.test(c.expression)), `${name} has no identity exception`);
+  }
+  // Setup #45's F-6 coverage table counts this policy for opensphere-stackgres: it must match Deployments (and Pods) there.
+  const workload = documents().find((d) => d.kind === 'ValidatingAdmissionPolicy' && d.metadata.name === fences[0]).spec.matchConstraints;
+  assert.deepEqual(workload.namespaceSelector, { matchLabels: { 'kubernetes.io/metadata.name': 'opensphere-stackgres' } });
+  const resources = workload.resourceRules.flatMap((r) => r.resources);
+  for (const kind of ['pods', 'deployments', 'replicasets', 'jobs', 'secrets', 'serviceaccounts']) assert.ok(resources.includes(kind), kind);
+  // The six write guards stay Deny.
+  for (const b of documents().filter((d) => d.kind === 'ValidatingAdmissionPolicyBinding' && !fences.includes(d.metadata.name))) assert.deepEqual(b.spec.validationActions, ['Deny']);
 });

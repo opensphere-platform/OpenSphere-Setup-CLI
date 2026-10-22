@@ -108,20 +108,28 @@ export function prepareHissObservabilityBindingCrd(raw, scope, {runner=run, appl
 }
 // HISS operator facility hiss.operator.stackgres (PostgreSQL Provider design 2026-10-20 §9.1, P0 lab results §15-§16;
 // user decisions D-P1, D-P1a B, D-P2 and the Console-administrator bypass closure, 2026-10-20). Source: Cluster Manager
-// deploy/hiss-operator-stackgres.yaml (tools/render-hiss-operator-stackgres.cjs) at the revision below. 45 objects:
+// deploy/hiss-operator-stackgres.yaml (tools/render-hiss-operator-stackgres.cjs) at the revision below. 49 objects:
 // the operator namespace and the two PostgreSQL namespaces (PSA enforce=baseline), six ValidatingAdmissionPolicies with
 // Deny bindings (StackGres objects are written by Foundation and the operator only, Console administrator impersonation
 // included; a cluster's own accounts and dbops Jobs stay within their cluster; Foundation's Secret names; SGCluster names
 // and resource split), a default-deny NetworkPolicy in each PostgreSQL namespace, the reduced operator RBAC, Foundation's
 // write Role there (A4 exception until Y3) and Cluster Manager's executor and observer rights. Server-side apply under the
 // same field manager as the other HISS artifacts; no Helm, no caller input.
+// D-F8 (CM privileged-write fence design 2026-10-22, user decision: before P2 is applied) adds two policies with their
+// bindings, applied and type-checked with the write guards in phase 1: opensphere-hiss-stackgres-operator-workload (in
+// opensphere-stackgres only the reviewed StackGres 1.19.3 operator Deployment, ReplicaSets and Pods with the operator
+// ServiceAccount, the approved image digest and environment, and the rendered Secret, ServiceAccount, Service, Issuer and
+// Certificate) and opensphere-hiss-stackgres-operator-extension (the 14 StackGres CRDs and the two webhook configurations
+// keep their rendered settings). Both bind every requester; the bindings start as Warn and Audit (D-F6, like the chart
+// execution fence F1) and move to Deny in a later Setup revision. Setup #45's F-6 coverage counts the workload policy for
+// opensphere-stackgres.
 export const HISS_OPERATOR_STACKGRES = Object.freeze({
   id: 'hiss-operator-stackgres-v1',
   sourceRepository: 'opensphere-platform/OpenSphere-shell-clusterManager',
   sourcePath: 'deploy/hiss-operator-stackgres.yaml',
-  sourceRevision: 'e713a1848a84c09a8592dc1f267b2394a8d7b2d4',
-  sha256: '9c94b391bba1dda4a2d6e4292f17f4c1da44a2cf014361ac319f92cc2dd32159',
-  resourceCount: 45,
+  sourceRevision: 'cc027967a8effe44438902b44c41dc2dce8db5c3',
+  sha256: '85907be83b23efd769ee19f5f34bfdc2686f61db5bb99afdefd4324d929bdfe5',
+  resourceCount: 49,
 });
 const STACKGRES_SECRET_PROBE_SUBJECT = 'system:serviceaccount:opensphere-foundation:foundation-control-plane';
 const STACKGRES_SECRET_GUARD = 'opensphere-pfss-pg-foundation-names';
