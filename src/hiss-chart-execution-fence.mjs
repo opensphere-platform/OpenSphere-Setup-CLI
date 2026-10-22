@@ -170,6 +170,8 @@ export const COVERAGE = Object.freeze([
   { namespace: 'opensphere-console', policy: 'opensphere-ceph-preparation-job', source: 'ceph-preparation' },
   { namespace: 'rook-ceph', policy: 'opensphere-hiss-ceph-cluster-cm', source: 'chart-execution-fence' },
   { namespace: 'opensphere-stackgres', policy: 'opensphere-hiss-stackgres-operator-workload', source: 'operator-stackgres', podShapes: true },
+  // PostgreSQL P2: Cluster Manager may only touch StackGres objects there; P2's write guard (Deny) matches every stackgres.io kind.
+  ...['opensphere-pfss-pg-shared', 'opensphere-pfss-pg-dedicated'].map((namespace) => ({ namespace, policy: 'opensphere-pfss-pg-writers', source: 'operator-stackgres' })),
   // PSA restricted, and the only ServiceAccount there is a default one with no rights (design F-6).
   { namespace: 'opensphere-hiss-validation', restrictedDefaultOnly: true },
   { namespace: 'opensphere-ceph-verification', restrictedDefaultOnly: true },
@@ -240,7 +242,7 @@ export function hissExecutionCoverage(scope, { runner = run, pendingPolicies = [
       const p = policies.get(cover.policy);
       const b = bindings.find((x) => x.spec?.policyName === cover.policy && emptySelector(x.spec?.matchResources) && x.spec?.paramRef === undefined);
       const matched = new Set((p?.spec?.matchConstraints?.resourceRules || []).flatMap((r) => r.resources || []));
-      const kindsMatched = kinds.every((kind) => matched.has(kind) || matched.has('*') || (kind !== 'pods' && matched.has('pods') && cover.podShapes));
+      const kindsMatched = kinds.every((kind) => matched.has(kind) || matched.has('*') || matched.has('*/*') || (kind !== 'pods' && matched.has('pods') && cover.podShapes));
       if (p && b && p.spec?.failurePolicy === 'Fail' && kindsMatched) {
         const actions = b.spec.validationActions || [];
         state = actions.includes('Deny') ? 'Covered' : 'CoveredWarnOnly'; enforcement = actions.join(',');
