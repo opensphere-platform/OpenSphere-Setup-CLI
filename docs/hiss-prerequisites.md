@@ -37,3 +37,14 @@ Setup은 설치 시 고정된 실행 준비물만 마련한다. 이후 HISS 설�
 - 전체 제거 목록의 이전 미커밋 변경은 이번 적용기와 별개다. 이 프로필을 제거 목록에 자동으로 추가하지 않았다.
 
 남은 통합: 권한 적용 승인, 검증된 릴리스별 준비물 전달·호환성, bootstrap 연결, 기존 Ingress의 데이터/권한 보존 전환, 실제 22 → OS Shell 설치·관리·실패 복구·멱등성 검증, 최종 발행·배포 및 Setup 재현.
+
+## 노드 재부팅 조율 준비물 (2026-10-22)
+
+설계: `foundation-decoupling-20261011/node-maintenance/NODE-REBOOT-COORDINATION-DESIGN-20261022.md`. 대표 결정 "모두 권고안대로 (권장)", 유지보수 창 매일 02:00–06:00 KST.
+
+- 원본: Cluster Manager `deploy/hiss-node-maintenance.yaml`. Setup은 `src/hiss-node-maintenance-artifact.json`에 바이트를 고정하고 sha256으로 확인한다(`NODE_MAINTENANCE_SOURCE`).
+- 객체 17개: namespace `opensphere-node-maintenance`, kured SA·ClusterRole·잠금 Role, Cluster Manager 실행 Role 셋(새 namespace, `monitoring`의 NetworkPolicy 하나, `opensphere-console`의 작업 기록 하나), kured에 Prometheus만 들어오게 하는 NetworkPolicy, admission 정책 둘과 binding 둘.
+- `prepare-hiss`(계획)는 읽기만 한다. `monitoring`·`opensphere-console` namespace가 없으면 `Blocked`, 객체가 없으면 `NeedsPreparation`, 일부만 있거나 울타리 정책의 match·변수·검증이 다르면 `NeedsUpdate`, 같으면 `Present`.
+- `prepare-hiss --apply`는 server-side apply(`opensphere-setup-hiss`, conflict 강제 안 함)를 두 번 한다. 울타리 정책이 먼저, 권한은 그다음이다. 울타리 적용이 실패하면 권한은 적용하지 않는다.
+- 다른 HISS 실행 프로필과 달리 server-side apply다. 승인 kured digest가 바뀌면 울타리 정책을 제자리에서 고쳐야 하기 때문이다. 다른 field manager가 가진 필드는 conflict로 멈춘다.
+- 새 설치 경로(bootstrap)는 아직 이 준비물을 적용하지 않는다. 설치된 클러스터에 `prepare-hiss`로 적용한다.
