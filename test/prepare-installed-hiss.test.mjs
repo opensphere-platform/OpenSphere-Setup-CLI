@@ -4,6 +4,10 @@ import {prepareInstalledHiss} from '../src/prepare-installed-hiss.mjs';
 import profile from '../src/hiss-preparation-profile.json' with {type:'json'};
 import storageObservation from '../src/hiss-storage-observation-artifact.json' with {type:'json'};
 import {verifyHissStorageObservationArtifact} from '../src/hiss-prerequisites.mjs';
+import operatorStackgres from '../src/hiss-operator-stackgres-artifact.json' with {type:'json'};
+import {parseAllDocuments} from 'yaml';
+const stackgresDocuments=parseAllDocuments(operatorStackgres.yaml).map(d=>d.toJSON()).filter(Boolean);
+const stackgresDocs=()=>stackgresDocuments;
 const storageObservationYaml=()=>verifyHissStorageObservationArtifact(storageObservation.yaml);
 const identity=r=>`${r.kind}/${r.metadata.namespace||''}/${r.metadata.name}`;
 function fixture(change=false,{longhorn=false}={}){
@@ -12,8 +16,16 @@ function fixture(change=false,{longhorn=false}={}){
  const state=new Map();
  const put=r=>state.set(identity(r),{...structuredClone(r),metadata:{...r.metadata,uid:`uid-${++serial}`}});
  for(const [kind,name,namespace] of [['Namespace','opensphere-console'],['Namespace','kube-system'],['Namespace','opensphere-foundation'],['ServiceAccount','opensphere-cluster-manager-runtime','opensphere-console'],['ClusterRole','system:auth-delegator'],['Role','extension-apiserver-authentication-reader','kube-system']])put({apiVersion:kind==='Namespace'||kind==='ServiceAccount'?'v1':'rbac.authorization.k8s.io/v1',kind,metadata:{name,...(namespace?{namespace}:{})}});
+ const stackgres=new Map();
+ const sgIds=new Set(stackgresDocs().map(identity));
  const runner=(_exe,args,options)=>{
   assert.deepEqual(args.slice(0,2),['--context','rke2']);
+  // PostgreSQL Provider P2 step (hiss-operator-stackgres-v1): its own get/apply/read-back, type check and Secret guard probe.
+  let sgList=null;try{const v=JSON.parse(options?.input||'');if(v.kind==='List'&&v.items.length&&v.items.every(i=>sgIds.has(identity(i))))sgList=v.items;}catch{}
+  if(sgList&&args.includes('get'))return JSON.stringify({kind:'List',items:sgList.filter(d=>stackgres.has(identity(d))).map(d=>stackgres.get(identity(d)))});
+  if(sgList&&args.includes('apply')){applies.push(options.input);for(const d of sgList)stackgres.set(identity(d),{...d,metadata:{...d.metadata,uid:'sg-'+identity(d),generation:1},...(d.kind==='ValidatingAdmissionPolicy'?{status:{observedGeneration:1,typeChecking:{}}}:{})});return '';}
+  if(args.includes('validatingadmissionpolicy'))return JSON.stringify(stackgres.get('ValidatingAdmissionPolicy//'+args[args.indexOf('validatingadmissionpolicy')+1]));
+  if(args.includes('--dry-run=server'))throw Object.assign(new Error('denied'),{stderr:"ValidatingAdmissionPolicy 'opensphere-pfss-pg-foundation-names' denied request"});
   if(args.includes('opensphere-installation-lock'))return JSON.stringify({metadata:{uid:'install-a'},data:{'config.json':JSON.stringify({consoleUrl:'https://console.example.test'}),'release.json':JSON.stringify({channel:'edge',releaseDigest:'sha256:'+'a'.repeat(64)})}});
   if(args.includes('namespace')&&args.includes('kube-system'))return JSON.stringify({metadata:{uid:cluster}});
   if(args.includes('observabilitybindings.observability.opensphere.io'))return '';
@@ -40,12 +52,14 @@ test('invalid context is rejected before contacting Kubernetes',async()=>{
 });
 test('storage observation is applied only where Longhorn runs',async()=>{
  const without=fixture();const plain=await prepareInstalledHiss({context:'rke2',apply:true,runner:without.runner});
- assert.equal(plain.storageObservation.state,'NotApplicable');assert.equal(plain.observabilityBindingCrd.state,'Applied');assert.equal(without.applies.length,2);
+ assert.equal(plain.storageObservation.state,'NotApplicable');assert.equal(plain.observabilityBindingCrd.state,'Applied');assert.equal(without.applies.length,4);
+ assert.equal(plain.operatorStackgres.state,'Applied');assert.equal(plain.operatorStackgres.guardProbe,'denied');
  assert.match(without.applies[1],/kind: CustomResourceDefinition/);
  const lh=fixture(false,{longhorn:true});const planned=await prepareInstalledHiss({context:'rke2',runner:lh.runner});
  assert.equal(planned.storageObservation.state,'NeedsPreparation');assert.equal(planned.observabilityBindingCrd.state,'NeedsPreparation');assert.equal(lh.applies.length,0);
+ assert.equal(planned.operatorStackgres.state,'NeedsPreparation');
  const applied=await prepareInstalledHiss({context:'rke2',apply:true,runner:lh.runner});
- assert.equal(applied.storageObservation.state,'Applied');assert.equal(lh.applies.length,3);
+ assert.equal(applied.storageObservation.state,'Applied');assert.equal(lh.applies.length,5);
  assert.match(lh.applies[1],/name: opensphere-hiss-storage-observer/);assert.doesNotMatch(lh.applies[1],/kind: ClusterRole/);
 });
 test('H-P6: the storage observation Role reads one Longhorn setting by name and the backup targets, and writes nothing',()=>{

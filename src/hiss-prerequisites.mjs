@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { run } from './process.mjs';
 import { installTarget } from './install-target.mjs';
+import { parseAllDocuments } from 'yaml';
 
 // Approved 2026-09-07 (first exercised on docker-desktop / HTTPS localhost / edge). Since
 // 2026-09-23 the profile bytes stay pinned but the target cluster is not (install-target.mjs).
@@ -104,6 +105,124 @@ export function prepareHissObservabilityBindingCrd(raw, scope, {runner=run, appl
   runner('kubectl',['--context',target.context,'apply','--server-side','--field-manager=opensphere-setup-hiss','-f','-','--request-timeout=20s'],
     {capture:true,input:raw});
   return {state:'Applied',applied:true,resourceCount:1};
+}
+// HISS operator facility hiss.operator.stackgres (PostgreSQL Provider design 2026-10-20 §9.1, P0 lab results §15-§16;
+// user decisions D-P1, D-P1a B, D-P2 and the Console-administrator bypass closure, 2026-10-20). Source: Cluster Manager
+// deploy/hiss-operator-stackgres.yaml (tools/render-hiss-operator-stackgres.cjs) at the revision below. 49 objects:
+// the operator namespace and the two PostgreSQL namespaces (PSA enforce=baseline), six ValidatingAdmissionPolicies with
+// Deny bindings (StackGres objects are written by Foundation and the operator only, Console administrator impersonation
+// included; a cluster's own accounts and dbops Jobs stay within their cluster; Foundation's Secret names; SGCluster names
+// and resource split), a default-deny NetworkPolicy in each PostgreSQL namespace, the reduced operator RBAC, Foundation's
+// write Role there (A4 exception until Y3) and Cluster Manager's executor and observer rights. Server-side apply under the
+// same field manager as the other HISS artifacts; no Helm, no caller input.
+// D-F8 (CM privileged-write fence design 2026-10-22, user decision: before P2 is applied) adds two policies with their
+// bindings, applied and type-checked with the write guards in phase 1: opensphere-hiss-stackgres-operator-workload (in
+// opensphere-stackgres only the reviewed StackGres 1.19.3 operator Deployment, ReplicaSets and Pods with the operator
+// ServiceAccount, the approved image digest and environment, and the rendered Secret, ServiceAccount, Service, Issuer and
+// Certificate) and opensphere-hiss-stackgres-operator-extension (the 14 StackGres CRDs and the two webhook configurations
+// keep their rendered settings). Both bind every requester; the bindings start as Warn and Audit (D-F6, like the chart
+// execution fence F1) and move to Deny in a later Setup revision. Setup #45's F-6 coverage counts the workload policy for
+// opensphere-stackgres.
+export const HISS_OPERATOR_STACKGRES = Object.freeze({
+  id: 'hiss-operator-stackgres-v1',
+  sourceRepository: 'opensphere-platform/OpenSphere-shell-clusterManager',
+  sourcePath: 'deploy/hiss-operator-stackgres.yaml',
+  sourceRevision: 'cc027967a8effe44438902b44c41dc2dce8db5c3',
+  sha256: '85907be83b23efd769ee19f5f34bfdc2686f61db5bb99afdefd4324d929bdfe5',
+  resourceCount: 49,
+});
+const STACKGRES_SECRET_PROBE_SUBJECT = 'system:serviceaccount:opensphere-foundation:foundation-control-plane';
+const STACKGRES_SECRET_GUARD = 'opensphere-pfss-pg-foundation-names';
+const STACKGRES_SECRET_PROBE = Object.freeze({ apiVersion: 'v1', kind: 'Secret',
+  metadata: { name: 'setup-admission-probe', namespace: 'opensphere-pfss-pg-shared' }, stringData: { probe: 'not-stored' } });
+export function verifyHissOperatorStackgresArtifact(raw) {
+  if (typeof raw !== 'string' || digest(raw) !== HISS_OPERATOR_STACKGRES.sha256) throw fail('UNTRUSTED_PROFILE','HISS StackGres operator prerequisite bytes differ from the approved contract');
+  const documents = parseAllDocuments(raw).map((d) => d.toJSON()).filter(Boolean);
+  if (documents.length !== HISS_OPERATOR_STACKGRES.resourceCount) throw fail('UNTRUSTED_PROFILE','HISS StackGres operator prerequisite envelope differs');
+  return documents;
+}
+// What the API server keeps of an applied document: every field we set is present with the same value (server defaults
+// and other managers' fields are ignored; RBAC rules and subjects must match exactly). A write guard must also carry no
+// extra match condition, parameter, audit annotation or binding selector that would narrow it (review 2026-10-22 M5).
+function holds(live, wanted) {
+  if (Array.isArray(wanted)) return Array.isArray(live) && live.length === wanted.length && wanted.every((v, i) => holds(live[i], v));
+  if (wanted && typeof wanted === 'object') return !!live && typeof live === 'object' && Object.keys(wanted).every((k) => holds(live[k], wanted[k]));
+  return live === wanted;
+}
+const emptySelector = (v) => v === undefined || v === null || (typeof v === 'object' && Object.entries(v).every(([k, x]) =>
+  x === undefined || x === null || (Array.isArray(x) && !x.length) || (k === 'matchPolicy' && x === 'Equivalent') || emptySelector(x)));
+function stackgresMatches(document, live) {
+  if (!live?.metadata?.uid || live.metadata.deletionTimestamp) return false;
+  if (!holds(live.metadata.labels || {}, document.metadata.labels || {})) return false;
+  if (document.rules) return canonical(live.rules || []) === canonical(document.rules);
+  if (document.roleRef) return canonical(live.roleRef) === canonical(document.roleRef) && canonical(live.subjects || []) === canonical(document.subjects || []);
+  if (document.kind === 'ValidatingAdmissionPolicy') {
+    const same = (key) => canonical(live.spec?.[key] ?? null) === canonical(document.spec[key] ?? null);
+    return holds(live.spec, document.spec) && ['matchConditions', 'variables', 'validations', 'paramKind', 'auditAnnotations'].every(same)
+      && emptySelector(live.spec?.matchConstraints?.excludeResourceRules) && emptySelector(live.spec?.matchConstraints?.objectSelector);
+  }
+  if (document.kind === 'ValidatingAdmissionPolicyBinding') return holds(live.spec, document.spec) && live.spec?.paramRef === undefined
+    && emptySelector(live.spec?.matchResources) && canonical(live.spec?.validationActions) === canonical(document.spec.validationActions);
+  return document.kind === 'Namespace' || holds(live.spec, document.spec);
+}
+const stackgresId = (o) => `${o.kind}/${o.metadata?.namespace || ''}/${o.metadata?.name}`;
+const defaultSleep = (milliseconds) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+const GUARD_PHASE = new Set(['Namespace', 'ValidatingAdmissionPolicy', 'ValidatingAdmissionPolicyBinding']);
+export function prepareHissOperatorStackgres(raw, scope, {runner=run, apply=false, sleep=defaultSleep, attempts=60, consecutive=5}={}) {
+  const target = installTarget(scope);
+  const documents = verifyHissOperatorStackgresArtifact(raw);
+  const guards = documents.filter((d) => d.kind === 'ValidatingAdmissionPolicy').map((d) => d.metadata.name);
+  const k = (args, options = {}) => runner('kubectl', ['--context', target.context, ...args], { capture: true, ...options });
+  const list = (items) => `${JSON.stringify({ apiVersion: 'v1', kind: 'List', items })}\n`;
+  const observe = (subset = documents) => {
+    const out = String(k(['get', '-f', '-', '--ignore-not-found', '-o', 'json', '--request-timeout=20s'], { input: list(subset) }) || '').trim();
+    const found = out ? JSON.parse(out) : { items: [] };
+    const live = new Map((found.kind === 'List' ? found.items : [found]).map((o) => [stackgresId(o), o]));
+    const objects = subset.map((d) => ({ identity: stackgresId(d), status: !live.has(stackgresId(d)) ? 'Missing' : stackgresMatches(d, live.get(stackgresId(d))) ? 'Matching' : 'Differs' }));
+    return { objects, missing: objects.filter((o) => o.status === 'Missing').length, differs: objects.filter((o) => o.status === 'Differs').length };
+  };
+  const before = observe();
+  if (!apply) return { state: before.missing ? 'NeedsPreparation' : before.differs ? 'NeedsUpdate' : 'Present', applied: false,
+    resourceCount: documents.length, missing: before.missing, differs: before.differs };
+  // Never --force-conflicts: an object another manager owns stops the apply instead of being taken over.
+  const applyAll = (subset) => k(['apply', '--server-side', '--field-manager=opensphere-setup-hiss', '-f', '-', '--request-timeout=30s'], { input: list(subset) });
+  const readBack = (subset, phase) => {
+    const after = observe(subset);
+    if (after.missing || after.differs) throw fail('PREPARATION_INCOMPLETE', `HISS StackGres prerequisites (${phase}) do not read back as applied`,
+      { objects: after.objects.filter((o) => o.status !== 'Matching') });
+  };
+  // Phase 1 (review M5): the namespaces and every write guard first, read back and type-checked by the API server, before
+  // any RBAC that the guards bound exists. A failure here leaves no new permission behind.
+  const first = documents.filter((d) => GUARD_PHASE.has(d.kind));
+  applyAll(first);
+  readBack(first, 'namespaces and write guards');
+  for (let attempt = 1; ; attempt += 1) {
+    const policies = guards.map((name) => JSON.parse(k(['get', 'validatingadmissionpolicy', name, '-o', 'json', '--request-timeout=10s'])));
+    if (policies.every((p) => p.status?.observedGeneration === p.metadata?.generation && !(p.status?.typeChecking?.expressionWarnings || []).length)) break;
+    if (attempt >= attempts) throw fail('PREPARATION_INCOMPLETE', 'A StackGres write guard is not type-checked without warnings; nothing else was applied');
+    sleep(500);
+  }
+  // Phase 2: NetworkPolicies and RBAC.
+  applyAll(documents.filter((d) => !GUARD_PHASE.has(d.kind)));
+  readBack(documents, 'all objects');
+  // Enforcement proof on the API servers that are reachable now (X precedent): a dry-run create of a Secret with a name
+  // outside the instance families, as Foundation's controller, must be refused by the Secret name guard five times in a
+  // row. The StackGres-object guards themselves are proven by Cluster Manager's verify once the CRDs exist.
+  let denied = 0, probe = 'admitted';
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      k(['create', '-f', '-', '--dry-run=server', '-o', 'name', '--as', STACKGRES_SECRET_PROBE_SUBJECT, '--request-timeout=10s'], { input: `${JSON.stringify(STACKGRES_SECRET_PROBE)}\n` });
+      denied = 0;
+    } catch (error) {
+      const text = String(error?.stderr || error?.message || '');
+      if (!text.includes(STACKGRES_SECRET_GUARD)) { probe = 'unavailable'; break; }
+      denied += 1;
+      if (denied >= consecutive) { probe = 'denied'; break; }
+    }
+    sleep(500);
+  }
+  if (probe !== 'denied') throw fail('PREPARATION_INCOMPLETE', `The StackGres Secret name guard was not proven enforced (${probe}); the operator must not be installed`);
+  return { state: 'Applied', applied: true, resourceCount: documents.length, created: before.missing, updated: before.differs, guardProbe: probe };
 }
 const reference = (kind,name,namespace)=>({apiVersion:groups[kind][0],kind,metadata:{name,...(namespace?{namespace}:{})}});
 
