@@ -3,7 +3,7 @@
 // Consumers must verify the BOM's signature first; this module does not establish trust.
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { resolve, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 
@@ -172,6 +172,19 @@ export function verifyOwnerPreservation({ profile, sourceRevision, installed, re
   const native = profile.name === NATIVE_R2D2_CUTOVER_PROFILE;
   if (!native) assert.equal(nativeCutover, undefined, 'Native cutover proof requires its explicit signed profile');
   if (!native) assert.equal(nativeRecovery, undefined, 'Native recovery proof requires its explicit signed profile');
+  return compareOwnerObservations({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, native, now });
+}
+
+// Pure comparison only. Setup's closed local-edge adapter establishes the
+// existing local trust and actual image/installation checks before calling it.
+// This creates no signed readiness predicate or publication authority.
+export function verifyLocalNativeOwnerPreservation({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, now = Date.now() }) {
+  assert.match(sourceRevision ?? '', revision, 'Local Owner comparison source is missing');
+  assert.ok(nativeCutover || nativeRecovery, 'Local native comparison requires its exact cutover or recovery proof');
+  return compareOwnerObservations({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, native: true, now });
+}
+
+function compareOwnerObservations({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, native, now }) {
   assert.ok(!(nativeCutover && nativeRecovery), 'Native cutover and recovery proofs are mutually exclusive');
   assert.match(installed?.releaseDigest ?? '', digest, 'Installed release digest is missing');
   assert.match(installed?.resourceVersion ?? '', /^[0-9]+$/u, 'Installation lock observation is missing');
@@ -225,7 +238,8 @@ export function verifyOwnerPreservation({ profile, sourceRevision, installed, re
     ...(proof ? { nativeCutover: { ownerIdentity: proof.ownerIdentity, reviewedPolicyDigest: proof.reviewedPolicyDigest } } : {}) };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+if (process.argv[1] && basename(process.argv[1]) === 'release-readiness-profile.mjs'
+  && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const [command, ...args] = process.argv.slice(2);
   const json = path => JSON.parse(readFileSync(path, 'utf8'));
   if (command === 'attach') {

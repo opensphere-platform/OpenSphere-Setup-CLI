@@ -3206,7 +3206,7 @@ export async function upgrade(
   });
   validateLock(targetLock);
   validateReleaseTransition(previousLock, targetLock);
-  const profiledAdoption = requiresOwnerPreservation(targetLock, previousLock);
+  const profiledAdoption = requiresOwnerPreservation(targetLock, previousLock, {nativeRecovery:oneWayRecoveryRecordDigest !== undefined});
   promotionBlocked(targetLock.channel);
   const operations = {
     readInstallationRecord,
@@ -3254,16 +3254,19 @@ export async function upgrade(
     expectedRecordDigest: forwardRepairRecordDigest, context: operations.currentKubeContext()
   });
   let targetVerifiedBom;
+  let previousVerifiedLock;
+  let targetVerifiedLock;
   await Promise.all([
     // Forward repair and one-way recovery never install the previous release, so it is not fetched.
-    repair || recovery ? Promise.resolve() : operations.verifyReleaseLock(previousLock, {
+    repair || recovery ? Promise.resolve() : Promise.resolve(operations.verifyReleaseLock(previousLock, {
       registryCredentials,
       requiredPlatforms,
       allowLegacyComponentSet: true,
       allowInstalledAgentIdentityCutover: true,
       allowRetiredEdgeRollback: true
-    }),
-    operations.verifyReleaseLock(targetLock, { registryCredentials, requiredPlatforms,onVerifiedBom:value=>{targetVerifiedBom=value;} })
+    })).then(value=>{previousVerifiedLock=value;}),
+    Promise.resolve(operations.verifyReleaseLock(targetLock, { registryCredentials, requiredPlatforms,onVerifiedBom:value=>{targetVerifiedBom=value;} }))
+      .then(value=>{targetVerifiedLock=value;})
   ]);
   const installed = operations.readInstallationLock();
   if (!installed || installed.releaseDigest !== previousLock.releaseDigest) {
@@ -3409,11 +3412,20 @@ export async function upgrade(
     let ownerComparison;
     if (profiledAdoption) {
       ownerComparison=comparePreparedOwners(previousLock, targetLock, target, {
-        verifiedBom: targetVerifiedBom, client: operations.ownerPreservationClient,nativeRecovery:recovery
+        verifiedBom: targetVerifiedBom,
+        verifiedLocalLocks:isLocalEdgeLock(targetLock)?{previous:recovery?targetVerifiedLock:previousVerifiedLock,target:targetVerifiedLock}:undefined,
+        client: operations.ownerPreservationClient,nativeRecovery:recovery
       });
       // No namespace, pull-secret, installation record, installer, apply or
-      // prune write is reached before signed-lock-render-Owner comparison.
+      // prune write is reached before verified-lock-render-Owner comparison.
+      const assertLocalComparisonLease = () => {
+        if (isLocalEdgeLock(targetLock) && (!owner || ownerComparison.baseResourceVersion !== owner.resourceVersion || !ownsRecord())) {
+          throw new Error('Local native installation record changed before prerequisite writes; stopped without advancing the transition');
+        }
+      };
+      assertLocalComparisonLease();
       operations.ensureManagedNamespaces();
+      assertLocalComparisonLease();
       operations.ensureRegistryPullSecrets(targetLock,
         registryCredentials?.lifecycle?.mode === 'github-device' ? null : registryCredentials,
         {requireRuntimeReady: true,...(legacyNativeCutover?{retiredNativeNamespaceBootstrap:true}:{})});

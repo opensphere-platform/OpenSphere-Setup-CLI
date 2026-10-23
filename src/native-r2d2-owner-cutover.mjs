@@ -1,7 +1,9 @@
 // A single reviewed Console-native engine transition, not a general exception
-// to Owner preservation. Called only after the attested BOM was verified.
+// to Owner preservation. Called after formal BOM verification or through the
+// closed adapter bound to actual verified local-edge locks and installation.
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
+import {isLocalEdgeLock} from './release.mjs';
 const stable=v=>Array.isArray(v)?v.map(stable):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,stable(v[k])])):v;
 const sha=v=>'sha256:'+createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const configuration=w=>{const spec=structuredClone(w.spec);delete spec.replicas;for(const c of spec.template.spec.containers)delete c.image;return sha(stable(spec));};
@@ -63,7 +65,11 @@ export function captureNativeCutover({previousLock,targetLock,plan,before,after,
  const proof=buildNativeCutoverProof({previousLock,targetLock,plan,before,after});
  assert.match(previousLock.sourceRevision??'',/^[a-f0-9]{40}$/,'Original cutover source is missing');
  assert.match(targetLock.sourceRevision??'',/^[a-f0-9]{40}$/,'Target cutover source is missing');
- assert.match(targetLock.releaseBom?.digest??'',/^sha256:[a-f0-9]{64}$/,'Target signed BOM is missing');
+ const local=isLocalEdgeLock(targetLock);
+ if(local){
+  assert.ok(isLocalEdgeLock(previousLock),'Local native checkpoint cannot change trust');
+  assert.ok(!targetLock.releaseBom&&!previousLock.releaseBom,'Local native checkpoint cannot claim a signed BOM');
+ }else assert.match(targetLock.releaseBom?.digest??'',/^sha256:[a-f0-9]{64}$/,'Target signed BOM is missing');
  assert.equal(JSON.parse(record.data['release.json']).releaseDigest,previousLock.releaseDigest);
  assert.deepEqual(JSON.parse(record.data['release.json']),previousLock,'Original cutover record lock differs');
  assert.equal(JSON.parse(record.data['config.json']).installationId,plan.installationId);
@@ -71,9 +77,9 @@ export function captureNativeCutover({previousLock,targetLock,plan,before,after,
  assert.equal(plan.installedRecordResourceVersion,record.metadata.resourceVersion,'Original cutover preparation record version is stale');
  assert.ok(record.metadata.uid&&before.metadata.uid,'Cutover identities are missing');
  assert.match(record.metadata.resourceVersion??'',/^[0-9]+$/,'Cutover record version is missing');
- const content={schema:'opensphere.r2d2-cutover-checkpoint/v1',sourceRevision:targetLock.sourceRevision,
+ const content={schema:local?'opensphere.r2d2-local-edge-cutover-checkpoint/v1':'opensphere.r2d2-cutover-checkpoint/v1',sourceRevision:targetLock.sourceRevision,
   previousSourceRevision:previousLock.sourceRevision,targetReleaseDigest:targetLock.releaseDigest,
-  targetBomDigest:targetLock.releaseBom.digest,recordUid:record.metadata.uid,
+   ...(local?{targetTrustType:'localhost-edge/v1'}:{targetBomDigest:targetLock.releaseBom.digest}),recordUid:record.metadata.uid,
   initialRecordResourceVersion:record.metadata.resourceVersion,ownerUid:before.metadata.uid,
   previousGatewayImage:before.spec.template.spec.containers.find(c=>c.name==='gateway').image,proof};
  return {...content,checkpointDigest:sha(content)};
@@ -82,11 +88,12 @@ export function captureNativeCutover({previousLock,targetLock,plan,before,after,
 export function buildNativeRecoveryProof({previousLock,targetLock,plan,before,after,record,installationIdentity}){
  const state=JSON.parse(record.data?.['state.json']??'null'),checkpoint=state?.transition?.nativeCutoverCheckpoint;
  assert.ok(checkpoint,'Native recovery requires the original persisted cutover checkpoint');
- exactKeys(checkpoint,['schema','sourceRevision','previousSourceRevision','targetReleaseDigest','targetBomDigest',
+ const local=isLocalEdgeLock(targetLock);
+ exactKeys(checkpoint,['schema','sourceRevision','previousSourceRevision','targetReleaseDigest',local?'targetTrustType':'targetBomDigest',
   'recordUid','initialRecordResourceVersion','ownerUid','previousGatewayImage','proof','checkpointDigest']);
  const {checkpointDigest,...content}=checkpoint;
  assert.equal(checkpointDigest,sha(content),'Native recovery checkpoint changed');
- assert.equal(checkpoint.schema,'opensphere.r2d2-cutover-checkpoint/v1');
+ assert.equal(checkpoint.schema,local?'opensphere.r2d2-local-edge-cutover-checkpoint/v1':'opensphere.r2d2-cutover-checkpoint/v1');
  assert.match(checkpoint.previousSourceRevision,/^[a-f0-9]{40}$/,'Original cutover source is invalid');
  assert.ok(['Failed','Installing'].includes(state.phase),'Native recovery requires an incomplete installation');
  assert.equal(state.releaseDigest,targetLock.releaseDigest,'Native recovery state target differs');
@@ -98,7 +105,11 @@ export function buildNativeRecoveryProof({previousLock,targetLock,plan,before,af
  assert.ok(previousLock.components.r2d2OpenClawGateway&&!previousLock.components.r2d2HermesWorker,'Native recovery cannot adopt or downgrade a legacy lock');
  assert.equal(checkpoint.targetReleaseDigest,targetLock.releaseDigest,'Native recovery target changed');
  assert.equal(checkpoint.sourceRevision,targetLock.sourceRevision,'Native recovery target source changed');
- assert.equal(checkpoint.targetBomDigest,targetLock.releaseBom?.digest,'Native recovery signed BOM changed');
+ if(local){
+  assert.ok(isLocalEdgeLock(previousLock),'Native recovery local trust changed');
+  assert.ok(!previousLock.releaseBom&&!targetLock.releaseBom,'Local native recovery cannot claim a signed BOM');
+  assert.equal(checkpoint.targetTrustType,'localhost-edge/v1','Native recovery local trust changed');
+ }else assert.equal(checkpoint.targetBomDigest,targetLock.releaseBom?.digest,'Native recovery signed BOM changed');
  assert.equal(checkpoint.recordUid,record.metadata.uid,'Native recovery installation record was replaced');
  assert.match(record.metadata.resourceVersion??'',/^[0-9]+$/);
  assert.ok(BigInt(record.metadata.resourceVersion)>BigInt(checkpoint.initialRecordResourceVersion),'Native recovery record binding is stale');

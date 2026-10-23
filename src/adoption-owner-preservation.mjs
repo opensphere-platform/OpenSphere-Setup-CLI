@@ -1,18 +1,36 @@
-// Setup consumes the versioned signed readiness predicate. It never maps its
-// source minimum to a runtime deactivation list. Existing Owner lifecycle stays
-// with Setup/owner paths. This comparison grants no execution authority.
+// Setup consumes verified signed readiness predicates or the closed, existing
+// local-edge native transition contract. Neither maps source readiness to a
+// runtime deactivation list. This comparison grants no execution authority.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { parseAllDocuments } from 'yaml';
 import { kubectl } from './process.mjs';
-import { calculateReleaseBomDigest } from './release.mjs';
-import { verifyOwnerPreservation, validateReadinessProfile } from './release-readiness-profile.mjs';
+import { calculateReleaseBomDigest, isLocalEdgeLock, validateLock, validateReleaseTransition } from './release.mjs';
+import { verifyOwnerPreservation, verifyLocalNativeOwnerPreservation, validateReadinessProfile } from './release-readiness-profile.mjs';
 import artifactVersions from './artifact-version.cjs';
 import {captureNativeCutover,buildNativeRecoveryProof} from './native-r2d2-owner-cutover.mjs';
 const RAW_OWNERS=Symbol('private Owner bodies');
 const RAW_RECORD=Symbol('private installation record');
 
-export function requiresOwnerPreservation(targetLock, previousLock) {
+export function requiresOwnerPreservation(targetLock, previousLock, {nativeRecovery = false} = {}) {
+  if (targetLock.components?.r2d2OpenClawGateway && (isLocalEdgeLock(targetLock) || isLocalEdgeLock(previousLock))) {
+    assert.ok(isLocalEdgeLock(targetLock) && isLocalEdgeLock(previousLock), 'Native local adoption cannot change the installed trust class');
+    assert.ok(!targetLock.releaseBom && !previousLock.releaseBom, 'Local native adoption cannot claim a signed BOM');
+    // Preserve observation-only and non-engine updates, but never trust an
+    // unvalidated changedComponents=[] claim or use them to enter recovery.
+    if (!nativeRecovery && targetLock.releaseDigest === previousLock.releaseDigest) {
+      validateReleaseTransition(previousLock, targetLock);
+      return false;
+    }
+    if (!nativeRecovery && previousLock.components?.r2d2OpenClawGateway && targetLock.releaseScope === 'component'
+      && Array.isArray(targetLock.changedComponents) && targetLock.changedComponents.length === 0
+      && ((Array.isArray(targetLock.changedAuxiliaryArtifacts) && targetLock.changedAuxiliaryArtifacts.length > 0) || targetLock.changedKnowledge === true)) {
+      validateReleaseTransition(previousLock, targetLock);
+      return false;
+    }
+    assert.notEqual(targetLock.releaseScope, 'component', 'Native local adoption currently requires an integrated target');
+    return true;
+  }
   const profile = targetLock.releaseBom?.readinessProfile;
   if (targetLock.releaseBom && artifactVersions.parseArtifactVersion(targetLock.releaseBom.releaseTag)?.format === 'build'
     && targetLock.releaseDigest !== previousLock.releaseDigest) {
@@ -96,18 +114,51 @@ export function readOwnerObservation(previousLock, { client = kubectl, now = Dat
 }
 
 export function comparePreparedOwners(previousLock, targetLock, prepared, {
-  verifiedBom, client = kubectl, now = Date.now(), nativeRecovery = false
+  verifiedBom, verifiedLocalLocks, client = kubectl, now = Date.now(), nativeRecovery = false
 } = {}) {
+  const local = isLocalEdgeLock(targetLock);
   const pointer = targetLock.releaseBom;
-  assert.ok(pointer?.readinessProfile, 'Signed readiness predicate is missing from installation lock');
-  validateReadinessProfile(pointer.readinessProfile, targetLock.sourceRevision);
-  assert.ok(verifiedBom?.bom, 'Verified signed BOM is required before Owner comparison');
-  assert.equal(verifiedBom.digest, pointer.digest, 'Verified BOM and installation lock differ');
-  assert.equal(calculateReleaseBomDigest(verifiedBom.bom), pointer.digest, 'Verified BOM bytes changed');
-  assert.deepEqual(verifiedBom.bom.readinessProfile, pointer.readinessProfile, 'Signed readiness predicate changed');
-  const normalizeNativeImages=pointer.readinessProfile.name!=='native-r2d2-cutover';
-  const recoveryRequested=nativeRecovery&&pointer.readinessProfile.name==='native-r2d2-cutover';
+  if (local) {
+    assert.ok(requiresOwnerPreservation(targetLock, previousLock, {nativeRecovery}), 'Local native comparison requires its supported transition');
+    for (const [name, lock] of [['previous',previousLock],['target',targetLock]]) {
+      validateLock(lock, { allowLegacyComponentSet: name === 'previous', allowInstalledAgentIdentityCutover: name === 'previous' });
+      const {localVerifiedAt, ...verified} = verifiedLocalLocks?.[name] ?? {};
+      const {localVerifiedAt: recordedVerification, ...expected} = lock;
+      const at = Date.parse(localVerifiedAt);
+      assert.ok(Number.isFinite(at) && at <= now, 'Actual local image verification is missing or invalid');
+      assert.deepEqual(verified, expected, 'Verified local image lock changed');
+    }
+  } else {
+    assert.ok(pointer?.readinessProfile, 'Signed readiness predicate is missing from installation lock');
+    validateReadinessProfile(pointer.readinessProfile, targetLock.sourceRevision);
+    assert.ok(verifiedBom?.bom, 'Verified signed BOM is required before Owner comparison');
+    assert.equal(verifiedBom.digest, pointer.digest, 'Verified BOM and installation lock differ');
+    assert.equal(calculateReleaseBomDigest(verifiedBom.bom), pointer.digest, 'Verified BOM bytes changed');
+    assert.deepEqual(verifiedBom.bom.readinessProfile, pointer.readinessProfile, 'Signed readiness predicate changed');
+  }
+  const normalizeNativeImages = local ? false : pointer.readinessProfile.name!=='native-r2d2-cutover';
+  const recoveryRequested = nativeRecovery && (local || pointer.readinessProfile.name==='native-r2d2-cutover');
   const observed = readOwnerObservation(previousLock, { client, now,normalizeNativeImages,recoveryCheckpoint:recoveryRequested });
+  let localIdentity;
+  const assertLocalIdentity = () => {
+    const config = JSON.parse(observed[RAW_RECORD].data['config.json']);
+    const plan = prepared.foundation?.nativeRuntime;
+    assert.ok(plan, 'Local native adoption requires reviewed runtime preparation');
+    assert.equal(config.authEnvironment, 'production', 'Local native adoption preserves production authentication');
+    assert.equal(config.channel, 'edge', 'Local native adoption preserves the installed edge channel');
+    assert.equal(config.installationId, plan.installationId, 'Local native installation identity changed');
+    const identity = JSON.parse(client(['get','configmap','opensphere-installation-identity','-n','opensphere-console','-o','json'],{capture:true}));
+    const cluster = JSON.parse(client(['get','namespace','kube-system','-o','json'],{capture:true}));
+    assert.equal(cluster.metadata?.uid, plan.clusterUid, 'Local native cluster identity changed');
+    assert.equal(identity.immutable, true, 'Local native installation identity must be immutable');
+    assert.equal(identity.data?.installationId, plan.installationId);
+    assert.equal(identity.data?.clusterUid, plan.clusterUid);
+    assert.deepEqual(plan.identityBinding, {uid:identity.metadata.uid,resourceVersion:identity.metadata.resourceVersion,
+      contentSha256:'sha256:'+createHash('sha256').update(JSON.stringify(identity)).digest('hex')}, 'Local native identity binding changed');
+    if (localIdentity) assert.deepEqual(identity, localIdentity, 'Local native identity changed during comparison');
+    localIdentity = identity;
+  };
+  if (local) assertLocalIdentity();
   const documents = prepared.all.flatMap(item => {
     assert.equal(typeof item.yaml, 'string', 'Rendered artifact bytes are missing');
     return parseAllDocuments(item.yaml).map(doc => {
@@ -143,7 +194,7 @@ export function comparePreparedOwners(previousLock, targetLock, prepared, {
   const nativeInput={previousLock,targetLock,plan:prepared.foundation?.nativeRuntime,record:observed[RAW_RECORD],
     before:observed[RAW_OWNERS].get('Deployment/opensphere-console/opensphere-console-osaa-gateway'),
     after:plannedRaw.find(w=>key(w)==='Deployment/opensphere-console/opensphere-console-osaa-gateway')};
-  const checkpoint=pointer.readinessProfile.name==='native-r2d2-cutover'&&!recoveryRequested?captureNativeCutover(nativeInput):undefined;
+  const checkpoint=(local || pointer.readinessProfile.name==='native-r2d2-cutover')&&!recoveryRequested?captureNativeCutover(nativeInput):undefined;
   const recoveryProof=recoveryRequested?buildNativeRecoveryProof({...nativeInput,
     installationIdentity:JSON.parse(client(['get','configmap','opensphere-installation-identity','-n','opensphere-console','-o','json'],{capture:true}))}):undefined;
   const nativeCutover=checkpoint?.proof;
@@ -159,7 +210,9 @@ export function comparePreparedOwners(previousLock, targetLock, prepared, {
   });
   const fresh = readOwnerObservation(previousLock, { client, now,normalizeNativeImages,recoveryCheckpoint:recoveryRequested });
   assert.deepEqual(fresh.installed, observed.installed, 'Installed Owner or lock changed during render comparison');
-  const result=verifyOwnerPreservation({ profile: pointer.readinessProfile, sourceRevision: targetLock.sourceRevision,
+  if (local) assertLocalIdentity();
+  const compare = local ? verifyLocalNativeOwnerPreservation : verifyOwnerPreservation;
+  const result=compare({ ...(local ? {} : {profile: pointer.readinessProfile}), sourceRevision: targetLock.sourceRevision,
     installed: observed.installed, rendered: { sourceRevision: targetLock.sourceRevision,
       baseReleaseDigest: observed.installed.releaseDigest, baseResourceVersion: observed.installed.resourceVersion,
       deactivations: [], workloads: planned }, now,nativeCutover,nativeRecovery:recoveryProof });

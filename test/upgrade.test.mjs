@@ -44,6 +44,8 @@ const MIGRATION_MANIFEST = Object.freeze({
   migrationCount: 1
 });
 
+// Historical signed-release protocol fixture. Supply-chain and installer I/O
+// are mocked below; catalog keys are not native runtime activation evidence.
 function lock(revision, digestCharacter) {
   const imageDigest = `sha256:${digestCharacter.repeat(64)}`;
   const components = Object.fromEntries(Object.entries(COMPONENTS).map(([name, repository]) => [
@@ -136,6 +138,20 @@ function componentTarget(previous, revision, changedComponents = ['consoleApi'])
       auxiliaryArtifacts: target.auxiliaryArtifacts
     }
   );
+  return target;
+}
+
+// A valid existing non-engine component carrier. Native canonical component
+// changes are intentionally unsupported by the narrow local cutover adapter;
+// test generic component transaction/rollback semantics with an auxiliary image.
+function auxiliaryTarget(previous, revision) {
+  const target=structuredClone(previous);
+  target.releaseScope=RELEASE_SCOPE_COMPONENT;target.baseReleaseDigest=previous.releaseDigest;
+  target.changedComponents=[];target.changedAuxiliaryArtifacts=['consoleIndexContent'];target.sourceRevision=revision;
+  delete target.releaseBom;
+  target.auxiliaryArtifacts.consoleIndexContent.image=`ghcr.io/opensphere-platform/${target.auxiliaryArtifacts.consoleIndexContent.repository}@sha256:${'c'.repeat(64)}`;
+  target.auxiliaryArtifacts.consoleIndexContent.sourceRevision=revision;
+  target.releaseDigest=calculateReleaseDigest(target.channel,target.components,target.trust,undefined,target);
   return target;
 }
 
@@ -626,18 +642,9 @@ test('upgrade prefetches target and rollback artifacts before target install', a
   assert.ok(events.includes('namespaces'));
 });
 
-test('current C_API component release is upgrade-only and keeps a complete rollback lock', async () => {
-  const previous = lock('1'.repeat(40), 'a');
-  previous.trust = LOCAL_EDGE_TRUST;
-  delete previous.releaseBom;
-  previous.releaseDigest = calculateReleaseDigest(
-    'edge',
-    previous.components,
-    LOCAL_EDGE_TRUST,
-    undefined,
-    { auxiliaryArtifacts: previous.auxiliaryArtifacts }
-  );
-  const target = componentTarget(previous, '2'.repeat(40), ['consoleApi']);
+test('existing auxiliary-only component protocol is upgrade-only and keeps a complete rollback lock', async () => {
+  const previous = localEdge(lock('1'.repeat(40), 'a'));
+  const target = auxiliaryTarget(previous, '2'.repeat(40));
   const events = [];
   const result = await upgrade(previous, target, {
     runtime: runtime(previous, events, { recordedInventory: [{ name: 'complete-release' }] })
@@ -646,12 +653,12 @@ test('current C_API component release is upgrade-only and keeps a complete rollb
   assert.equal(result.lock.components.console.image, previous.components.console.image);
   assert.ok(events.includes(`record:${target.sourceRevision}`));
   assert.ok(events.some((event) =>
-    event.startsWith('install-component:') && event.includes(`:${target.sourceRevision}:consoleApi:migrations=true`)));
-  assert.ok(events.includes(`prepare-component:${target.sourceRevision}:consoleApi:migrations=true`));
-  assert.ok(events.includes(`prepare-component:${previous.sourceRevision}:consoleApi:migrations=false`));
+    event.startsWith('install-component:') && event.includes(`:${target.sourceRevision}:console:migrations=true`)));
+  assert.ok(events.includes(`prepare-component:${target.sourceRevision}:console:migrations=true`));
+  assert.ok(events.includes(`prepare-component:${previous.sourceRevision}:console:migrations=false`));
   assert.equal(events.some((event) => event.startsWith('prepare:')), false);
-  assert.ok(events.includes('wait-component:consoleApi'));
-  assert.ok(events.includes(`verify:${target.sourceRevision}:consoleApi`));
+  assert.ok(events.includes('wait-component:console'));
+  assert.ok(events.includes(`verify:${target.sourceRevision}:console`));
   assert.ok(events.includes(`inventory:${target.sourceRevision}`));
 
   await assert.rejects(
@@ -682,7 +689,7 @@ function preWorkerLock() {
   return previous;
 }
 
-test('integrated upgrade adds the R2D2 Hermes worker to a pre-worker installation', async () => {
+test('old pre-worker local mock cannot activate native without actual verification and the reviewed transition', async () => {
   const previous = preWorkerLock();
   const target = lock('2'.repeat(40), 'b');
   target.trust = LOCAL_EDGE_TRUST;
@@ -690,24 +697,22 @@ test('integrated upgrade adds the R2D2 Hermes worker to a pre-worker installatio
   target.releaseDigest = calculateReleaseDigest('edge', target.components, target.trust, undefined, { auxiliaryArtifacts: target.auxiliaryArtifacts });
   assert.equal(Object.hasOwn(target.components, 'r2d2OpenClawGateway'), true);
   const events = [];
-  const result = await upgrade(previous, target, { runtime: runtime(previous, events) });
-  assert.equal(result.changed, true);
-  assert.equal(result.lock.components.r2d2OpenClawGateway.image, target.components.r2d2OpenClawGateway.image);
+  const operations=runtime(previous,events);
+  await assert.rejects(upgrade(previous,target,{runtime:operations}),/Actual local image verification/);
   assert.ok(events.includes(`supply:${previous.sourceRevision}:true`));
   assert.ok(events.includes(`supply:${target.sourceRevision}:false`));
-  assert.ok(events.includes(`install:업그레이드:${target.sourceRevision}`));
-  assert.ok(events.includes(`record:${target.sourceRevision}`));
+  assert.equal(operations.store.release,previous);assert.equal(operations.store.rv,1);
+  assert.ok(!events.some(e=>/^(namespaces|registry|install|record|inventory|prune)/.test(e)));
 });
 
-test('failed retired-to-native cutover keeps the target and never reinstalls the retired engine',async()=>{
+test('old retired-to-native mock without proof fails before activation or any retired installer',async()=>{
  const previous=preWorkerLock(),target=localEdge(lock('2'.repeat(40),'b'));
  previous.components.r2d2HermesWorker={repository:'opensphere-console-r2d2-hermes-worker',image:`ghcr.io/opensphere-platform/opensphere-console-r2d2-hermes-worker@sha256:${'a'.repeat(64)}`,sourceRevision:previous.sourceRevision};
  previous.releaseDigest=calculateReleaseDigest(previous.channel,previous.components,previous.trust,undefined,{auxiliaryArtifacts:previous.auxiliaryArtifacts});
  const events=[],operations=runtime(previous,events,{failTarget:true});
- await assert.rejects(upgrade(previous,target,{runtime:operations}),/native-runtime-forward-repair-required/);
- assert.equal(operations.store.release.releaseDigest,target.releaseDigest);
- assert.equal(operations.store.state.phase,'Failed');
- assert.equal(operations.store.state.failureCode,'native-runtime-forward-repair-required');
+ await assert.rejects(upgrade(previous,target,{runtime:operations}),/Actual local image verification/);
+ assert.equal(operations.store.release,previous);assert.equal(operations.store.state.phase,'Ready');assert.equal(operations.store.rv,1);
+ assert.ok(!events.some(x=>/^(namespaces|registry|install|record|inventory|prune)/.test(x)));
  assert.ok(!events.some(x=>x.startsWith('install:롤백')||x.startsWith('install-component:롤백')||x.startsWith('prune:')));
  assert.ok(!events.includes('prepare:'+previous.sourceRevision),'retired installer is not even materialized for activation');
 });
@@ -876,12 +881,9 @@ function prerequisiteRuntime(previous, events, prepared, records, options) {
   return operations;
 }
 
-test('component release prepares runtime prerequisites against the opposite release and records the target ones', async () => {
-  const previous = lock('1'.repeat(40), 'a');
-  previous.trust = LOCAL_EDGE_TRUST;
-  delete previous.releaseBom;
-  previous.releaseDigest = calculateReleaseDigest('edge', previous.components, LOCAL_EDGE_TRUST, undefined, { auxiliaryArtifacts: previous.auxiliaryArtifacts });
-  const target = componentTarget(previous, '2'.repeat(40), ['extensionController']);
+test('auxiliary component protocol records prerequisite steps against the opposite release', async () => {
+  const previous = localEdge(lock('1'.repeat(40), 'a'));
+  const target = auxiliaryTarget(previous, '2'.repeat(40));
   const prepared = [], records = [];
   await upgrade(previous, target, { runtime: prerequisiteRuntime(previous, [], prepared, records,
     { recordedInventory: [{ name: 'complete-release' }] }) });
@@ -902,35 +904,17 @@ test('component release prepares runtime prerequisites against the opposite rele
 });
 
 test('component release refuses to overwrite a missing complete release inventory', async () => {
-  const previous = lock('1'.repeat(40), 'a');
-  previous.trust = LOCAL_EDGE_TRUST;
-  delete previous.releaseBom;
-  previous.releaseDigest = calculateReleaseDigest(
-    'edge',
-    previous.components,
-    LOCAL_EDGE_TRUST,
-    undefined,
-    { auxiliaryArtifacts: previous.auxiliaryArtifacts }
-  );
-  const target = componentTarget(previous, '2'.repeat(40), ['consoleApi']);
+  const previous = localEdge(lock('1'.repeat(40), 'a'));
+  const target = auxiliaryTarget(previous, '2'.repeat(40));
   await assert.rejects(
     upgrade(previous, target, { runtime: runtime(previous, []) }),
     /requires the existing complete release inventory/
   );
 });
 
-test('failed C_API component verification restores only the previous C_API release', async () => {
-  const previous = lock('1'.repeat(40), 'a');
-  previous.trust = LOCAL_EDGE_TRUST;
-  delete previous.releaseBom;
-  previous.releaseDigest = calculateReleaseDigest(
-    'edge',
-    previous.components,
-    LOCAL_EDGE_TRUST,
-    undefined,
-    { auxiliaryArtifacts: previous.auxiliaryArtifacts }
-  );
-  const target = componentTarget(previous, '2'.repeat(40), ['consoleApi']);
+test('failed auxiliary-only component verification restores only the selected previous workload', async () => {
+  const previous = localEdge(lock('1'.repeat(40), 'a'));
+  const target = auxiliaryTarget(previous, '2'.repeat(40));
   const events = [];
   await assert.rejects(
     upgrade(previous, target, {
@@ -941,9 +925,9 @@ test('failed C_API component verification restores only the previous C_API relea
     }),
     /previous release was restored/
   );
-  assert.ok(events.includes(`prepare-component:${target.sourceRevision}:consoleApi:migrations=true`));
-  assert.ok(events.includes(`prepare-component:${previous.sourceRevision}:consoleApi:migrations=false`));
-  assert.ok(events.includes(`verify:${previous.sourceRevision}:consoleApi`));
+  assert.ok(events.includes(`prepare-component:${target.sourceRevision}:console:migrations=true`));
+  assert.ok(events.includes(`prepare-component:${previous.sourceRevision}:console:migrations=false`));
+  assert.ok(events.includes(`verify:${previous.sourceRevision}:console`));
 });
 
 test('failed target verification restores and verifies the previous Supabase/Gitea release', async () => {
@@ -1205,9 +1189,12 @@ function cutoverRuntime(previous, target, events, {
 }
 const installs = (events) => events.filter((e) => e.startsWith('install'));
 const earlierInstalls = (events) => events.filter((e) => e.startsWith('install:롤백') || e.startsWith('install-component:롤백'));
-// Isolate historical DB cutover tests from the independently tested engine
-// replacement. Both releases here already have the native image inventory.
-const activation = () => ({ previous: localEdge(lock('1'.repeat(40), 'a')), target: localEdge(lock('2'.repeat(40), 'b')) });
+// Historical 2026-09-26 SQL0080/CAS protocol fixtures retain the existing signed
+// release class and explicit supply-chain/installer hooks. The current catalog
+// is placeholder inventory here, not a native engine activation claim. Actual
+// local native transition/recovery is exercised independently with real
+// comparators and policy bindings in native-local-edge-cutover.test.mjs.
+const activation = () => ({ previous: lock('1'.repeat(40), 'a'), target: lock('2'.repeat(40), 'b') });
 function assertTargetKept(events, store, target, failureCode) {
   assert.deepEqual(earlierInstalls(events), [], 'no earlier release is installed after the cutover');
   assert.equal(events.some((e) => e.startsWith('prune:')), false, 'nothing is pruned, the worker included');
@@ -1358,7 +1345,7 @@ test('one-way cutover: a Ready record of a release that predates a crossed cutov
 });
 
 test('one-way cutover: a Failed target is not an ordinary rollback point; recovery never restores it (F2)', async () => {
-  const { target } = activation(), next = localEdge(lock('4'.repeat(40), 'c'));
+  const { target } = activation(), next = lock('4'.repeat(40), 'c');
   const store = recordStore(target, { phase: 'Failed', failureCode: 'one-way-migration-recovery-required' });
   const ledger = [BEFORE, CUTOVER];
   const ordinary = [];
@@ -1394,7 +1381,7 @@ test('one-way cutover: recovery re-applies the same Failed target forward and en
 });
 
 test('one-way cutover: recovery is refused for a Ready installation whose release fits the database', async () => {
-  const previous = localEdge(lock('1'.repeat(40), 'a')), target = localEdge(lock('2'.repeat(40), 'b'));
+  const previous = lock('1'.repeat(40), 'a'), target = lock('2'.repeat(40), 'b');
   const store = recordStore(previous), events = [];
   await assert.rejects(upgrade(previous, target, { oneWayRecoveryRecordDigest: installationRecordDigest(store.read()),
     runtime: cutoverRuntime(previous, target, events, { ledger: [BEFORE, CUTOVER], store, previousChain: CHAIN }) }), /use an ordinary upgrade/);
@@ -1473,7 +1460,7 @@ test('F5-1 control: matching chains run the ordinary upgrade and refuse a Ready 
 });
 
 test('F5-1 control: past the cutover, a Ready release that includes it is refused recovery without judging the rollback chain', async () => {
-  const previous = localEdge(lock('1'.repeat(40), 'a')), target = localEdge(lock('2'.repeat(40), 'b'));
+  const previous = lock('1'.repeat(40), 'a'), target = lock('2'.repeat(40), 'b');
   const store = recordStore(previous), events = [];
   await assert.rejects(upgrade(previous, target, { oneWayRecoveryRecordDigest: installationRecordDigest(store.read()),
     runtime: cutoverRuntime(previous, target, events, { ledger: [BEFORE, CUTOVER], store, previousChain: CHAIN, rollbackChain: PRE_CUTOVER_CHAIN }) }),
@@ -1550,7 +1537,7 @@ test('one-way cutover: another writer during the run means no rollback and no re
 });
 
 test('one-way cutover: between releases that both include it, an ordinary rollback still works', async () => {
-  const previous = localEdge(lock('1'.repeat(40), 'a')), target = localEdge(lock('2'.repeat(40), 'b'));
+  const previous = lock('1'.repeat(40), 'a'), target = lock('2'.repeat(40), 'b');
   const events = [], store = recordStore(previous);
   await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, {
     ledger: [BEFORE, CUTOVER], store, previousChain: CHAIN, failTarget: true }) }), /previous release was restored: target is unhealthy/);
@@ -1561,9 +1548,9 @@ test('one-way cutover: between releases that both include it, an ordinary rollba
   assert.equal(store.release.releaseDigest, previous.releaseDigest); assert.equal(store.state.phase, 'Ready');
 });
 
-test('one-way cutover: a component release crossing it keeps the target components', async () => {
+test('one-way SQL cutover: an auxiliary-only component protocol crossing it keeps the target', async () => {
   const previous = localEdge(lock('1'.repeat(40), 'a'));
-  const target = componentTarget(previous, '2'.repeat(40), ['osaaGateway', 'osdst']);
+  const target = auxiliaryTarget(previous, '2'.repeat(40));
   const events = [], store = recordStore(previous), ledger = [BEFORE];
   await assert.rejects(upgrade(previous, target, { runtime: cutoverRuntime(previous, target, events, {
     ledger, store, failTarget: true, recordedInventory: [{ name: 'complete-release' }], on: { install: () => ledger.push(CUTOVER) } }) }),
