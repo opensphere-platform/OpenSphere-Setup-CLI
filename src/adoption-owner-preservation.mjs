@@ -8,8 +8,9 @@ import { kubectl } from './process.mjs';
 import { calculateReleaseBomDigest } from './release.mjs';
 import { verifyOwnerPreservation, validateReadinessProfile } from './release-readiness-profile.mjs';
 import artifactVersions from './artifact-version.cjs';
-import {buildNativeCutoverProof} from './native-r2d2-owner-cutover.mjs';
+import {captureNativeCutover,buildNativeRecoveryProof} from './native-r2d2-owner-cutover.mjs';
 const RAW_OWNERS=Symbol('private Owner bodies');
+const RAW_RECORD=Symbol('private installation record');
 
 export function requiresOwnerPreservation(targetLock, previousLock) {
   const profile = targetLock.releaseBom?.readinessProfile;
@@ -73,27 +74,29 @@ export function isPersonalNativeOwnerWorkload(workload,installationId){
   &&/^ghcr\.io\/opensphere-platform\/opensphere-console-osaa-gateway@sha256:[a-f0-9]{64}$/.test(p.containers[1].image??'');
 }
 
-export function readOwnerObservation(previousLock, { client = kubectl, now = Date.now(),normalizeNativeImages=false } = {}) {
+export function readOwnerObservation(previousLock, { client = kubectl, now = Date.now(),normalizeNativeImages=false,recoveryCheckpoint } = {}) {
   const record = JSON.parse(client(['get', 'configmap', 'opensphere-installation-lock', '-n', 'opensphere-console', '-o', 'json'], { capture: true }));
   const current = JSON.parse(record.data?.['release.json'] ?? 'null');
   const config=JSON.parse(record.data?.['config.json']??'null');
   assert.equal(current?.releaseDigest, previousLock.releaseDigest, 'Installation changed before Owner comparison');
   const repositories = Object.fromEntries(Object.entries({ ...previousLock.components, ...previousLock.auxiliaryArtifacts })
     .map(([name, component]) => [`ghcr.io/opensphere-platform/${component.repository}`, name]));
+  if(recoveryCheckpoint) repositories['ghcr.io/opensphere-platform/opensphere-console-r2d2-hermes-worker']='r2d2HermesWorker';
   const raw = JSON.parse(client(['get', 'deployment,statefulset,daemonset', '-A', '-o', 'json'], { capture: true }));
   assert.ok(Array.isArray(raw.items), 'Owner discovery returned no Kubernetes list');
   const active = raw.items.filter(w => !isPersonalNativeOwnerWorkload(w,config?.installationId)
     && (w.spec?.template?.spec?.containers ?? []).some(c => repositories[c.image?.split('@')[0]])
     && (w.kind === 'DaemonSet' ? w.status?.desiredNumberScheduled > 0 : (w.spec?.replicas ?? 1) > 0));
   const result={ repositories, installed: { observedUtc: new Date(now).toISOString(),
-    releaseDigest: previousLock.releaseDigest, resourceVersion: record.metadata.resourceVersion,
+    releaseDigest: previousLock.releaseDigest, recordUid: record.metadata.uid, resourceVersion: record.metadata.resourceVersion,
     workloads: active.map(w => projectOwnerObservation(w, repositories,undefined,normalizeNativeImages?previousLock:undefined)) } };
   Object.defineProperty(result,RAW_OWNERS,{value:new Map(active.map(w=>[key(w),w]))});
+  Object.defineProperty(result,RAW_RECORD,{value:record});
   return result;
 }
 
 export function comparePreparedOwners(previousLock, targetLock, prepared, {
-  verifiedBom, client = kubectl, now = Date.now()
+  verifiedBom, client = kubectl, now = Date.now(), nativeRecovery = false
 } = {}) {
   const pointer = targetLock.releaseBom;
   assert.ok(pointer?.readinessProfile, 'Signed readiness predicate is missing from installation lock');
@@ -103,7 +106,8 @@ export function comparePreparedOwners(previousLock, targetLock, prepared, {
   assert.equal(calculateReleaseBomDigest(verifiedBom.bom), pointer.digest, 'Verified BOM bytes changed');
   assert.deepEqual(verifiedBom.bom.readinessProfile, pointer.readinessProfile, 'Signed readiness predicate changed');
   const normalizeNativeImages=pointer.readinessProfile.name!=='native-r2d2-cutover';
-  const observed = readOwnerObservation(previousLock, { client, now,normalizeNativeImages });
+  const recoveryRequested=nativeRecovery&&pointer.readinessProfile.name==='native-r2d2-cutover';
+  const observed = readOwnerObservation(previousLock, { client, now,normalizeNativeImages,recoveryCheckpoint:recoveryRequested });
   const documents = prepared.all.flatMap(item => {
     assert.equal(typeof item.yaml, 'string', 'Rendered artifact bytes are missing');
     return parseAllDocuments(item.yaml).map(doc => {
@@ -136,10 +140,13 @@ export function comparePreparedOwners(previousLock, targetLock, prepared, {
   const plannedRaw = dryRun.kind === 'List' ? dryRun.items : [dryRun];
   assert.ok(Array.isArray(plannedRaw) && plannedRaw.length === inputs.length, 'Server dry-run Owner set is incomplete');
   const beforeByKey = new Map(observed.installed.workloads.map(w => [`${w.kind}/${w.namespace}/${w.name}`, w]));
-  const nativeCutover=pointer.readinessProfile.name==='native-r2d2-cutover'
-    ? buildNativeCutoverProof({previousLock,targetLock,plan:prepared.foundation?.nativeRuntime,
-      before:observed[RAW_OWNERS].get('Deployment/opensphere-console/opensphere-console-osaa-gateway'),
-      after:plannedRaw.find(w=>key(w)==='Deployment/opensphere-console/opensphere-console-osaa-gateway')}) : undefined;
+  const nativeInput={previousLock,targetLock,plan:prepared.foundation?.nativeRuntime,record:observed[RAW_RECORD],
+    before:observed[RAW_OWNERS].get('Deployment/opensphere-console/opensphere-console-osaa-gateway'),
+    after:plannedRaw.find(w=>key(w)==='Deployment/opensphere-console/opensphere-console-osaa-gateway')};
+  const checkpoint=pointer.readinessProfile.name==='native-r2d2-cutover'&&!recoveryRequested?captureNativeCutover(nativeInput):undefined;
+  const recoveryProof=recoveryRequested?buildNativeRecoveryProof({...nativeInput,
+    installationIdentity:JSON.parse(client(['get','configmap','opensphere-installation-identity','-n','opensphere-console','-o','json'],{capture:true}))}):undefined;
+  const nativeCutover=checkpoint?.proof;
   const planned = plannedRaw.map(w => {
     const before = beforeByKey.get(key(w));
     assert.ok(before, 'Server dry-run returned an unrequested Owner');
@@ -150,10 +157,11 @@ export function comparePreparedOwners(previousLock, targetLock, prepared, {
       .some(a => a.image === c.image), 'Rendered Owner contains an image outside the verified target lock');
     return { ...after, baseUid: after.uid, baseResourceVersion: after.resourceVersion };
   });
-  const fresh = readOwnerObservation(previousLock, { client, now,normalizeNativeImages });
+  const fresh = readOwnerObservation(previousLock, { client, now,normalizeNativeImages,recoveryCheckpoint:recoveryRequested });
   assert.deepEqual(fresh.installed, observed.installed, 'Installed Owner or lock changed during render comparison');
-  return verifyOwnerPreservation({ profile: pointer.readinessProfile, sourceRevision: targetLock.sourceRevision,
+  const result=verifyOwnerPreservation({ profile: pointer.readinessProfile, sourceRevision: targetLock.sourceRevision,
     installed: observed.installed, rendered: { sourceRevision: targetLock.sourceRevision,
       baseReleaseDigest: observed.installed.releaseDigest, baseResourceVersion: observed.installed.resourceVersion,
-      deactivations: [], workloads: planned }, now,nativeCutover });
+      deactivations: [], workloads: planned }, now,nativeCutover,nativeRecovery:recoveryProof });
+  return {...result,...(checkpoint?{nativeCutoverCheckpoint:checkpoint}:{}),...(recoveryProof?{nativeCutoverCheckpoint:JSON.parse(observed[RAW_RECORD].data['state.json']).transition.nativeCutoverCheckpoint,nativeRecoveryState:recoveryProof.state}:{})};
 }

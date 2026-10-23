@@ -70,7 +70,7 @@ export function prepareNativeRuntimePrerequisites(lock,{inputPath,input,renderer
  }
  objects.push({apiVersion:'v1',kind:'ConfigMap',metadata:{name:NATIVE_RUNTIME_POLICY,namespace:'opensphere-console',labels:{'app.kubernetes.io/managed-by':OWNER,'opensphere.io/r2d2-prerequisite':'true'}},data:{installationId:reviewed.installationId,'policy.json':JSON.stringify(reviewed.policy),'preparation.json':JSON.stringify(reviewed)}});
  const entries=objects.map(object=>{const live=readObject(kubectl,object);assertOwned(live);return {object,before:binding(live)};});
- const plan={schema:SCHEMA,clusterUid,installationId:reviewed.installationId,installedReleaseDigest,installedRecordUid:installedRecord?.metadata?.uid??null,identityBinding:identityText?binding(JSON.parse(identityText)):null,releaseDigest:lock.releaseDigest,requiresRegistryCredential:[lock.components.osaaGateway,lock.components.r2d2OpenClawGateway].some(c=>c.registryCredentialsRequired===true),inputSha256:hash(reviewed),entries};
+ const plan={schema:SCHEMA,clusterUid,installationId:reviewed.installationId,installedReleaseDigest,installedRecordUid:installedRecord?.metadata?.uid??null,installedRecordResourceVersion:installedRecord?.metadata?.resourceVersion??null,identityBinding:identityText?binding(JSON.parse(identityText)):null,releaseDigest:lock.releaseDigest,requiresRegistryCredential:[lock.components.osaaGateway,lock.components.r2d2OpenClawGateway].some(c=>c.registryCredentialsRequired===true),inputSha256:hash(reviewed),entries};
  return {...plan,planDigest:hash(plan)};
 }
 

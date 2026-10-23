@@ -178,7 +178,7 @@ test('actual full-profile adoption allows native image updates with an existing 
 // Public synthetic trust-boundary fixture. Supply-chain verification is done
 // by upgrade() before this comparator; this test never signs or applies objects.
 test('actual prepared-owner comparator consumes the exact producer thirteen-field native cutover proof', () => {
-  const previousLock = { releaseDigest: previous.releaseDigest, components: { osaaGateway: previous.components.osaaGateway,
+  const previousLock = { sourceRevision: 'b'.repeat(40), releaseDigest: previous.releaseDigest, components: { osaaGateway: previous.components.osaaGateway,
     r2d2HermesWorker: { repository: 'opensphere-console-r2d2-hermes-worker', image: image('opensphere-console-r2d2-hermes-worker') } } };
   const profile = readinessProfile('native-r2d2-cutover', source);
   const bom = { kind: 'OpenSphereReleaseBOM', sourceRevision: source, readinessProfile: profile };
@@ -195,7 +195,7 @@ test('actual prepared-owner comparator consumes the exact producer thirteen-fiel
     { name: 'R2D2_NATIVE_RUNTIME_POLICY', valueFrom: { configMapKeyRef: { name: 'opensphere-r2d2-runtime-policy', key: 'policy.json' } } });
   const reviewed = { schema: 'opensphere.r2d2-runtime-preparation/v1', installedReleaseDigest: previousLock.releaseDigest,
     installationId, clusterUid, policy: { installationId, image: target.components.r2d2OpenClawGateway.image, bridgeImage: target.components.osaaGateway.image }, capacity: {} };
-  const plan = { schema: reviewed.schema, releaseDigest: targetLock.releaseDigest, installedReleaseDigest: previousLock.releaseDigest,
+  const plan = { schema: reviewed.schema, releaseDigest: targetLock.releaseDigest, installedReleaseDigest: previousLock.releaseDigest,installedRecordUid:'lock-uid',installedRecordResourceVersion:'55',
     installationId, clusterUid, inputSha256: sha(reviewed), entries: [{ object: { kind: 'ConfigMap', metadata: { name: 'opensphere-r2d2-runtime-policy' }, data: { 'preparation.json': JSON.stringify(reviewed) } } }] };
   plan.planDigest = sha(plan);
   const c = reader(previousLock, [before]), requests = [];

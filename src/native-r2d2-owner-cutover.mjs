@@ -55,3 +55,84 @@ export function buildNativeCutoverProof({previousLock,targetLock,plan,before,aft
  assert.deepEqual(stable(b),stable(a),'Native cutover changes more than the reviewed engine boundary');
  return {ownerIdentity:identity(before),previousOwner:'osaaGateway+r2d2HermesWorker',nextOwner:'osaaGateway',beforeConfigurationDigest:configuration(before),afterConfigurationDigest:configuration(after),removedContainer:'hermes-worker',previousWorkerImage:worker.image,reviewedPolicyDigest:plan.inputSha256,installedReleaseDigest:previousLock.releaseDigest,installationId:plan.installationId,clusterUid:plan.clusterUid,gatewayImage:reviewed.policy.bridgeImage,nativeImage:reviewed.policy.image};
 }
+
+// This is a checkpoint in the existing Setup-owned, CAS-protected transition,
+// not a signature or a separately supplied approval. Only its trusted producer
+// runs the original thirteen-field comparison before the first Installing write.
+export function captureNativeCutover({previousLock,targetLock,plan,before,after,record}){
+ const proof=buildNativeCutoverProof({previousLock,targetLock,plan,before,after});
+ assert.match(previousLock.sourceRevision??'',/^[a-f0-9]{40}$/,'Original cutover source is missing');
+ assert.match(targetLock.sourceRevision??'',/^[a-f0-9]{40}$/,'Target cutover source is missing');
+ assert.match(targetLock.releaseBom?.digest??'',/^sha256:[a-f0-9]{64}$/,'Target signed BOM is missing');
+ assert.equal(JSON.parse(record.data['release.json']).releaseDigest,previousLock.releaseDigest);
+ assert.deepEqual(JSON.parse(record.data['release.json']),previousLock,'Original cutover record lock differs');
+ assert.equal(JSON.parse(record.data['config.json']).installationId,plan.installationId);
+ assert.equal(plan.installedRecordUid,record.metadata.uid,'Original cutover record identity differs');
+ assert.equal(plan.installedRecordResourceVersion,record.metadata.resourceVersion,'Original cutover preparation record version is stale');
+ assert.ok(record.metadata.uid&&before.metadata.uid,'Cutover identities are missing');
+ assert.match(record.metadata.resourceVersion??'',/^[0-9]+$/,'Cutover record version is missing');
+ const content={schema:'opensphere.r2d2-cutover-checkpoint/v1',sourceRevision:targetLock.sourceRevision,
+  previousSourceRevision:previousLock.sourceRevision,targetReleaseDigest:targetLock.releaseDigest,
+  targetBomDigest:targetLock.releaseBom.digest,recordUid:record.metadata.uid,
+  initialRecordResourceVersion:record.metadata.resourceVersion,ownerUid:before.metadata.uid,
+  previousGatewayImage:before.spec.template.spec.containers.find(c=>c.name==='gateway').image,proof};
+ return {...content,checkpointDigest:sha(content)};
+}
+
+export function buildNativeRecoveryProof({previousLock,targetLock,plan,before,after,record,installationIdentity}){
+ const state=JSON.parse(record.data?.['state.json']??'null'),checkpoint=state?.transition?.nativeCutoverCheckpoint;
+ assert.ok(checkpoint,'Native recovery requires the original persisted cutover checkpoint');
+ exactKeys(checkpoint,['schema','sourceRevision','previousSourceRevision','targetReleaseDigest','targetBomDigest',
+  'recordUid','initialRecordResourceVersion','ownerUid','previousGatewayImage','proof','checkpointDigest']);
+ const {checkpointDigest,...content}=checkpoint;
+ assert.equal(checkpointDigest,sha(content),'Native recovery checkpoint changed');
+ assert.equal(checkpoint.schema,'opensphere.r2d2-cutover-checkpoint/v1');
+ assert.match(checkpoint.previousSourceRevision,/^[a-f0-9]{40}$/,'Original cutover source is invalid');
+ assert.ok(['Failed','Installing'].includes(state.phase),'Native recovery requires an incomplete installation');
+ assert.equal(state.releaseDigest,targetLock.releaseDigest,'Native recovery state target differs');
+ assert.equal(state.transition.targetReleaseDigest,targetLock.releaseDigest,'Native recovery transition target differs');
+ assert.equal(state.transition.rollback,'never','Native recovery must remain forward-only');
+ assert.equal(previousLock.releaseDigest,targetLock.releaseDigest,'Native recovery may only reapply its exact target');
+ assert.deepEqual(previousLock,targetLock,'Native recovery requires the exact recorded target lock');
+ assert.deepEqual(JSON.parse(record.data['release.json']),previousLock,'Native recovery observed record lock differs');
+ assert.ok(previousLock.components.r2d2OpenClawGateway&&!previousLock.components.r2d2HermesWorker,'Native recovery cannot adopt or downgrade a legacy lock');
+ assert.equal(checkpoint.targetReleaseDigest,targetLock.releaseDigest,'Native recovery target changed');
+ assert.equal(checkpoint.sourceRevision,targetLock.sourceRevision,'Native recovery target source changed');
+ assert.equal(checkpoint.targetBomDigest,targetLock.releaseBom?.digest,'Native recovery signed BOM changed');
+ assert.equal(checkpoint.recordUid,record.metadata.uid,'Native recovery installation record was replaced');
+ assert.match(record.metadata.resourceVersion??'',/^[0-9]+$/);
+ assert.ok(BigInt(record.metadata.resourceVersion)>BigInt(checkpoint.initialRecordResourceVersion),'Native recovery record binding is stale');
+ assert.equal(checkpoint.ownerUid,before.metadata?.uid,'Native recovery C_AI identity changed');
+ assert.equal(identity(before),'Deployment/opensphere-console/opensphere-console-osaa-gateway');
+ assert.equal(identity(after),identity(before));
+ const {planDigest,...planContent}=plan??{};assert.equal(planDigest,sha(planContent),'Native recovery preparation changed');
+ assert.equal(plan.installedRecordUid,record.metadata.uid,'Native recovery plan record identity differs');
+ assert.equal(plan.installedRecordResourceVersion,record.metadata.resourceVersion,'Native recovery preparation record version is stale');
+ assert.equal(plan.installedReleaseDigest,targetLock.releaseDigest);assert.equal(plan.releaseDigest,targetLock.releaseDigest);
+ const reviewed=JSON.parse(plan.entries.find(e=>e.object?.kind==='ConfigMap'&&e.object.metadata?.name==='opensphere-r2d2-runtime-policy')?.object.data?.['preparation.json']??'null');
+ assert.equal(sha(reviewed),plan.inputSha256,'Native recovery reviewed input changed');
+ assert.equal(reviewed.installedReleaseDigest,targetLock.releaseDigest);
+ assert.equal(sha({...reviewed,installedReleaseDigest:checkpoint.proof.installedReleaseDigest}),checkpoint.proof.reviewedPolicyDigest,'Native recovery changes the original reviewed policy or capacity');
+ assert.equal(reviewed.installationId,checkpoint.proof.installationId);assert.equal(reviewed.clusterUid,checkpoint.proof.clusterUid);
+ assert.equal(JSON.parse(record.data['config.json']).installationId,reviewed.installationId);
+ assert.equal(installationIdentity?.immutable,true,'Native recovery identity is not immutable');
+ assert.equal(installationIdentity.data?.installationId,reviewed.installationId);assert.equal(installationIdentity.data?.clusterUid,reviewed.clusterUid);
+ assert.deepEqual(plan.identityBinding,{uid:installationIdentity.metadata.uid,resourceVersion:installationIdentity.metadata.resourceVersion,contentSha256:sha(installationIdentity)},'Native recovery immutable identity binding changed');
+ assert.equal(reviewed.policy.image,targetLock.components.r2d2OpenClawGateway.image);assert.equal(reviewed.policy.bridgeImage,targetLock.components.osaaGateway.image);
+ assert.equal(checkpoint.proof.nativeImage,reviewed.policy.image);assert.equal(checkpoint.proof.gatewayImage,reviewed.policy.bridgeImage);
+ assert.equal(configuration(after),checkpoint.proof.afterConfigurationDigest,'Native recovery target configuration drifted');
+ assert.deepEqual(after.spec.template.spec.containers.map(c=>[c.name,c.image]),[['gateway',reviewed.policy.bridgeImage]]);
+ assert.ok(after.spec.replicas>=before.spec.replicas,'Native recovery cannot shrink C_AI');
+ let currentState;
+ if(configuration(before)===checkpoint.proof.afterConfigurationDigest){
+  assert.deepEqual(before.spec.template.spec.containers.map(c=>[c.name,c.image]),[['gateway',reviewed.policy.bridgeImage]]);
+  currentState='already-native';
+ }else{
+  assert.equal(configuration(before),checkpoint.proof.beforeConfigurationDigest,'Native recovery current Owner drifted from both checked states');
+  assert.deepEqual(before.spec.template.spec.containers.map(c=>[c.name,c.image]),[['gateway',checkpoint.previousGatewayImage],['hermes-worker',checkpoint.proof.previousWorkerImage]]);
+  currentState='pending-legacy';
+ }
+ return {state:currentState,originalProof:checkpoint.proof,previousGatewayImage:checkpoint.previousGatewayImage,
+  targetReleaseDigest:targetLock.releaseDigest,sourceRevision:targetLock.sourceRevision,
+  reviewedPolicyDigest:plan.inputSha256,recordUid:record.metadata.uid,recordResourceVersion:record.metadata.resourceVersion};
+}

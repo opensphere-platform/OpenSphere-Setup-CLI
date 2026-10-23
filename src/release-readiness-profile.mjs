@@ -146,16 +146,33 @@ function assertNativeCutoverOwner(before, after, proof) {
   assert.deepEqual(nextGateway.features, { R2D2_BACKEND: 'openclaw-native' }, 'Native cutover next backend differs');
 }
 
+function validateNativeRecovery(proof, installed, sourceRevision) {
+  assert.ok(proof && typeof proof === 'object' && !Array.isArray(proof), 'Bound native recovery proof is required');
+  assert.deepEqual(sorted(Object.keys(proof)), sorted(['state','originalProof','previousGatewayImage',
+    'targetReleaseDigest','sourceRevision','reviewedPolicyDigest','recordUid','recordResourceVersion']), 'Native recovery proof shape differs');
+  assert.ok(['already-native','pending-legacy'].includes(proof.state), 'Unknown native recovery state');
+  validateNativeCutoverProof(proof.originalProof, { releaseDigest: proof.originalProof?.installedReleaseDigest });
+  assert.equal(proof.targetReleaseDigest, installed.releaseDigest, 'Native recovery target differs from the installed lock');
+  assert.equal(proof.sourceRevision, sourceRevision, 'Native recovery source differs from the signed profile');
+  assert.equal(proof.recordUid, installed.recordUid, 'Native recovery record identity differs');
+  assert.equal(proof.recordResourceVersion, installed.resourceVersion, 'Native recovery record binding is stale');
+  assert.match(proof.reviewedPolicyDigest ?? '', digest, 'Native recovery policy digest is missing');
+  assert.match(proof.previousGatewayImage ?? '', /^ghcr\.io\/opensphere-platform\/opensphere-console-osaa-gateway@sha256:[a-f0-9]{64}$/u);
+  return proof;
+}
+
 // Invoke before any adoption write and again if the installation lock or live
 // workload resourceVersions change. Replica/container/feature preservation is
 // mandatory even when the Owner is outside the bootstrap readiness partition.
 // Only the explicit native profile and trusted Setup proof admit the one C_AI
 // replacement below; they cannot authorize another Owner or container removal.
 // Ready Pods do not prove functional acceptance; that remains a post-deploy gate.
-export function verifyOwnerPreservation({ profile, sourceRevision, installed, rendered, nativeCutover, now = Date.now() }) {
+export function verifyOwnerPreservation({ profile, sourceRevision, installed, rendered, nativeCutover, nativeRecovery, now = Date.now() }) {
   validateReadinessProfile(profile, sourceRevision);
   const native = profile.name === NATIVE_R2D2_CUTOVER_PROFILE;
   if (!native) assert.equal(nativeCutover, undefined, 'Native cutover proof requires its explicit signed profile');
+  if (!native) assert.equal(nativeRecovery, undefined, 'Native recovery proof requires its explicit signed profile');
+  assert.ok(!(nativeCutover && nativeRecovery), 'Native cutover and recovery proofs are mutually exclusive');
   assert.match(installed?.releaseDigest ?? '', digest, 'Installed release digest is missing');
   assert.match(installed?.resourceVersion ?? '', /^[0-9]+$/u, 'Installation lock observation is missing');
   const observed = Date.parse(installed?.observedUtc);
@@ -169,14 +186,24 @@ export function verifyOwnerPreservation({ profile, sourceRevision, installed, re
   // This explicit argument is supplied only by Setup's trusted comparison of
   // reviewed policy, immutable installation and exact admitted manifests. A
   // self-reported field in rendered JSON is never an approval or a proof.
-  const proof = native ? validateNativeCutoverProof(nativeCutover, installed) : null;
-  if (proof) assert.ok(live.has(nativeOwnerIdentity) && planned.has(nativeOwnerIdentity), 'Native cutover C_AI Owner is missing');
+  const recovery = native && nativeRecovery ? validateNativeRecovery(nativeRecovery, installed, sourceRevision) : null;
+  const proof = recovery ? recovery.state === 'pending-legacy' ? recovery.originalProof : null
+    : native ? validateNativeCutoverProof(nativeCutover, installed) : null;
+  if (native) assert.ok(live.has(nativeOwnerIdentity) && planned.has(nativeOwnerIdentity), 'Native cutover C_AI Owner is missing');
   for (const [key, before] of live) {
     assert.equal(typeof before.uid, 'string', 'Live workload UID is missing');
     assert.match(before.resourceVersion ?? '', /^[0-9]+$/u, 'Live workload version is missing');
     const after = planned.get(key);
     assert.ok(after, `Active Owner workload would be removed: ${key}`);
     const cutoverOwner = proof && key === nativeOwnerIdentity;
+    if (recovery && key === nativeOwnerIdentity) {
+      assert.equal(after.configurationDigest, recovery.originalProof.afterConfigurationDigest, 'Native recovery target configuration differs');
+      assert.equal(after.containers.find(c => c.name === 'gateway')?.image, recovery.originalProof.gatewayImage, 'Native recovery target image differs');
+      if (recovery.state === 'already-native') {
+        assert.equal(before.configurationDigest, recovery.originalProof.afterConfigurationDigest, 'Native recovery current configuration differs');
+        assert.deepEqual(before.containers.map(c => [c.name,c.image]), [['gateway',recovery.originalProof.gatewayImage]], 'Native recovery current container differs');
+      } else assert.equal(before.containers.find(c => c.name === 'gateway')?.image, recovery.previousGatewayImage, 'Native recovery old Gateway image differs');
+    }
     if (cutoverOwner) assertNativeCutoverOwner(before, after, proof);
     else assert.equal(after.owner, before.owner, `Owner writer would change: ${key}`);
     assert.equal(after.baseUid, before.uid, `Owner workload identity changed: ${key}`);

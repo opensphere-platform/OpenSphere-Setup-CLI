@@ -3406,9 +3406,10 @@ export async function upgrade(
           }
         )
       ]);
+    let ownerComparison;
     if (profiledAdoption) {
-      comparePreparedOwners(previousLock, targetLock, target, {
-        verifiedBom: targetVerifiedBom, client: operations.ownerPreservationClient
+      ownerComparison=comparePreparedOwners(previousLock, targetLock, target, {
+        verifiedBom: targetVerifiedBom, client: operations.ownerPreservationClient,nativeRecovery:recovery
       });
       // No namespace, pull-secret, installation record, installer, apply or
       // prune write is reached before signed-lock-render-Owner comparison.
@@ -3524,6 +3525,7 @@ export async function upgrade(
       targetReleaseDigest: targetLock.releaseDigest,
       startedAt: new Date().toISOString(),
       rollback: recovery||legacyNativeCutover||target.foundation?.nativeRuntime ? 'never' : boundary?.pending.length ? 'decided-after-failure' : 'available',
+      ...(ownerComparison?.nativeCutoverCheckpoint?{nativeCutoverCheckpoint:ownerComparison.nativeCutoverCheckpoint}:{}),
       ...(boundary ? { oneWay: transitionOneWay(boundary) } : {})
     };
     // Re-review N2: what this run has already done, for an exact account when it must stop.
