@@ -759,9 +759,13 @@ function applyYaml(yaml) {
   kubectl(['apply', '-f', '-'], { capture: true, input: yaml });
 }
 
-function ensureNamespace(name) {
-  const yaml = kubectl(['create', 'namespace', name, '--dry-run=client', '-o', 'yaml'], { capture: true });
-  applyYaml(yaml);
+// Creates a missing namespace and leaves an existing one alone. A bare client-side apply over an existing namespace
+// removed every label its component manifest had applied (RKE2 2026-10-23: a component upgrade dropped PSA
+// "restricted" from namespaces whose components were not in that lock).
+export function ensureNamespace(name, { run = kubectl } = {}) {
+  if (run(['get', 'namespace', name, '--ignore-not-found', '-o', 'name'], { capture: true }).trim()) return;
+  const yaml = run(['create', 'namespace', name, '--dry-run=client', '-o', 'yaml'], { capture: true });
+  run(['apply', '-f', '-'], { capture: true, input: yaml });
 }
 
 function readSecret(namespace, name) {
