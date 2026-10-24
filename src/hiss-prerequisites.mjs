@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
+import { parseAllDocuments } from 'yaml';
 import { run } from './process.mjs';
 import { installTarget } from './install-target.mjs';
-import { parseAllDocuments } from 'yaml';
 
 // Approved 2026-09-07 (first exercised on docker-desktop / HTTPS localhost / edge). Since
 // 2026-09-23 the profile bytes stay pinned but the target cluster is not (install-target.mjs).
@@ -223,6 +223,77 @@ export function prepareHissOperatorStackgres(raw, scope, {runner=run, apply=fals
   }
   if (probe !== 'denied') throw fail('PREPARATION_INCOMPLETE', `The StackGres Secret name guard was not proven enforced (${probe}); the operator must not be installed`);
   return { state: 'Applied', applied: true, resourceCount: documents.length, created: before.missing, updated: before.differs, guardProbe: probe };
+}
+
+// Node maintenance (node reboot coordination design 2026-10-22, user decision "모두 권고안대로 (권장)"): namespace
+// opensphere-node-maintenance, kured's ServiceAccount, ClusterRole and lock Role, Cluster Manager's executor Role there,
+// its Role in monitoring for one named NetworkPolicy, its operation-record Role, a NetworkPolicy admitting only Prometheus
+// to kured, and two ValidatingAdmissionPolicies: kured may change only node cordon/kured annotations/its taint and its
+// lock annotation; the namespace runs only the approved kured image, flags and mounts. Source: Cluster Manager
+// deploy/hiss-node-maintenance.yaml (NODE_MAINTENANCE_SOURCE). Server-side apply under the same field manager as the
+// other HISS artifacts, so a later revision (a new approved kured digest) updates the fence in place; another manager's
+// field is a conflict that stops the apply. The two fences are applied first and the permissions only after them, so a
+// failed fence never leaves kured's or Cluster Manager's new rights unfenced. Needs the monitoring and opensphere-console
+// namespaces.
+export const NODE_MAINTENANCE_SOURCE = Object.freeze({
+  repository: 'opensphere-platform/OpenSphere-shell-clusterManager',
+  path: 'deploy/hiss-node-maintenance.yaml',
+  revision: 'c072d2989f1115fd4f738720b9742a53ea98424e',
+});
+const NODE_MAINTENANCE_SHA256 = 'e16edf1f9aeb1528764c91f76fc158ab7d1b0e3b3c46cd1095bb0eb964d7dec3';
+const NODE_MAINTENANCE_OBJECTS = 17;
+export function verifyHissNodeMaintenanceArtifact(raw) {
+  if (typeof raw !== 'string' || digest(raw) !== NODE_MAINTENANCE_SHA256) throw fail('UNTRUSTED_PROFILE','HISS node maintenance bytes differ from the approved contract');
+  return raw;
+}
+// The fences in the artifact, as compared with the served policies: matching, variables, validations and failure
+// policy. A served policy that differs is an older revision (for example before a new approved kured digest or a
+// tightened validation): the plan reports NeedsUpdate.
+const normalExpression = value => String(value).replace(/\s+/g,' ').trim();
+const fenceProjection = policy => ({
+  failurePolicy: policy?.spec?.failurePolicy ?? null,
+  namespaceSelector: policy?.spec?.matchConstraints?.namespaceSelector?.matchLabels ?? null,
+  resourceRules: (policy?.spec?.matchConstraints?.resourceRules||[]).map(r=>({apiGroups:r.apiGroups,apiVersions:r.apiVersions,operations:r.operations,resources:r.resources})),
+  matchConditions: (policy?.spec?.matchConditions||[]).map(c=>({name:c.name,expression:normalExpression(c.expression)})),
+  variables: (policy?.spec?.variables||[]).map(v=>({name:v.name,expression:normalExpression(v.expression)})),
+  validations: (policy?.spec?.validations||[]).map(v=>({expression:normalExpression(v.expression),message:v.message??null,messageExpression:v.messageExpression??null})),
+});
+const FENCES = ['opensphere-hiss-kured-writer-fence','opensphere-hiss-node-maintenance-workload'];
+const artifactDocuments = raw => parseAllDocuments(String(raw)).map(d=>d.toJSON()).filter(Boolean);
+export function nodeMaintenanceFenceExpressions(raw) {
+  const policy = artifactDocuments(raw).find(d=>d.kind==='ValidatingAdmissionPolicy'&&d.metadata?.name==='opensphere-hiss-node-maintenance-workload');
+  const variables = Object.fromEntries((policy?.spec?.variables||[]).map(v=>[v.name,normalExpression(v.expression)]));
+  return Object.fromEntries(['approvedDigests','fixedArgs'].map(name=>[name,variables[name]??null]));
+}
+// The artifact split at its document separators: the admission fences, then everything else. Bytes are unchanged.
+export function nodeMaintenanceApplyOrder(raw) {
+  const parts = String(raw).split(/^---\n/m);
+  const fence = part => /^kind: ValidatingAdmissionPolicy(Binding)?$/m.test(part);
+  const join = list => list.map(p=>p.endsWith('\n')?p:p+'\n').join('---\n');
+  return {fences:join(parts.filter(fence)),permissions:join(parts.filter(p=>!fence(p)))};
+}
+export function prepareHissNodeMaintenance(raw, scope, {runner=run, apply=false}={}) {
+  const target = installTarget(scope);
+  verifyHissNodeMaintenanceArtifact(raw);
+  const kubectl = (args, input) => String(runner('kubectl',['--context',target.context,...args],{capture:true,...(input!==undefined?{input}:{})})||'');
+  const missingNamespaces = ['monitoring','opensphere-console'].filter(name=>!kubectl(['get','namespace',name,'--ignore-not-found','-o','name','--request-timeout=10s']).trim());
+  if (missingNamespaces.length) return {state:'Blocked',reason:'NamespacesMissing',missing:missingNamespaces,applied:false};
+  if (!apply) {
+    const present = kubectl(['get','-f','-','--ignore-not-found','-o','name','--request-timeout=10s'],raw).split(/\r?\n/).filter(Boolean).length;
+    if (present === 0) return {state:'NeedsPreparation',applied:false,resourceCount:NODE_MAINTENANCE_OBJECTS};
+    if (present < NODE_MAINTENANCE_OBJECTS) return {state:'NeedsUpdate',reason:'Partial',present,applied:false,resourceCount:NODE_MAINTENANCE_OBJECTS};
+    const expected = artifactDocuments(raw).filter(d=>d.kind==='ValidatingAdmissionPolicy');
+    const differs = FENCES.filter(name=>{
+      let live = null;
+      try { live = JSON.parse(kubectl(['get','validatingadmissionpolicy',name,'-o','json','--request-timeout=10s'])); } catch { live = null; }
+      return JSON.stringify(fenceProjection(live))!==JSON.stringify(fenceProjection(expected.find(d=>d.metadata.name===name)));
+    });
+    return {state:differs.length?'NeedsUpdate':'Present',...(differs.length?{reason:'FenceRevisionDiffers',fences:differs}:{}),applied:false,resourceCount:NODE_MAINTENANCE_OBJECTS};
+  }
+  const {fences,permissions} = nodeMaintenanceApplyOrder(raw);
+  kubectl(['apply','--server-side','--field-manager=opensphere-setup-hiss','-f','-','--request-timeout=20s'],fences);
+  kubectl(['apply','--server-side','--field-manager=opensphere-setup-hiss','-f','-','--request-timeout=20s'],permissions);
+  return {state:'Applied',applied:true,resourceCount:NODE_MAINTENANCE_OBJECTS};
 }
 const reference = (kind,name,namespace)=>({apiVersion:groups[kind][0],kind,metadata:{name,...(namespace?{namespace}:{})}});
 
