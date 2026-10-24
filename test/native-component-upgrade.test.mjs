@@ -8,6 +8,20 @@ import { componentReleaseWorkloadComponents, componentReleaseManifestSpecs, comp
 import { verifyShellRuntimeReferences } from '../src/verify.mjs';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/knowledge-release-v1.json', import.meta.url)));
+test('synthetic current release fixture retains knowledge and a complete native 19-component identity', () => {
+  assert.equal(fixture.synthetic, true);
+  for (const lock of [fixture.base, fixture.target]) {
+    validateLock(lock);
+    assert.equal(Object.keys(lock.components).length, 19);
+    assert.equal(lock.components.r2d2HermesWorker, undefined);
+    assert.equal(lock.components.r2d2OpenClawGateway.repository, 'opensphere-console-r2d2-openclaw');
+    assert.ok(lock.knowledge.knowledgeImage.startsWith('ghcr.io/opensphere-platform/opensphere-knowledge@sha256:'));
+    assert.equal(lock.releaseDigest, calculateReleaseDigest(lock.channel, lock.components, lock.trust, lock.releaseBom, lock));
+  }
+  assert.equal(fixture.target.baseReleaseDigest, fixture.base.releaseDigest);
+  assert.notEqual(fixture.base.knowledge.knowledgeImage, fixture.target.knowledge.knowledgeImage);
+  validateReleaseTransition(fixture.base, fixture.target);
+});
 function transition(names = ['cliArtifacts', 'osShellControl', 'osShellRuntime']) {
   const base = structuredClone(fixture.base), target = structuredClone(base);
   target.sourceRevision = 'b'.repeat(40); target.releaseScope = 'component'; target.baseReleaseDigest = base.releaseDigest;

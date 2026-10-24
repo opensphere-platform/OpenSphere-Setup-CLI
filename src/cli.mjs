@@ -160,6 +160,7 @@ Usage:
       [--registry-username <github-login> --registry-token-stdin]
   opensphere-setup bootstrap --release <channel> [--lock <verified-lock-file>]
   opensphere-setup bootstrap -r <channel> [--lock <verified-lock-file>]
+      [--r2d2-runtime-policy <reviewed-policy-json>]
   opensphere-setup prepare-ceph [--context <kube-context>] [--console-url <https-origin>] [--apply]
   opensphere-setup prepare-hiss [--context <kube-context>] [--apply] [--backup-fences deny|warn]
       (--backup-fences deny: after the first HISS backup writes on this cluster raised no admission warning)
@@ -639,6 +640,7 @@ async function main() {
       }
     }
     const bootstrapResult = await bootstrap(lock, {
+      r2d2RuntimePolicyPath: option('--r2d2-runtime-policy', undefined),
       initialAdmin,
       requireZeroRestarts: hasOption('--require-zero-restarts') || (!installed && !hasOption('--allow-restarts')),
       storageClass: bootstrapInput.storageClass,
@@ -716,6 +718,7 @@ async function main() {
       return;
     }
     const result = await upgrade(installed, target, {
+      r2d2RuntimePolicyPath: option('--r2d2-runtime-policy', undefined),
       storageClass: option('--storage-class', undefined),
       consoleUrl: suppliedConsoleUrl,
       registryCredentials,

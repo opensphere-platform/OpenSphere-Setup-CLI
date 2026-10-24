@@ -310,7 +310,7 @@ test('canonical release set contains the full target Console distribution', () =
     'opensphere-extension-controller',
     'opensphere-registry',
     'opensphere-console-osaa-gateway',
-    'opensphere-console-r2d2-hermes-worker',
+    'opensphere-console-r2d2-openclaw',
     'opensphere-osdst',
     'opensphere-osaa-governed-adapter',
     'opensphere-console-notification-dispatcher',
@@ -348,20 +348,20 @@ test('base release distribution includes bootstrap core and Console-activated mo
 });
 
 test('R2D2 Hermes worker is a natively installed canonical Console component', () => {
-  assert.equal(COMPONENTS.r2d2HermesWorker, 'opensphere-console-r2d2-hermes-worker');
-  assert.equal(BASE_RUNTIME_COMPONENTS.includes('r2d2HermesWorker'), true);
-  assert.equal(BOOTSTRAP_CORE_COMPONENTS.includes('r2d2HermesWorker'), true);
-  assert.equal(AVAILABLE_MODULE_COMPONENTS.includes('r2d2HermesWorker'), false);
-  assert.equal(Object.hasOwn(AUXILIARY_ARTIFACTS, 'r2d2HermesWorker'), false);
+  assert.equal(COMPONENTS.r2d2OpenClawGateway, 'opensphere-console-r2d2-openclaw');
+  assert.equal(BASE_RUNTIME_COMPONENTS.includes('r2d2OpenClawGateway'), true);
+  assert.equal(BOOTSTRAP_CORE_COMPONENTS.includes('r2d2OpenClawGateway'), true);
+  assert.equal(AVAILABLE_MODULE_COMPONENTS.includes('r2d2OpenClawGateway'), false);
+  assert.equal(Object.hasOwn(AUXILIARY_ARTIFACTS, 'r2d2OpenClawGateway'), false);
   assert.deepEqual(
     PRE_R2D2_HERMES_WORKER_BASE_RUNTIME_COMPONENTS,
-    Object.keys(COMPONENTS).filter((name) => name !== 'r2d2HermesWorker')
+    Object.keys(COMPONENTS).filter((name) => name !== 'r2d2OpenClawGateway')
   );
 });
 
 function preWorkerLocalLock() {
   const base = validLock('edge');
-  delete base.components.r2d2HermesWorker;
+  delete base.components.r2d2OpenClawGateway;
   base.trust = LOCAL_EDGE_TRUST;
   base.releaseDigest = calculateReleaseDigest(
     'edge', base.components, LOCAL_EDGE_TRUST, undefined, { auxiliaryArtifacts: base.auxiliaryArtifacts }
@@ -383,7 +383,7 @@ test('installed pre-worker lock is accepted only as a historical baseline with i
   );
 
   const wrongRepository = structuredClone(base);
-  wrongRepository.components.osaaGateway.repository = COMPONENTS.r2d2HermesWorker;
+  wrongRepository.components.osaaGateway.repository = COMPONENTS.r2d2OpenClawGateway;
   wrongRepository.releaseDigest = calculateReleaseDigest(
     'edge', wrongRepository.components, LOCAL_EDGE_TRUST, undefined, { auxiliaryArtifacts: wrongRepository.auxiliaryArtifacts }
   );
@@ -405,11 +405,11 @@ test('the worker is added by an integrated release and never by a component-scop
   const componentAddition = structuredClone(base);
   componentAddition.releaseScope = RELEASE_SCOPE_COMPONENT;
   componentAddition.baseReleaseDigest = base.releaseDigest;
-  componentAddition.changedComponents = ['r2d2HermesWorker'];
+  componentAddition.changedComponents = ['r2d2OpenClawGateway'];
   componentAddition.sourceRevision = '2'.repeat(40);
-  componentAddition.components.r2d2HermesWorker = {
-    repository: COMPONENTS.r2d2HermesWorker,
-    image: `ghcr.io/opensphere-platform/${COMPONENTS.r2d2HermesWorker}@sha256:${'b'.repeat(64)}`,
+  componentAddition.components.r2d2OpenClawGateway = {
+    repository: COMPONENTS.r2d2OpenClawGateway,
+    image: `ghcr.io/opensphere-platform/${COMPONENTS.r2d2OpenClawGateway}@sha256:${'b'.repeat(64)}`,
     sourceRevision: componentAddition.sourceRevision
   };
   componentAddition.releaseDigest = calculateReleaseDigest(
@@ -427,15 +427,31 @@ test('the worker is added by an integrated release and never by a component-scop
   assert.equal(validateLock(componentAddition), componentAddition);
   assert.throws(
     () => validateReleaseTransition(base, componentAddition),
-    /cannot change the installed component set/u
+    /engine replacement requires an integrated upgrade/u
   );
 });
 
 test('a post-worker component release may update the worker alone', () => {
-  const { base, target } = validComponentTransition(['r2d2HermesWorker']);
+  const { base, target } = validComponentTransition(['r2d2OpenClawGateway']);
   assert.equal(validateReleaseTransition(base, target), target);
   assert.equal(target.components.osaaGateway.image, base.components.osaaGateway.image);
-  assert.notEqual(target.components.r2d2HermesWorker.image, base.components.r2d2HermesWorker.image);
+  assert.notEqual(target.components.r2d2OpenClawGateway.image, base.components.r2d2OpenClawGateway.image);
+});
+
+test('retired Hermes inventory is accepted only as exact installed evidence, never as a new target',()=>{
+ const previous=preWorkerLocalLock();
+ previous.components.r2d2HermesWorker={repository:'opensphere-console-r2d2-hermes-worker',image:`ghcr.io/opensphere-platform/opensphere-console-r2d2-hermes-worker@sha256:${'a'.repeat(64)}`,sourceRevision:previous.sourceRevision};
+ previous.releaseDigest=calculateReleaseDigest('edge',previous.components,previous.trust,undefined,{auxiliaryArtifacts:previous.auxiliaryArtifacts});
+ assert.throws(()=>validateLock(previous),/component set is not canonical/);
+ assert.equal(validateLock(previous,{allowLegacyComponentSet:true}),previous);
+ const target=structuredClone(previous);delete target.components.r2d2HermesWorker;
+ target.components.r2d2OpenClawGateway={repository:COMPONENTS.r2d2OpenClawGateway,image:`ghcr.io/opensphere-platform/${COMPONENTS.r2d2OpenClawGateway}@sha256:${'b'.repeat(64)}`,sourceRevision:target.sourceRevision};
+ target.releaseDigest=calculateReleaseDigest('edge',target.components,target.trust,undefined,{auxiliaryArtifacts:target.auxiliaryArtifacts});
+ assert.equal(validateReleaseTransition(previous,target),target);
+ const mixed=structuredClone(target);mixed.components.r2d2HermesWorker=previous.components.r2d2HermesWorker;
+ assert.throws(()=>validateLock(mixed,{allowLegacyComponentSet:true}),/component set is not canonical/);
+ const wrong=structuredClone(previous);wrong.components.r2d2HermesWorker.image=target.components.r2d2OpenClawGateway.image;
+ assert.throws(()=>validateLock(wrong,{allowLegacyComponentSet:true}),/not digest-pinned/);
 });
 
 test('installed pre-OSAA lock remains readable only through the explicit historical gate', () => {

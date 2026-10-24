@@ -39,7 +39,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
-      NODE_RELEASE: 26.5.0
+      NODE_RELEASE: 26.12.1
+      NODE_LINUX_X64_SHA256: 6170b2d474e1c626f43cff3adc118df9fe3b573258a4fc3d850c8dbc6b079bbd
       POWERSHELL_RELEASE: 7.6.4
       KUBECTL_RELEASE: v1.36.3
       OPENSPHERE_CONSOLE_SOURCE: ${{ github.workspace }}/_fixtures/OpenSphere-console
@@ -68,7 +69,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '24.18.0'
+          node-version: '24.22.1'
           cache: npm
 
       - uses: actions/setup-go@v5
@@ -165,9 +166,25 @@ jobs:
           npm ci
           npm test
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.NODE_RELEASE }}
+      - name: Download and verify pinned Linux Node runtime
+        shell: pwsh
+        run: |
+          if ('${{ matrix.platform }}' -ne 'linux' -or '${{ matrix.architecture }}' -ne 'amd64') {
+            throw 'Reviewed Setup runtime is linux/amd64 only'
+          }
+          $version = $env:NODE_RELEASE
+          $asset = "node-v$version-linux-x64.tar.xz"
+          New-Item -ItemType Directory -Force .release/node | Out-Null
+          $archive = Join-Path '.release/node' $asset
+          Invoke-WebRequest "https://nodejs.org/dist/v$version/$asset" -OutFile $archive
+          $actual = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -cne $env:NODE_LINUX_X64_SHA256) { throw 'Pinned Node archive checksum mismatch' }
+          tar -xJf $archive -C .release/node
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned Node archive extraction failed' }
+          $nodeBin = (Resolve-Path (Join-Path '.release/node' "node-v$version-linux-x64/bin")).Path
+          $actualVersion = & (Join-Path $nodeBin 'node') -p 'process.versions.node'
+          if ($LASTEXITCODE -ne 0 -or $actualVersion -ne $version) { throw 'Pinned Node runtime version differs' }
+          $nodeBin | Out-File -LiteralPath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Bundle and build native SEA
         shell: pwsh
@@ -269,6 +286,11 @@ jobs:
           $setup = Join-Path $root $(if ($platform -eq 'windows') { 'opensphere-setup.exe' } else { 'opensphere-setup' })
           $pwsh = Join-Path $root "runtime/pwsh/$(if ($platform -eq 'windows') { 'pwsh.exe' } else { 'pwsh' })"
           $kubectl = Join-Path $root "runtime/bin/$(if ($platform -eq 'windows') { 'kubectl.exe' } else { 'kubectl' })"
+          $node = Join-Path $root "runtime/bin/$(if ($platform -eq 'windows') { 'node.exe' } else { 'node' })"
+          $actualRuntimeVersion = & $node -p 'process.versions.node'
+          if ($LASTEXITCODE -ne 0 -or $actualRuntimeVersion -ne $env:NODE_RELEASE) {
+            throw 'Packaged Node runtime differs from the reviewed security release'
+          }
           $packageVersion = node -p "require('./package.json').version"
           $expected = "opensphere-setup $packageVersion"
           if ($platform -eq 'darwin' -and $architecture -eq 'arm64') {

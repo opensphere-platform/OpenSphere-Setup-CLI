@@ -88,7 +88,7 @@ export const COMPONENTS = Object.freeze({
   extensionController: 'opensphere-extension-controller',
   registry: 'opensphere-registry',
   osaaGateway: 'opensphere-console-osaa-gateway',
-  r2d2HermesWorker: 'opensphere-console-r2d2-hermes-worker',
+  r2d2OpenClawGateway: 'opensphere-console-r2d2-openclaw',
   osdst: 'opensphere-osdst',
   osaaGovernedAdapter: 'opensphere-osaa-governed-adapter',
   notificationDispatcher: 'opensphere-console-notification-dispatcher',
@@ -165,7 +165,7 @@ export const BOOTSTRAP_CORE_COMPONENTS = Object.freeze([
   'extensionController',
   'registry',
   'osaaGateway',
-  'r2d2HermesWorker',
+  'r2d2OpenClawGateway',
   'osdst',
   'gitea',
   'giteaPostgres',
@@ -205,12 +205,14 @@ export function releaseResponsibilityProfile(components = COMPONENTS, auxiliaryA
 
 const HISTORICAL_BASE_RUNTIME_COMPONENTS = Object.freeze(Object.keys(HISTORICAL_COMPONENTS));
 
-// The R2D2 Hermes worker is a Gateway sidecar introduced after the current
-// component set. An installed lock without it is accepted only as an
-// upgrade/rollback baseline; an integrated release adds the worker, while a
-// component-scope release may not change the installed component set.
+// Exact retired inventories are readable only as installed upgrade evidence.
+// No resolver, publication or new target may select the retired engine.
+export const HERMES_INSTALLED_COMPONENTS = Object.freeze(Object.fromEntries(
+  Object.entries(COMPONENTS).map(([name,repository])=>name==='r2d2OpenClawGateway'
+    ? ['r2d2HermesWorker','opensphere-console-r2d2-hermes-worker'] : [name,repository])
+));
 export const PRE_R2D2_HERMES_WORKER_BASE_RUNTIME_COMPONENTS = Object.freeze(
-  BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'r2d2HermesWorker')
+  BASE_RUNTIME_COMPONENTS.filter((name) => name !== 'r2d2OpenClawGateway')
 );
 
 // Installed releases from before OSDST became an independent CBSS service are
@@ -593,6 +595,10 @@ function canonicalComponentProfile(components, { allowLegacyComponentSet = false
     return { names: current, repositories: COMPONENTS };
   }
   if (allowLegacyComponentSet) {
+    const hermes=Object.keys(HERMES_INSTALLED_COMPONENTS);
+    if(names.length===hermes.length&&hermes.every(name=>names.includes(name))) {
+      return {names:hermes,repositories:HERMES_INSTALLED_COMPONENTS,installedHermesEngine:true};
+    }
     // A pre-worker lock still uses the current repositories and remains subject
     // to the complete governed auxiliary artifact requirement.
     const preWorker = PRE_R2D2_HERMES_WORKER_BASE_RUNTIME_COMPONENTS;
@@ -677,7 +683,7 @@ export function validateReleaseBom(bom, {
     }
   }
   const componentProfile = canonicalComponentProfile(bom.components, { allowLegacyComponentSet });
-  if (bom.readinessProfile !== undefined) validateReadinessProfile(bom.readinessProfile, bom.sourceRevision);
+  if (bom.readinessProfile !== undefined) validateReadinessProfile(bom.readinessProfile, bom.sourceRevision,{allowInstalledHermes:allowLegacyComponentSet&&componentProfile?.repositories===HERMES_INSTALLED_COMPONENTS});
   if (!componentProfile) {
     throw new Error('Signed release BOM component set is not canonical');
   }
@@ -741,7 +747,7 @@ export function releaseBomPointer(bom, subject = bom?.components?.console?.image
   };
 }
 
-export function assertSignedReleaseBom(lock) {
+export function assertSignedReleaseBom(lock,{allowLegacyComponentSet=false}={}) {
   const pointer = lock?.releaseBom;
   const consoleImage = lock?.components?.console?.image;
   if (pointer?.predicateType !== RELEASE_BOM_PREDICATE
@@ -750,7 +756,7 @@ export function assertSignedReleaseBom(lock) {
       || !parseArtifactVersion(pointer?.releaseTag ?? '')) {
     throw new Error('Release lock has no governed signed Release BOM');
   }
-  if (pointer.readinessProfile !== undefined) validateReadinessProfile(pointer.readinessProfile, lock.sourceRevision);
+  if (pointer.readinessProfile !== undefined) validateReadinessProfile(pointer.readinessProfile, lock.sourceRevision,{allowInstalledHermes:allowLegacyComponentSet&&installedComponentProfile(lock.components,{allowLegacyComponentSet:true})?.repositories===HERMES_INSTALLED_COMPONENTS});
   return pointer;
 }
 
@@ -1028,7 +1034,7 @@ export async function verifyReleaseLock(lock, {
       allowInstalledAgentIdentityCutover
     });
   }
-  const pointer = assertSignedReleaseBom(validated);
+  const pointer = assertSignedReleaseBom(validated,{allowLegacyComponentSet});
   report(onProgress, { type: 'bom-start', image: pointer.subject, channel: validated.channel });
   const verifiedBom = await verifyBom(pointer.subject, {
     channel: validated.channel,
@@ -1214,7 +1220,7 @@ export function validateLock(lock, {
     throw new Error('Release lock component set is not canonical');
   }
   const { names: expectedNames, repositories } = componentProfile;
-  if (repositories === COMPONENTS
+  if ((repositories === COMPONENTS||repositories===HERMES_INSTALLED_COMPONENTS)
       && [LOCAL_EDGE_TRUST, RELEASE_TRUST].includes(trust)
       && lock.auxiliaryArtifacts === undefined) {
     throw new Error('Current release lock requires the complete governed auxiliary artifact set');
@@ -1297,7 +1303,7 @@ export function validateLock(lock, {
   if (trust === LOCAL_EDGE_TRUST && lock.releaseBom !== undefined) {
     throw new Error('Local edge release locks cannot claim a signed Release BOM');
   }
-  if (lock.releaseBom !== undefined) assertSignedReleaseBom(lock);
+  if (lock.releaseBom !== undefined) assertSignedReleaseBom(lock,{allowLegacyComponentSet});
   const digestContract = lock.releaseScope
     ? {
         releaseScope,
@@ -1373,6 +1379,9 @@ export function validateReleaseTransition(baseLock, targetLock) {
   if ((target.releaseScope ?? RELEASE_SCOPE_INTEGRATED) !== RELEASE_SCOPE_COMPONENT) {
     assertIntegratedKnowledgeAdvance(base, target);
     return target;
+  }
+  if(!Object.hasOwn(base.components,'r2d2OpenClawGateway')) {
+    throw new Error('The installed release predates native OpenClaw; engine replacement requires an integrated upgrade');
   }
   if (target.baseReleaseDigest !== base.releaseDigest) {
     throw new Error('Component release lock does not name the installed base release digest');

@@ -72,7 +72,7 @@ test('a concurrent same-UID configuration update cannot be adopted and overwritt
 // completed or even verified; validateLock rejected it as a non-canonical component set.
 test('a pre-worker installed record completes, verified as the installed release',async()=>{
  const {calculateReleaseDigest,validateLock}=await import('../src/release.mjs');
- const pre=structuredClone(lock);delete pre.components.r2d2HermesWorker;
+ const pre=structuredClone(lock);delete pre.components.r2d2OpenClawGateway;
  pre.releaseDigest=calculateReleaseDigest(pre.channel,pre.components,pre.trust,pre.releaseBom,pre);
  assert.throws(()=>validateLock(pre),/not canonical/);
  const state={phase:'Installing',releaseDigest:pre.releaseDigest};
