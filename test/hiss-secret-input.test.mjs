@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
-import {EMERGENCY_DEADLINE,MAX_INPUT_BYTES,buildHissSecret,hissSecretTarget,readHissSecretInput,writeHissSecret} from '../src/hiss-secret-input.mjs';
+import {EMERGENCY_ALLOWED,EMERGENCY_DEADLINE,MAX_INPUT_BYTES,buildHissSecret,emergencyAllowedConfigMap,hissSecretTarget,readHissSecretInput,writeHissSecret} from '../src/hiss-secret-input.mjs';
 
 // The protected input for the HISS credentials of RKE2 readiness R1 (plan 2026-10-24 §4.2). Values come only from
 // stdin; the output and every error name the Secret and its keys, never a value.
@@ -48,6 +48,10 @@ test('backup store and etcd S3: the key names Longhorn and RKE2 read',()=>{
  assert.deepEqual(Object.keys(etcd).sort(),['etcd-s3-access-key','etcd-s3-bucket','etcd-s3-endpoint','etcd-s3-folder','etcd-s3-region','etcd-s3-secret-key','etcd-s3-timeout']);
  assert.throws(()=>buildHissSecret('etcd-s3',{endpoint:'https://s3.example.com',accessKey:'a',secretKey:'b',bucket:'osp-etcd'},{now:NOW}),/without a scheme/);
  assert.throws(()=>buildHissSecret('backup-store',{accessKeyId:'AK',secretAccessKey:'SK',endpoint:'http://s3.example.com'},{name:'main',now:NOW}),{code:'INVALID_INPUT'});
+ // An in-house S3 may be reachable by address only.
+ assert.equal(decode(buildHissSecret('backup-store',{accessKeyId:'AK',secretAccessKey:'SK',endpoint:'https://10.10.1.90:9000'},{name:'main',now:NOW})).AWS_ENDPOINTS,'https://10.10.1.90:9000');
+ assert.throws(()=>buildHissSecret('backup-store',{accessKeyId:'AK',secretAccessKey:'SK',endpoint:'https://999.1.1.1'},{name:'main',now:NOW}),{code:'INVALID_INPUT'});
+ assert.throws(()=>buildHissSecret('alert-emergency',{receiverKind:'slack',slackApiUrl:SLACK,deadmanUrl:'https://10.0.0.1/x'},{now:NOW}),{code:'INVALID_INPUT'},'the dead-man URL still needs a DNS name');
  assert.throws(()=>buildHissSecret('backup-store',{accessKeyId:'AK\nX',secretAccessKey:'SK',endpoint:'https://s3.example.com'},{name:'main',now:NOW}),{code:'INVALID_INPUT'});
 });
 
@@ -59,10 +63,12 @@ test('input: a pipe only, bounded, one JSON object',async()=>{
  assert.deepEqual(await readHissSecretInput(Readable.from(['{"a":1}'])),{a:1});
 });
 
-function kube({namespace=true,failApply=false}={}){
+function kube({namespace=true,failApply=false,existing=false}={}){
  const calls=[];
  const fn=(exe,args,options)=>{assert.equal(exe,'kubectl');calls.push({args:args.slice(2),input:options?.input});const a=args.slice(2);
   if(a[0]==='get'&&a[1]==='namespace')return namespace?'namespace/'+a[2]:'';
+  if(a[0]==='-n'&&a[2]==='get'&&a[3]==='secret')return existing?'secret/'+a[4]:'';
+  if(a[0]==='-n'&&a[2]==='annotate')return '';
   if(a[0]==='apply'){if(failApply)throw Object.assign(Error(`kubectl ${args.join(' ')} failed\nThe Secret "x" is invalid: data[slack-api-url]: Invalid value: "${SLACK}"`),{exitStatus:1});return '';}
   if(a[0]==='-n'&&a[2]==='delete')return '';assert.fail(a.join(' '));};
  return {fn,calls};
@@ -77,6 +83,17 @@ test('write: server-side apply through stdin; the result and the errors never ca
  assert.ok(apply.args.includes('--server-side')&&apply.args.includes('--field-manager=opensphere-setup-hiss')&&apply.args.includes('-f')&&apply.args.includes('-'));
  assert.ok(!apply.args.join(' ').includes('secretpart'),'no value in the arguments');assert.match(apply.input,/"kind":"Secret"/);
  assert.ok(!JSON.stringify(out).includes('secretpart'));
+ // The admission-policy parameter: non-secret values only.
+ const applies=k.calls.filter(c=>c.args[0]==='apply').map(c=>JSON.parse(c.input));
+ assert.deepEqual(applies.map(o=>`${o.kind}/${o.metadata.name}`),['Secret/opensphere-alert-emergency',`ConfigMap/${EMERGENCY_ALLOWED}`]);
+ assert.deepEqual(applies[1].data,{'receiver-kind':'slack'});
+ assert.deepEqual(emergencyAllowedConfigMap(buildHissSecret('alert-emergency',{receiverKind:'smtp',smtpHost:'smtp.example.com',smtpPort:587,from:'a@example.com',to:['b@example.com','c@example.com'],username:'u',password:'secret-pw'},{now:NOW})).data,
+  {'receiver-kind':'smtp','smtp-smarthost':'smtp.example.com:587','smtp-from':'a@example.com','smtp-to':'b@example.com,c@example.com'});
+ assert.ok(!k.calls.some(c=>c.args[0]==='-n'&&c.args[2]==='annotate'),'nothing to strip on a new Secret');
+ // An existing Secret loses its client-side last-applied annotation (old values) before the new values are written.
+ const ex=kube({existing:true});writeHissSecret('alert-emergency',{receiverKind:'slack',slackApiUrl:SLACK},scope,{runner:ex.fn,now:NOW});
+ const order=ex.calls.map(c=>c.args[0]==='apply'?'apply':c.args[2]==='annotate'?c.args.slice(2,6).join(' '):null).filter(Boolean);
+ assert.deepEqual(order,['annotate secret opensphere-alert-emergency kubectl.kubernetes.io/last-applied-configuration-','apply','apply']);
  const failing=kube({failApply:true});
  assert.throws(()=>writeHissSecret('alert-emergency',{receiverKind:'slack',slackApiUrl:SLACK},scope,{runner:failing.fn,now:NOW}),
   e=>e.code==='KUBECTL_FAILED'&&!e.message.includes('secretpart')&&!e.message.includes('hooks.slack.com')&&/diagnostics withheld/.test(e.message));
@@ -88,4 +105,7 @@ test('clear: only with the exact Secret name as confirmation',()=>{
  assert.throws(()=>writeHissSecret('etcd-s3',undefined,scope,{runner:k.fn,clear:true,confirm:'yes'}),/--confirm opensphere-etcd-s3/);
  assert.deepEqual(writeHissSecret('etcd-s3',undefined,scope,{runner:k.fn,clear:true,confirm:'opensphere-etcd-s3'}),{state:'Removed',secret:'kube-system/opensphere-etcd-s3'});
  assert.deepEqual(k.calls.at(-1).args.slice(0,5),['-n','kube-system','delete','secret','opensphere-etcd-s3']);
+ // Clearing the emergency receiver keeps the parameter with receiver-kind none, so Cluster Manager can still remove the route.
+ const e=kube();writeHissSecret('alert-emergency',undefined,scope,{runner:e.fn,clear:true,confirm:'opensphere-alert-emergency'});
+ assert.deepEqual(JSON.parse(e.calls.find(c=>c.args[0]==='apply').input).data,{'receiver-kind':'none'});
 });

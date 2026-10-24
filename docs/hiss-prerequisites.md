@@ -54,19 +54,31 @@ Setup은 설치 시 고정된 실행 준비물만 마련한다. 이후 HISS 설�
 계획: `rke2-readiness-audit-20261024/01-NEXT-STAGE-PLAN-20261024.md` R1-4·R1-5. 대표 승인 "전부 승인 (권장)".
 
 - **경보·백업 권한**: 원본은 Cluster Manager `deploy/hiss-backup-alerting.yaml`. Setup은 `src/hiss-backup-alerting-artifact.json`에 바이트를 고정한다(`BACKUP_ALERTING_SOURCE`).
-  - `monitoring`: 핵심 경보 규칙 `opensphere-core-alerts` 갱신, 비상 경로 AlertmanagerConfig `opensphere-alert-emergency` 하나, 같은 이름 Secret 읽기.
-  - `longhorn-system`(Longhorn이 있을 때만): default 백업 대상 갱신, 반복 작업, 백업 읽기, 볼륨 라벨 갱신.
-  - admission 정책 넷이 이 쓰기를 검토된 모양으로 묶는다(Deny). 정책을 먼저, 권한을 그다음에 적용한다.
-  - Secret 쓰기 권한은 없다. Secret은 아래 보안 입력으로 Setup이 쓴다.
+  - `monitoring`: 핵심 경보 규칙 `opensphere-core-alerts` 갱신, 비상 경로 AlertmanagerConfig `opensphere-alert-emergency` 하나, 같은 이름 Secret 읽기, Alertmanager 객체 읽기(matcher strategy 확인). 이 쓰기는 2026-10-24 검토 뒤 대표가 승인했다.
+  - `longhorn-system`(Longhorn이 있을 때만): default 백업 대상 갱신, 반복 작업, 백업 읽기, 볼륨 라벨 갱신. 반복 작업의 `retain`을 줄이면 Longhorn이 오래된 백업을 지운다(BK-P6 허용 범위).
+  - admission 정책 다섯이 이 쓰기를 검토된 모양으로 묶는다. 정책을 먼저, 권한을 그다음에 적용한다.
+  - Secret 쓰기 권한은 주지 않는다. Secret은 아래 보안 입력으로 Setup이 쓴다.
+- **경보 울타리가 막는 것과 못 막는 것**
+  - 막는 것: 이름이 다른 AlertmanagerConfig, 다른 Secret을 참조하는 수신처, URL을 직접 쓰는 webhook, HTTP 클라이언트 설정, 경보를 누르는 inhibit·mute, 기록되지 않은 SMTP 서버·발신자·수신자. CM이 비상 Secret과 기록값 ConfigMap을 바꾸는 것도 막는다.
+  - **못 막는 것**: RKE2의 CM 계정은 이미 kube-prometheus-stack 실행 Role(`opensphere-hiss-kube-prometheus-stack-executor`)로 `monitoring`의 모든 Secret을 읽고 쓰고, Alertmanager 객체와 차트 PrometheusRule을 고칠 수 있다. 이 경로로는 다른 Secret을 읽거나 Alertmanager 자체 구성을 바꿀 수 있다. "경보 경로로 새지 않음"은 **CM 특권 쓰기 울타리(D-F, CM #32 / Setup #45)와 함께일 때만** 성립한다.
+  - 실험실에서 그 실행 Role을 RKE2와 똑같이 붙이고 시험했다. 결과는 `rke2-readiness-audit-20261024/r1-cm-setup-lab-20261024/`.
+- **Longhorn 울타리 단계**: 세 Longhorn binding은 처음에 `[Warn, Audit]`로 적용된다. 정책은 Longhorn mutating webhook을 거친 뒤의 객체를 보는데, 그 webhook이 기본값을 더하면 CM의 정상 쓰기가 거절될 수 있기 때문이다.
+  - CM의 쓰기 결과(`hiss.backup.*`)는 경고를 `admissionWarnings`로 돌려준다.
+  - RKE2에서 첫 `backup.target.set`, `backup.job.apply`, `backup.volume.assign`(지정과 해제)이 경고 없이 끝나면 `opensphere-setup prepare-hiss --apply --backup-fences deny`로 `[Deny]`로 올린다. `--backup-fences warn`은 되돌린다.
+  - 옵션 없이 다시 적용해도 이미 `[Deny]`인 binding은 그대로 둔다.
+  - 경보 binding 둘은 처음부터 `[Deny]`다.
 - **수집 허용 NetworkPolicy**: 원본은 `deploy/hiss-scrape-access.yaml`(`SCRAPE_ACCESS_SOURCE`). ingress-nginx·cert-manager에 Prometheus를 들이는 정책 둘이다.
   - 다른 정책이 이미 그 Pod를 격리할 때만 적용한다. 격리가 없는 namespace에 이 정책을 넣으면 80/443과 webhook이 막힌다. 그래서 그때는 `NotNeeded`다.
   - Setup이 넣은 정책만 남아 혼자 격리하게 되면 `IsolatesAlone`으로 알리고, `--apply`에서 지운다.
   - 2026-10-24 RKE2 읽기 결과: 두 namespace 모두 `NotNeeded`.
 - **보안 입력** `prepare-hiss-secret`: 값은 stdin의 JSON 하나로만 받는다. 인자·출력·오류에 값이 나오지 않는다. kubectl 오류는 진단을 지우고 종료 코드만 알린다.
   - `alert-emergency` → `monitoring/opensphere-alert-emergency`. Slack(`hooks.slack.com`만) 또는 SMTP(DNS 이름만), 선택 dead-man URL(https). 만료는 최대 2026-11-30.
-  - `backup-store --name <n>` → `longhorn-system/opensphere-backup-<n>`. Longhorn S3 키(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINTS`, 선택 `AWS_CERT`·`VIRTUAL_HOSTED_STYLE`).
+    - 비밀이 아닌 값(수신 종류, SMTP 서버·발신자·수신자)은 ConfigMap `monitoring/opensphere-alert-emergency-allowed`에도 쓴다. 경보 울타리의 parameter다. 이것이 없으면 CM의 AlertmanagerConfig 쓰기는 모두 거절된다.
+    - `--clear`는 Secret을 지우고 ConfigMap은 `receiver-kind: none`으로 남긴다. 그래야 CM이 경로를 지울 수 있다.
+  - `backup-store --name <n>` → `longhorn-system/opensphere-backup-<n>`. Longhorn S3 키(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINTS`, 선택 `AWS_CERT`·`VIRTUAL_HOSTED_STYLE`). 끝점은 DNS 이름이나 IPv4 주소다(사내 S3가 주소만 있을 수 있다).
   - `etcd-s3` → `kube-system/opensphere-etcd-s3`. RKE2 `etcd-s3-config-secret` 키(`etcd-s3-endpoint` 등). master `config.yaml` 변경은 따로 하는 호스트 작업이다.
   - `--clear --confirm <Secret 이름>`으로 지운다.
+  - 대상 Secret에 client-side `kubectl apply`가 남긴 `kubectl.kubernetes.io/last-applied-configuration`(옛 값)이 있으면 새 값을 쓰기 전에 지운다.
 
 ```sh
 # 예: 비상 수신처(Slack). 파일은 관리자만 읽을 수 있는 곳에 두고, 쓴 뒤 지운다.

@@ -27,7 +27,7 @@ export function observeInstalledHissTarget(context,runner=run){
   return {scope,clusterUid:cluster.metadata.uid,installationUid:record.metadata.uid,releaseDigest:lock.releaseDigest};
 }
 
-export async function prepareInstalledHiss({context,apply=false,runner=run,onProgress=()=>{}}) {
+export async function prepareInstalledHiss({context,apply=false,runner=run,onProgress=()=>{},backupFences}) {
   if(typeof context!=='string'||!context||context.startsWith('-')||/\s/.test(context))throw Error('Explicit Kubernetes context required');
   const observe=()=>observeInstalledHissTarget(context,runner);
   const target=observe(),client=createHissPrerequisiteClient(target.scope,runner);
@@ -57,7 +57,7 @@ export async function prepareInstalledHiss({context,apply=false,runner=run,onPro
   assertTarget();
   // RKE2 readiness R1 (2026-10-24): core alerts, the emergency route and Longhorn backup B1 (BK-P6, AL-P4), then the
   // Prometheus scrape access policies where those namespaces already isolate their Pods (AL-P5).
-  const backupAlertingResult=prepareHissBackupAlerting(backupAlerting.yaml,target.scope,{runner,apply});
+  const backupAlertingResult=prepareHissBackupAlerting(backupAlerting.yaml,target.scope,{runner,apply,backupFences});
   assertTarget();
   const scrapeAccessResult=prepareHissScrapeAccess(scrapeAccess.yaml,target.scope,{runner,apply});
   assertTarget();return {...result,target,validation:validationResult,storageObservation:storageResult,observabilityBindingCrd:crdResult,operatorStackgres:stackgresResult,nodeMaintenance:nodeMaintenanceResult,backupAlerting:backupAlertingResult,scrapeAccess:scrapeAccessResult};

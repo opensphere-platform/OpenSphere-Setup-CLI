@@ -161,7 +161,8 @@ Usage:
   opensphere-setup bootstrap --release <channel> [--lock <verified-lock-file>]
   opensphere-setup bootstrap -r <channel> [--lock <verified-lock-file>]
   opensphere-setup prepare-ceph [--context <kube-context>] [--console-url <https-origin>] [--apply]
-  opensphere-setup prepare-hiss [--context <kube-context>] [--apply]
+  opensphere-setup prepare-hiss [--context <kube-context>] [--apply] [--backup-fences deny|warn]
+      (--backup-fences deny: after the first HISS backup writes on this cluster raised no admission warning)
   opensphere-setup prepare-hiss-secret alert-emergency|backup-store|etcd-s3 [--name <store>] [--expires-at <ISO>]
       [--context <kube-context>] < input.json        (values only on stdin, never as arguments)
   opensphere-setup prepare-hiss-secret <kind> [--name <store>] --clear --confirm <secret-name> [--context <kube-context>]
@@ -294,6 +295,7 @@ async function main() {
   if (command === 'prepare-hiss') {
     assertKubectl();
     const result=await prepareInstalledHiss({context:context||kubectl(['config','current-context'],{capture:true}),apply:hasOption('--apply'),
+      backupFences:hasOption('--backup-fences')?option('--backup-fences',''):undefined,
       onProgress:event=>console.error(`[HISS 준비] ${event.state}: ${event.identity}`)});
     console.log(JSON.stringify(result,null,2));return;
   }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { parseAllDocuments } from 'yaml';
 import backupAlerting from '../src/hiss-backup-alerting-artifact.json' with {type:'json'};
 import scrapeAccess from '../src/hiss-scrape-access-artifact.json' with {type:'json'};
-import {BACKUP_ALERTING_SOURCE,SCRAPE_ACCESS_SOURCE,backupAlertingParts,prepareHissBackupAlerting,prepareHissScrapeAccess,selects,
+import {BACKUP_ALERTING_SOURCE,BACKUP_FENCE_BINDINGS,SCRAPE_ACCESS_SOURCE,backupAlertingParts,backupFenceText,prepareHissBackupAlerting,prepareHissScrapeAccess,selects,
  verifyHissBackupAlertingArtifact,verifyHissScrapeAccessArtifact} from '../src/hiss-backup-alerting.mjs';
 
 // RKE2 readiness stage R1 (plan 2026-10-24, user approval "전부 승인 (권장)"): BK-P6 and AL-P4 Roles with their four
@@ -23,7 +23,8 @@ test('both artifacts are the pinned Cluster Manager bytes',()=>{
 test('the parts: alerting and Longhorn halves, fences apart from the rights they fence, nothing lost',()=>{
  const parts=backupAlertingParts(backupAlerting.yaml);
  const names=raw=>docs(raw).map(d=>`${d.kind}/${d.metadata.name}`);
- assert.deepEqual(names(parts.alertingFences),['ValidatingAdmissionPolicy/opensphere-hiss-alert-emergency-route','ValidatingAdmissionPolicyBinding/opensphere-hiss-alert-emergency-route']);
+ assert.deepEqual(names(parts.alertingFences),['ValidatingAdmissionPolicy/opensphere-hiss-alert-emergency-route','ValidatingAdmissionPolicyBinding/opensphere-hiss-alert-emergency-route',
+  'ValidatingAdmissionPolicy/opensphere-hiss-alert-emergency-inputs','ValidatingAdmissionPolicyBinding/opensphere-hiss-alert-emergency-inputs']);
  assert.deepEqual(names(parts.alertingPermissions),['Role/opensphere-hiss-core-alerts','RoleBinding/opensphere-hiss-core-alerts']);
  assert.equal(names(parts.backupFences).length,6);assert.ok(names(parts.backupFences).every(n=>n.startsWith('ValidatingAdmission')));
  assert.deepEqual(names(parts.backupPermissions),['Role/opensphere-hiss-backup-executor','RoleBinding/opensphere-hiss-backup-executor']);
@@ -33,7 +34,8 @@ test('the parts: alerting and Longhorn halves, fences apart from the rights they
   if(rule.resources.includes('secrets'))assert.deepEqual(rule.verbs,['get']);
 });
 
-function kube({namespaces=['monitoring','opensphere-console','longhorn-system','ingress-nginx','cert-manager'],crd=true,present=[],pods={},policies={},cilium={}}={}){
+function kube({namespaces=['monitoring','opensphere-console','longhorn-system','ingress-nginx','cert-manager'],crd=true,present=[],pods={},policies={},cilium={},liveObjects}={}){
+ const byName=(kind,name)=>(liveObjects||docs(backupAlerting.yaml)).find(d=>d.kind.toLowerCase()===kind&&d.metadata.name===name);
  const calls=[];
  const fn=(exe,args,options)=>{
   assert.equal(exe,'kubectl');assert.deepEqual(args.slice(0,2),['--context','rke2']);calls.push({args:args.slice(2),input:options?.input});
@@ -41,7 +43,8 @@ function kube({namespaces=['monitoring','opensphere-console','longhorn-system','
   if(a[0]==='get'&&a[1]==='namespace')return namespaces.includes(a[2])?`namespace/${a[2]}`:'';
   if(a[0]==='get'&&a[1]==='customresourcedefinition')return crd?'customresourcedefinition.apiextensions.k8s.io/'+a[2]:'';
   if(a[0]==='get'&&a[1]==='-f')return docs(options.input).filter(d=>present.includes(d.metadata.name)).map(d=>d.kind.toLowerCase()+'/'+d.metadata.name).join('\n');
-  if(a[0]==='get'&&a[1]==='validatingadmissionpolicy')return JSON.stringify(docs(backupAlerting.yaml).find(d=>d.kind==='ValidatingAdmissionPolicy'&&d.metadata.name===a[2]));
+  if(a[0]==='get'&&['validatingadmissionpolicy','validatingadmissionpolicybinding'].includes(a[1])){const d=byName(a[1],a[2]);return present.includes(a[2])&&d?JSON.stringify(d):'';}
+  if(a[0]==='-n'&&a[2]==='get'&&['role','rolebinding'].includes(a[3])){const d=byName(a[3],a[4]);return present.includes(a[4])&&d?JSON.stringify(d):'';}
   if(a[0]==='-n'&&a[2]==='get'&&a[3]==='pods')return JSON.stringify({items:pods[a[1]]||[]});
   if(a[0]==='-n'&&a[2]==='get'&&a[3]==='networkpolicies')return JSON.stringify({items:policies[a[1]]||[]});
   if(a[0]==='-n'&&a[2]==='get'&&a[3]==='ciliumnetworkpolicies.cilium.io'){if(cilium==='absent')throw Error('no such resource');return JSON.stringify({items:cilium[a[1]]||[]});}
@@ -56,17 +59,22 @@ test('backup and alerting plan: blocked without monitoring, Longhorn half only w
  assert.deepEqual(prepareHissBackupAlerting(backupAlerting.yaml,scope,{runner:kube({namespaces:['opensphere-console']}).fn}),
   {state:'Blocked',reason:'NamespacesMissing',missing:['monitoring'],applied:false});
  const noLonghorn=prepareHissBackupAlerting(backupAlerting.yaml,scope,{runner:kube({crd:false}).fn});
- assert.deepEqual(noLonghorn,{state:'NeedsPreparation',applied:false,resourceCount:4,longhorn:'NotApplicable'});
+ assert.deepEqual(noLonghorn,{state:'NeedsPreparation',applied:false,resourceCount:6,longhorn:'NotApplicable'});
  const all=docs(backupAlerting.yaml).map(d=>d.metadata.name);
  const k=kube({present:all});
- assert.deepEqual(prepareHissBackupAlerting(backupAlerting.yaml,scope,{runner:k.fn}),{state:'Present',applied:false,resourceCount:12,longhorn:'Included'});
- assert.ok(k.calls.every(c=>c.args[0]==='get'),'plan never writes');
+ assert.deepEqual(prepareHissBackupAlerting(backupAlerting.yaml,scope,{runner:k.fn}),{state:'Present',applied:false,resourceCount:14,longhorn:'Included',backupFences:'WarnAudit'});
+ assert.ok(k.calls.every(c=>c.args[0]==='get'||(c.args[0]==='-n'&&c.args[2]==='get')),'plan never writes');
  assert.equal(prepareHissBackupAlerting(backupAlerting.yaml,scope,{runner:kube({present:all.slice(0,3)}).fn}).state,'NeedsUpdate');
+ // A Role whose rules differ, or a binding whose actions differ, is a revision difference too, not only a policy.
+ const older=docs(backupAlerting.yaml).map(d=>d.kind==='Role'&&d.metadata.name==='opensphere-hiss-core-alerts'?{...d,rules:d.rules.slice(1)}:d);
+ assert.deepEqual(prepareHissBackupAlerting(backupAlerting.yaml,scope,{runner:kube({present:all,liveObjects:older}).fn}).differs,['Role/opensphere-hiss-core-alerts']);
+ const warnRoute=docs(backupAlerting.yaml).map(d=>d.kind==='ValidatingAdmissionPolicyBinding'&&d.metadata.name==='opensphere-hiss-alert-emergency-route'?{...d,spec:{...d.spec,validationActions:['Warn']}}:d);
+ assert.deepEqual(prepareHissBackupAlerting(backupAlerting.yaml,scope,{runner:kube({present:all,liveObjects:warnRoute}).fn}).differs,['ValidatingAdmissionPolicyBinding/opensphere-hiss-alert-emergency-route']);
 });
 
 test('backup and alerting apply: fences before rights, a failed fence stops everything after it',()=>{
  const k=kube();
- assert.deepEqual(prepareHissBackupAlerting(backupAlerting.yaml,scope,{runner:k.fn,apply:true}),{state:'Applied',applied:true,resourceCount:12,longhorn:'Included'});
+ assert.deepEqual(prepareHissBackupAlerting(backupAlerting.yaml,scope,{runner:k.fn,apply:true}),{state:'Applied',applied:true,resourceCount:14,longhorn:'Included',backupFences:'WarnAudit'});
  const applies=k.calls.filter(c=>c.args[0]==='apply').map(c=>docs(c.input).map(d=>d.kind));
  assert.equal(applies.length,4);
  assert.ok(applies[0].every(x=>x.startsWith('ValidatingAdmission'))&&applies[2].every(x=>x.startsWith('ValidatingAdmission')));
@@ -118,4 +126,23 @@ test('label selectors evaluate like Kubernetes',()=>{
  assert.ok(selects({matchExpressions:[{key:'a',operator:'In',values:['1','3']}]},l));assert.ok(!selects({matchExpressions:[{key:'a',operator:'NotIn',values:['1']}]},l));
  assert.ok(selects({matchExpressions:[{key:'c',operator:'DoesNotExist'}]},l));assert.ok(!selects({matchExpressions:[{key:'c',operator:'Exists'}]},l));
  assert.ok(!selects(undefined,l));assert.ok(!selects({matchExpressions:[{key:'a',operator:'Bogus'}]},l));
+});
+
+test('the Longhorn fences start as Warn/Audit, move to Deny only when asked, and a live Deny is never weakened silently',()=>{
+ const backupBindings=raw=>docs(raw).filter(d=>d.kind==='ValidatingAdmissionPolicyBinding'&&BACKUP_FENCE_BINDINGS.includes(d.metadata.name)).map(d=>d.spec.validationActions);
+ const parts=backupAlertingParts(backupAlerting.yaml);
+ assert.deepEqual(backupBindings(parts.backupFences),[['Warn','Audit'],['Warn','Audit'],['Warn','Audit']]);
+ assert.deepEqual(backupBindings(backupFenceText(parts.backupFences,'deny')),[['Deny'],['Deny'],['Deny']]);
+ assert.equal(backupFenceText(parts.backupFences,'warn'),parts.backupFences);
+ assert.throws(()=>backupFenceText(parts.alertingFences,'deny'),{code:'UNTRUSTED_PROFILE'});
+ const applied=mode=>{const k=kube();const r=prepareHissBackupAlerting(backupAlerting.yaml,scope,{runner:k.fn,apply:true,...(mode?{backupFences:mode}:{})});
+  return {r,fences:backupBindings(k.calls.filter(c=>c.args[0]==='apply').map(c=>c.input).join('---\n'))};};
+ assert.deepEqual(applied('deny').fences,[['Deny'],['Deny'],['Deny']]);assert.equal(applied('deny').r.backupFences,'Deny');
+ assert.deepEqual(applied().fences,[['Warn','Audit'],['Warn','Audit'],['Warn','Audit']]);
+ // Live Deny stays Deny without the option.
+ const liveDeny=docs(backupAlerting.yaml).map(d=>d.kind==='ValidatingAdmissionPolicyBinding'&&BACKUP_FENCE_BINDINGS.includes(d.metadata.name)?{...d,spec:{...d.spec,validationActions:['Deny']}}:d);
+ const k=kube({present:BACKUP_FENCE_BINDINGS,liveObjects:liveDeny});
+ assert.equal(prepareHissBackupAlerting(backupAlerting.yaml,scope,{runner:k.fn,apply:true}).backupFences,'Deny');
+ assert.deepEqual(backupBindings(k.calls.filter(c=>c.args[0]==='apply').map(c=>c.input).join('---\n')),[['Deny'],['Deny'],['Deny']]);
+ assert.throws(()=>prepareHissBackupAlerting(backupAlerting.yaml,scope,{runner:kube().fn,backupFences:'off'}),{code:'INVALID_INPUT'});
 });

@@ -8,6 +8,10 @@ import { installTarget } from './install-target.mjs';
 //
 // - alert-emergency: monitoring/opensphere-alert-emergency, the temporary emergency receiver (A-D1). Slack or SMTP,
 //   plus an optional dead-man URL. Expires at the Console alert path (R2-C1) or 2026-11-30, whichever is earlier.
+//   Setup also records the non-secret receiver values (kind; SMTP smarthost, sender, recipients) in the ConfigMap
+//   monitoring/opensphere-alert-emergency-allowed, the parameter of the admission policy that lets Cluster Manager's
+//   AlertmanagerConfig use exactly those values. --clear keeps the ConfigMap with receiver-kind none, so the route can
+//   still be removed.
 // - backup-store: longhorn-system/opensphere-backup-<name>, the S3 key Longhorn uses for its backup target (B1).
 // - etcd-s3: kube-system/opensphere-etcd-s3, RKE2's etcd snapshot S3 settings (etcd-s3-config-secret, B1).
 const fail = (code, message) => Object.assign(new Error(message), { code });
@@ -19,6 +23,8 @@ const DNS = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$
 const NAME = /^[a-z0-9]([a-z0-9-]{0,38}[a-z0-9])?$/;
 const S3_BUCKET = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
 const REGION = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const IPV4 = /^((25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])$/;
+export const EMERGENCY_ALLOWED = 'opensphere-alert-emergency-allowed';
 
 function closed(input, required, optional = []) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw fail('INVALID_INPUT', 'The input must be one JSON object');
@@ -29,11 +35,11 @@ function closed(input, required, optional = []) {
   for (const [k, v] of Object.entries(input)) if (!['string', 'boolean', 'number'].includes(typeof v) && !Array.isArray(v)) throw fail('INVALID_INPUT', `Input field ${k} has the wrong type`);
 }
 const str = (v, field, max = 2048) => { if (typeof v !== 'string' || !v.trim() || v.length > max || /[\r\n\0]/.test(v)) throw fail('INVALID_INPUT', `${field} must be a single-line string`); return v.trim(); };
-function httpsUrl(v, field, { hosts } = {}) {
+function httpsUrl(v, field, { hosts, allowIp = false } = {}) {
   let url; try { url = new URL(str(v, field)); } catch { throw fail('INVALID_INPUT', `${field} must be a URL`); }
   if (url.protocol !== 'https:' || url.username || url.password) throw fail('INVALID_INPUT', `${field} must be an https URL without credentials in it`);
   if (hosts && !hosts.has(url.hostname)) throw fail('INVALID_INPUT', `${field} must point at ${[...hosts].join(' or ')}`);
-  if (!hosts && (!DNS.test(url.hostname) || /^localhost$/i.test(url.hostname))) throw fail('INVALID_INPUT', `${field} must name a DNS host`);
+  if (!hosts && !(allowIp && IPV4.test(url.hostname)) && (!DNS.test(url.hostname) || /^localhost$/i.test(url.hostname))) throw fail('INVALID_INPUT', `${field} must name a DNS host${allowIp ? ' or an IPv4 address' : ''}`);
   return url.href;
 }
 const pem = (v, field) => { if (typeof v !== 'string' || v.length > 12000 || !/^-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----\s*$/.test(v.trim())) throw fail('INVALID_INPUT', `${field} must be PEM certificates`); return v.trim() + '\n'; };
@@ -68,7 +74,7 @@ function emergencyData(input) {
 function backupStoreData(input) {
   closed(input, ['accessKeyId', 'secretAccessKey', 'endpoint'], ['caCertificates', 'virtualHostedStyle']);
   const data = { AWS_ACCESS_KEY_ID: str(input.accessKeyId, 'accessKeyId', 256), AWS_SECRET_ACCESS_KEY: str(input.secretAccessKey, 'secretAccessKey', 1024),
-    AWS_ENDPOINTS: httpsUrl(input.endpoint, 'endpoint').replace(/\/$/, '') };
+    AWS_ENDPOINTS: httpsUrl(input.endpoint, 'endpoint', { allowIp: true }).replace(/\/$/, '') };
   if (input.caCertificates !== undefined) data.AWS_CERT = pem(input.caCertificates, 'caCertificates');
   if (input.virtualHostedStyle !== undefined) data.VIRTUAL_HOSTED_STYLE = bool(input.virtualHostedStyle, 'virtualHostedStyle');
   return data;
@@ -116,6 +122,15 @@ export function buildHissSecret(kind, input, { name, expiresAt, now = Date.now()
     annotations }, data: Object.fromEntries(Object.entries(data).sort().map(([k, v]) => [k, Buffer.from(v, 'utf8').toString('base64')])) };
 }
 
+// The admission-policy parameter for the emergency route: only non-secret values, exactly as Cluster Manager renders them.
+export function emergencyAllowedConfigMap(secret) {
+  const data = secret ? Object.fromEntries(Object.entries(secret.data).map(([k, v]) => [k, Buffer.from(v, 'base64').toString('utf8')])) : {};
+  const allowed = { 'receiver-kind': data['receiver-kind'] || 'none' };
+  if (allowed['receiver-kind'] === 'smtp') for (const key of ['smtp-smarthost', 'smtp-from', 'smtp-to']) allowed[key] = data[key];
+  return { apiVersion: 'v1', kind: 'ConfigMap', metadata: { namespace: 'monitoring', name: EMERGENCY_ALLOWED,
+    labels: { 'app.kubernetes.io/part-of': 'opensphere-console', 'app.kubernetes.io/managed-by': 'OpenSphere-Setup', 'opensphere.io/hiss-secret': 'alert-emergency' } }, data: allowed };
+}
+
 // Reads the protected input: a pipe only, bounded, one JSON object.
 export async function readHissSecretInput(stream = process.stdin) {
   if (stream.isTTY) throw fail('INVALID_INPUT', 'Pipe the JSON input (for example from a file only you can read); values are never accepted as arguments or typed visibly');
@@ -136,13 +151,21 @@ export function writeHissSecret(kind, input, scope, { runner = run, name, expire
   if (!kubectl(['get', 'namespace', secretTarget.namespace, '--ignore-not-found', '-o', 'name', '--request-timeout=10s']).trim()) {
     throw fail('PREPARATION_BLOCKED', `Namespace ${secretTarget.namespace} does not exist`);
   }
+  const apply = object => kubectl(['apply', '--server-side', '--field-manager=opensphere-setup-hiss', '-f', '-', '--request-timeout=20s'], JSON.stringify(object));
   if (clear) {
     if (confirm !== secretTarget.name) throw fail('INVALID_INPUT', `--clear needs --confirm ${secretTarget.name}`);
     kubectl(['-n', secretTarget.namespace, 'delete', 'secret', secretTarget.name, '--ignore-not-found', '--request-timeout=20s']);
+    if (kind === 'alert-emergency') apply(emergencyAllowedConfigMap(null));
     return { state: 'Removed', secret: `${secretTarget.namespace}/${secretTarget.name}` };
   }
   const secret = buildHissSecret(kind, input, { name, expiresAt, now });
-  kubectl(['apply', '--server-side', '--field-manager=opensphere-setup-hiss', '-f', '-', '--request-timeout=20s'], JSON.stringify(secret));
+  // A Secret once written with client-side `kubectl apply` keeps its old values in this annotation (the 10-23 pull Secret
+  // finding); it goes before the new values are written. Removing an absent annotation is a no-op.
+  if (kubectl(['-n', secretTarget.namespace, 'get', 'secret', secretTarget.name, '--ignore-not-found', '-o', 'name', '--request-timeout=10s']).trim()) {
+    kubectl(['-n', secretTarget.namespace, 'annotate', 'secret', secretTarget.name, 'kubectl.kubernetes.io/last-applied-configuration-', '--request-timeout=20s']);
+  }
+  apply(secret);
+  if (kind === 'alert-emergency') apply(emergencyAllowedConfigMap(secret));
   return { state: 'Applied', secret: `${secretTarget.namespace}/${secretTarget.name}`, keys: Object.keys(secret.data),
     ...(secret.metadata.annotations['opensphere.io/expires-at'] ? { expiresAt: secret.metadata.annotations['opensphere.io/expires-at'] } : {}),
     next: kind === 'alert-emergency' ? 'cluster-manager.hiss.alerts.apply part=emergency'

@@ -8,7 +8,9 @@ import { installTarget } from './install-target.mjs';
 //
 // - deploy/hiss-backup-alerting.yaml (plan §4.1 BK-P6, AL-P4): Cluster Manager's Roles for its core alert rule, the
 //   temporary emergency AlertmanagerConfig and the Longhorn backup target, recurring jobs and volume group labels, and
-//   four admission policies that fence those writes. The Longhorn half is applied only where Longhorn runs.
+//   five admission policies that fence those writes. The Longhorn half is applied only where Longhorn runs. The alert
+//   fences hold only together with the Cluster Manager privileged-write fence (CM #32 / Setup #45): on RKE2 the same
+//   account already writes every Secret in monitoring through the kube-prometheus-stack executor Role.
 // - deploy/hiss-scrape-access.yaml (AL-P5): NetworkPolicies that admit Prometheus to the ingress-nginx and cert-manager
 //   metrics ports. Each is applied only where another policy already isolates those Pods: a policy that selects a Pod
 //   denies every ingress it does not list, so applying it to an unisolated namespace would cut 80/443 and the webhook.
@@ -18,14 +20,14 @@ import { installTarget } from './install-target.mjs';
 export const BACKUP_ALERTING_SOURCE = Object.freeze({
   repository: 'opensphere-platform/OpenSphere-shell-clusterManager',
   path: 'deploy/hiss-backup-alerting.yaml',
-  revision: '1ba34a858d4509d840a54cd0bdb6ea0b9768e275',
+  revision: '2dc28f6f746dff1757120c9d82da5003c6ef2117',
 });
 export const SCRAPE_ACCESS_SOURCE = Object.freeze({
   repository: 'opensphere-platform/OpenSphere-shell-clusterManager',
   path: 'deploy/hiss-scrape-access.yaml',
-  revision: '1ba34a858d4509d840a54cd0bdb6ea0b9768e275',
+  revision: '2dc28f6f746dff1757120c9d82da5003c6ef2117',
 });
-const BACKUP_ALERTING_SHA256 = '0213750fc0ef9bfe2e3fe4e43b7b5f6d5cee0f430ff461345f957de2176efb8a';
+const BACKUP_ALERTING_SHA256 = '6d36bb48a5f09226bc9a82b1772f61da427a5872cdabbd288e4435e602fb2280';
 const SCRAPE_ACCESS_SHA256 = '0132b4889591dcae9aba87af076aba2c101484544f2f30d62cf62bf2e5a8b0a4';
 
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -62,28 +64,59 @@ const fenceProjection = policy => ({
   validations: (policy?.spec?.validations || []).map(v => ({ expression: normalExpression(v.expression), message: v.message ?? null })),
 });
 
-export function prepareHissBackupAlerting(raw, scope, { runner = run, apply = false } = {}) {
+// The three Longhorn policy bindings start as [Warn, Audit] (the artifact bytes): the policies see the object after
+// Longhorn's mutating webhooks, which only RKE2 exercises (review M2). `backupFences: 'deny'` (CLI
+// `prepare-hiss --apply --backup-fences deny`) moves them to [Deny] once the first target set, job apply and volume
+// assign/unassign on RKE2 raised no warning; `'warn'` moves them back. Without the option a live [Deny] is kept, so a
+// later prepare-hiss never weakens the fence silently.
+export const BACKUP_FENCE_BINDINGS = Object.freeze(['opensphere-hiss-backup-target', 'opensphere-hiss-backup-recurring-jobs', 'opensphere-hiss-backup-volume-labels']);
+const WARN_ACTIONS = '  validationActions: ["Warn", "Audit"]';
+const DENY_ACTIONS = '  validationActions: ["Deny"]';
+export function backupFenceText(part, mode) {
+  if (mode !== 'deny') return part;
+  if (part.split(WARN_ACTIONS).length - 1 !== BACKUP_FENCE_BINDINGS.length) throw fail('UNTRUSTED_PROFILE', 'The backup fence bindings are not in the reviewed shape');
+  return part.split(WARN_ACTIONS).join(DENY_ACTIONS);
+}
+
+// The live shape compared with the artifact: for policies their match, variables and validations; for Roles their
+// rules; for RoleBindings their roleRef and subjects; for bindings their policy, parameter and actions.
+const sortedJson = v => JSON.stringify(v, (_k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.keys(x).sort().map(k => [k, x[k]])) : x));
+const projection = d => {
+  if (!d) return null;
+  if (d.kind === 'ValidatingAdmissionPolicy') return sortedJson({ ...fenceProjection(d), paramKind: d.spec?.paramKind ?? null });
+  if (d.kind === 'ValidatingAdmissionPolicyBinding') return sortedJson({ policyName: d.spec?.policyName, paramRef: d.spec?.paramRef ?? null, validationActions: d.spec?.validationActions || [] });
+  if (d.kind === 'Role') return sortedJson((d.rules || []).map(r => ({ apiGroups: r.apiGroups || [], resources: r.resources || [], resourceNames: r.resourceNames || [], verbs: r.verbs || [] })));
+  if (d.kind === 'RoleBinding') return sortedJson({ roleRef: d.roleRef, subjects: d.subjects });
+  return null;
+};
+
+export function prepareHissBackupAlerting(raw, scope, { runner = run, apply = false, backupFences } = {}) {
   const target = installTarget(scope);
   verifyHissBackupAlertingArtifact(raw);
+  if (backupFences !== undefined && !['deny', 'warn'].includes(backupFences)) throw fail('INVALID_INPUT', '--backup-fences is deny or warn');
   const kubectl = (args, input) => String(runner('kubectl', ['--context', target.context, ...args], { capture: true, ...(input !== undefined ? { input } : {}) }) || '');
   const exists = (kind, name) => Boolean(kubectl(['get', kind, name, '--ignore-not-found', '-o', 'name', '--request-timeout=10s']).trim());
+  const live = d => {
+    const kind = { ValidatingAdmissionPolicy: 'validatingadmissionpolicy', ValidatingAdmissionPolicyBinding: 'validatingadmissionpolicybinding', Role: 'role', RoleBinding: 'rolebinding' }[d.kind];
+    try { const text = kubectl([...(d.metadata.namespace ? ['-n', d.metadata.namespace] : []), 'get', kind, d.metadata.name, '--ignore-not-found', '-o', 'json', '--request-timeout=10s']); return text.trim() ? JSON.parse(text) : null; }
+    catch { return null; }
+  };
   const missing = ['monitoring', 'opensphere-console'].filter(name => !exists('namespace', name));
   if (missing.length) return { state: 'Blocked', reason: 'NamespacesMissing', missing, applied: false };
   const longhorn = exists('namespace', 'longhorn-system') && exists('customresourcedefinition', 'recurringjobs.longhorn.io');
   const parts = backupAlertingParts(raw);
-  const selected = [parts.alertingFences, parts.alertingPermissions, ...(longhorn ? [parts.backupFences, parts.backupPermissions] : [])];
+  // The fence mode: as asked, else as it is live (Deny stays Deny), else the artifact's Warn/Audit.
+  const liveDeny = longhorn && BACKUP_FENCE_BINDINGS.every(name => (live({ kind: 'ValidatingAdmissionPolicyBinding', metadata: { name } })?.spec?.validationActions || []).includes('Deny'));
+  const mode = backupFences ?? (liveDeny ? 'deny' : 'warn');
+  const selected = [parts.alertingFences, parts.alertingPermissions, ...(longhorn ? [backupFenceText(parts.backupFences, mode), parts.backupPermissions] : [])];
   const docs = selected.flatMap(documentsOf);
-  const result = { resourceCount: docs.length, longhorn: longhorn ? 'Included' : 'NotApplicable' };
+  const result = { resourceCount: docs.length, longhorn: longhorn ? 'Included' : 'NotApplicable', ...(longhorn ? { backupFences: mode === 'deny' ? 'Deny' : 'WarnAudit' } : {}) };
   if (!apply) {
     const present = kubectl(['get', '-f', '-', '--ignore-not-found', '-o', 'name', '--request-timeout=10s'], selected.join('---\n')).split(/\r?\n/).filter(Boolean).length;
     if (present === 0) return { state: 'NeedsPreparation', applied: false, ...result };
     if (present < docs.length) return { state: 'NeedsUpdate', reason: 'Partial', present, applied: false, ...result };
-    const differs = docs.filter(d => d.kind === 'ValidatingAdmissionPolicy').map(d => d.metadata.name).filter(name => {
-      let live = null;
-      try { live = JSON.parse(kubectl(['get', 'validatingadmissionpolicy', name, '-o', 'json', '--request-timeout=10s'])); } catch { live = null; }
-      return JSON.stringify(fenceProjection(live)) !== JSON.stringify(fenceProjection(docs.find(d => d.metadata.name === name)));
-    });
-    return { state: differs.length ? 'NeedsUpdate' : 'Present', ...(differs.length ? { reason: 'FenceRevisionDiffers', fences: differs } : {}), applied: false, ...result };
+    const differs = docs.filter(d => projection(d) !== null && projection(live(d)) !== projection(d)).map(d => `${d.kind}/${d.metadata.name}`);
+    return { state: differs.length ? 'NeedsUpdate' : 'Present', ...(differs.length ? { reason: 'RevisionDiffers', differs } : {}), applied: false, ...result };
   }
   // Fences first: a failed policy apply stops before the rights it would fence exist.
   for (const part of selected) kubectl(['apply', '--server-side', '--field-manager=opensphere-setup-hiss', '-f', '-', '--request-timeout=20s'], part);
