@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import setupPackage from '../package.json' with { type: 'json' };
 import {runArgocdObserverPreparation} from './argocd-observer-preparation.mjs';
-import {prepareInstalledHiss} from './prepare-installed-hiss.mjs';
+import {observeInstalledHissTarget,prepareInstalledHiss} from './prepare-installed-hiss.mjs';
+import {readHissSecretInput,writeHissSecret} from './hiss-secret-input.mjs';
 import {prepareCephExecutionProfile} from './ceph-prerequisites.mjs';
 import {createPsssArgoRbacClient} from './psss-argocd-rbac-transition.mjs';
 import {planPsssArgoPreparation,applyPsssArgoPreparation} from './psss-argocd-preparation.mjs';
@@ -160,7 +161,11 @@ Usage:
   opensphere-setup bootstrap --release <channel> [--lock <verified-lock-file>]
   opensphere-setup bootstrap -r <channel> [--lock <verified-lock-file>]
   opensphere-setup prepare-ceph [--context <kube-context>] [--console-url <https-origin>] [--apply]
-  opensphere-setup prepare-hiss [--context <kube-context>] [--apply]
+  opensphere-setup prepare-hiss [--context <kube-context>] [--apply] [--backup-fences deny|warn]
+      (--backup-fences deny: after the first HISS backup writes on this cluster raised no admission warning)
+  opensphere-setup prepare-hiss-secret alert-emergency|backup-store|etcd-s3 [--name <store>] [--expires-at <ISO>]
+      [--context <kube-context>] < input.json        (values only on stdin, never as arguments)
+  opensphere-setup prepare-hiss-secret <kind> [--name <store>] --clear --confirm <secret-name> [--context <kube-context>]
       [--context <kube-context>] [--admin-username <name>]
        [--admin-display-name <name>] [--admin-email <email>]
        [--storage-class <name>] [--console <https-origin|loopback-http-origin>]
@@ -290,8 +295,21 @@ async function main() {
   if (command === 'prepare-hiss') {
     assertKubectl();
     const result=await prepareInstalledHiss({context:context||kubectl(['config','current-context'],{capture:true}),apply:hasOption('--apply'),
+      backupFences:hasOption('--backup-fences')?option('--backup-fences',''):undefined,
       onProgress:event=>console.error(`[HISS 준비] ${event.state}: ${event.identity}`)});
     console.log(JSON.stringify(result,null,2));return;
+  }
+  if (command === 'prepare-hiss-secret') {
+    // RKE2 readiness R1 (plan 2026-10-24 §4.2): the protected input for the HISS credentials. The JSON object comes
+    // only from stdin; the result names the Secret and its keys, never a value.
+    assertKubectl();
+    const kind=process.argv[3];
+    const target=observeInstalledHissTarget(context||kubectl(['config','current-context'],{capture:true}));
+    const clear=hasOption('--clear');
+    const input=clear?undefined:await readHissSecretInput(process.stdin);
+    const result=writeHissSecret(kind,input,target.scope,{name:hasOption('--name')?option('--name',''):undefined,
+      expiresAt:hasOption('--expires-at')?option('--expires-at',''):undefined,clear,confirm:hasOption('--confirm')?option('--confirm',''):undefined});
+    console.log(JSON.stringify({...result,clusterUid:target.clusterUid},null,2));return;
   }
   if (command === 'prepare-ceph') {
     // No default cluster or Console (2026-09-23): prepare where the operator points, for the Console
