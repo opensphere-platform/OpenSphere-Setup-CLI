@@ -1,0 +1,97 @@
+# NOT ACTIVATED: exact privilege expansion requires explicit scope approval.
+# Reproduction draft from the Cluster Manager HISS validation authority.
+# CON-FR-007/018: disposable HISS verification, separate from Console workloads.
+# No Secret access, RBAC mutation, Pod exec, host access or cluster writes.
+# The owner only accepts its signed fixed canary commands through OS Shell.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: opensphere-hiss-validation
+  labels:
+    app.kubernetes.io/part-of: opensphere-console
+    opensphere.io/authority: hiss-validation-v1
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.30
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: default
+  namespace: opensphere-hiss-validation
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: opensphere-hiss-validation
+  namespace: opensphere-hiss-validation
+spec:
+  hard:
+    pods: "16"
+    requests.cpu: "2"
+    requests.memory: 2Gi
+    limits.cpu: "2"
+    limits.memory: 2Gi
+    persistentvolumeclaims: "4"
+    requests.storage: 256Mi
+    services: "4"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensphere-hiss-validation
+  namespace: opensphere-hiss-validation
+rules:
+  - apiGroups: [""]
+    resources: [pods, services, persistentvolumeclaims]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [snapshot.storage.k8s.io]
+    resources: [volumesnapshots]
+    verbs: [get, list, watch, create, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensphere-hiss-validation
+  namespace: opensphere-hiss-validation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensphere-hiss-validation
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-cluster-manager-runtime
+    namespace: opensphere-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: opensphere-hiss-diagnostics
+  labels:
+    app.kubernetes.io/part-of: opensphere-console
+    opensphere.io/authority: hiss-validation-v1
+rules:
+  - apiGroups: [apiregistration.k8s.io]
+    resources: [apiservices]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: opensphere-hiss-diagnostics
+  labels:
+    app.kubernetes.io/part-of: opensphere-console
+    opensphere.io/authority: hiss-validation-v1
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: opensphere-hiss-diagnostics
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-cluster-manager-runtime
+    namespace: opensphere-console

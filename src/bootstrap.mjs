@@ -2848,13 +2848,16 @@ async function installPreparedRelease(lock, prepared, storageClass, consoleUrl, 
   }
   runFoundationInstallers(lock, prepared.foundation, storageClass, consoleUrl, progress);
   if (prepared.foundation.hissScope) {
-    progress?.item('설치','HISS 실행·검증 준비물 103개 확인·준비 (기능 설치는 OS Shell에서 실행)');
     const raw = readFileSync(join(prepared.foundation.root,HISS_EXECUTION_PROFILE.consoleArtifactPath),'utf8');
+    const executionProfile=verifyHissExecutionProfile(raw,prepared.foundation.hissScope);
+    progress?.item('설치',`HISS 실행 준비물 ${executionProfile.resources.length}개와 고정 검증 준비물 확인·준비 (기능 설치는 OS Shell에서 실행)`);
     const validation = readFileSync(join(prepared.foundation.root,HISS_VALIDATION_ARTIFACT),'utf8');
     verifyHissValidationArtifact(validation);
     await prepareHissPrerequisites(raw,prepared.foundation.hissScope,{client:createHissPrerequisiteClient(prepared.foundation.hissScope),apply:true,
       onProgress:event=>progress?.item('HISS 준비',`${event.state}: ${event.identity}`)});
-    prepareHissValidation(validation,prepared.foundation.hissScope);
+    const validationPreparation=prepareHissValidation(validation,prepared.foundation.hissScope);
+    if(validationPreparation?.state==='Preserved')progress?.item('HISS 검증',
+      `기존 준비물 ${validationPreparation.resourceCount}개 관측·보존 (변경 없음); 요청 ${validationPreparation.profileSha256}, 실제 Role 계약 ${validationPreparation.observedRoleProfileSha256}`);
     progress?.item('설치','L4 Core 고정 준비물 53개 확인·준비 (실제 설치는 22 → OS Shell)');
     const core=readFileSync(join(prepared.foundation.root,PLATFORM_CORE_ARTIFACT),'utf8');
     await preparePlatformCorePrerequisites(core,prepared.foundation.hissScope,{client:createPlatformCoreClient(prepared.foundation.hissScope),apply:true,
