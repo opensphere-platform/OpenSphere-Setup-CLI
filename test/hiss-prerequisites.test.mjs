@@ -1,8 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 import {
   HISS_EXECUTION_PROFILE,
+  HISS_EXECUTION_PROFILES,
+  verifyHissExecutionProfile,
   createHissPrerequisiteClient,
   prepareHissPrerequisites,
 } from '../src/hiss-prerequisites.mjs';
@@ -331,4 +335,74 @@ test('kubectl adapter pins context and only exposes bounded get/create', async (
     assert.equal(call.args.some(arg => ['apply', 'patch', 'delete', 'replace'].includes(arg)), false);
   }
   assert.equal(HISS_EXECUTION_PROFILE.sha256.length, 64);
+});
+
+// Exact captured Console bytes, not a rendered/re-serialized approximation. This
+// blob is identical at installed 5df584eff, C2 1d7b0178 and published C3 320e5031.
+const initialRaw=readFileSync(new URL('./fixtures/hiss-execution-profile.v1.initial-96.json',import.meta.url),'utf8');
+const initialProfile=JSON.parse(initialRaw);
+const initialHash='9ddee9740e7ff194eb88a8093d8b631405a1da290209e748bf265bd17441118b';
+
+test('supported captures and the configured Console producer match; earlier96 is an unchanged subset of current105',()=>{
+  assert.equal(createHash('sha256').update(initialRaw).digest('hex'),initialHash);
+  assert.equal(HISS_EXECUTION_PROFILES.length,2);
+  assert.equal(HISS_EXECUTION_PROFILE.sha256,'615cc74f3e34e14a9175404b6fac086f9c84922eb7784bbfb02aa453c57efcb5');
+  assert.equal(initialProfile.resources.length,96);
+  const currentById=new Map(profile.resources.map(r=>[key(r),r]));
+  for(const resource of initialProfile.resources)assert.deepEqual(resource,currentById.get(key(resource)));
+  for(const [bytes,count]of [[initialRaw,96],[raw,105]])assert.equal(verifyHissExecutionProfile(bytes,scope).resources.length,count);
+  // CI first verifies this checkout against console-source.lock.json. Check its
+  // actual admitted file here so updating Setup alone cannot miss producer drift.
+  if(process.env.OPENSPHERE_CONSOLE_SOURCE){
+    const admitted=readFileSync(resolve(process.env.OPENSPHERE_CONSOLE_SOURCE,HISS_EXECUTION_PROFILE.consoleArtifactPath),'utf8');
+    const captured=verifyHissExecutionProfile(admitted,scope);
+    assert.equal(captured.resources.length,HISS_EXECUTION_PROFILES.find(item=>item.sha256===createHash('sha256').update(admitted).digest('hex')).resourceCount);
+  }
+});
+
+test('both captures reject altered bytes, omitted resources and self-declared authority before any observation or write',async()=>{
+  for(const bytes of [initialRaw,raw]){
+    const removed=JSON.parse(bytes);removed.resources.pop();
+    const authority=JSON.parse(bytes);authority.sourceRepository='untrusted/owner';authority.sha256=initialHash;
+    for(const changed of [bytes+'\n',JSON.stringify(removed),JSON.stringify(authority),null,undefined,'']){
+      const client=memoryClient();
+      await assert.rejects(prepareHissPrerequisites(changed,scope,{client,apply:true}),{code:'UNTRUSTED_PROFILE'});
+      assert.equal(client.reads.length,0);assert.equal(client.creates.length,0);
+    }
+    const client=memoryClient();
+    await assert.rejects(prepareHissPrerequisites(bytes,{...scope,sourceRepository:'untrusted/owner'},{client,apply:true}),{code:'INVALID_SCOPE'});
+    assert.equal(client.reads.length,0);assert.equal(client.creates.length,0);
+  }
+});
+
+test('readiness and successful preparation carry the actual captured hash and count for each supported release',async()=>{
+  for(const [bytes,count,hash]of [[initialRaw,96,initialHash],[raw,105,HISS_EXECUTION_PROFILE.sha256]]){
+    const client=memoryClient();const planned=await prepareHissPrerequisites(bytes,scope,{client});
+    assert.equal(planned.profileSha256,hash);assert.equal(planned.resourceCount,count);assert.equal(planned.resources.length,count);
+    assert.equal(planned.applied,false);assert.equal(client.creates.length,0);
+    const applied=await prepareHissPrerequisites(bytes,scope,{client,apply:true});
+    assert.equal(applied.status,'Prepared');assert.equal(applied.profileSha256,hash);assert.equal(applied.resourceCount,count);
+    assert.equal(applied.created.length,count);
+  }
+});
+
+test('preparing the exact96 capture preserves all existing105 objects without removing later grants',async()=>{
+  const client=memoryClient(profile.resources),before=structuredClone([...client.state]);
+  const result=await prepareHissPrerequisites(initialRaw,scope,{client,apply:true});
+  assert.equal(result.status,'Prepared');assert.equal(result.created.length,0);assert.equal(result.preserved.length,96);
+  assert.equal(result.profileSha256,initialHash);assert.equal(result.resourceCount,96);
+  assert.deepEqual([...client.state],before);assert.equal(client.creates.length,0);
+});
+
+test('a conflicting96 role remains blocked and partial failure reports the96 contract, never the105 hash',async()=>{
+  const conflict=copy(initialProfile.resources.find(r=>r.kind==='Role'));
+  conflict.rules[0].verbs=['*'];const bad=memoryClient([conflict]);
+  await assert.rejects(prepareHissPrerequisites(initialRaw,scope,{client:bad,apply:true}),error=>{
+    assert.equal(error.code,'PRECONDITION_FAILED');assert.equal(error.evidence.profileSha256,initialHash);assert.equal(error.evidence.resourceCount,96);return true;
+  });
+  assert.equal(bad.creates.length,0);
+  const uncertain=memoryClient();uncertain.beforeCreate=()=>{throw Error('transport not observed');};
+  await assert.rejects(prepareHissPrerequisites(initialRaw,scope,{client:uncertain,apply:true}),error=>{
+    assert.equal(error.code,'PREPARATION_INCOMPLETE');assert.equal(error.evidence.profileSha256,initialHash);assert.equal(error.evidence.resourceCount,96);return true;
+  });
 });

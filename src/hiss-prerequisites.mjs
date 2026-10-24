@@ -22,6 +22,19 @@ export const HISS_EXECUTION_PROFILE = Object.freeze({
   consoleArtifactPath: 'deploy/installation-profiles/hiss-execution.json',
   sha256: '615cc74f3e34e14a9175404b6fac086f9c84922eb7784bbfb02aa453c57efcb5',
 });
+// An immutable Console release retains the exact prerequisite capture it admitted.
+// The original 96 objects (CM 44d4a759) are byte-for-byte unchanged in the current
+// 105-object capture; H2/H3 only added nine objects. Admitting that exact earlier
+// capture neither adds those grants to a Console update nor removes them if present.
+// Artifact origin/path/revision are still selected by the verified release lock.
+export const HISS_EXECUTION_PROFILES = Object.freeze([
+  Object.freeze({ ...HISS_EXECUTION_PROFILE, resourceCount: 105 }),
+  Object.freeze({ ...HISS_EXECUTION_PROFILE,
+    sourceRevision: '44d4a7595ee3609ed1a199ce3294bd7f194d4b47',
+    sha256: '9ddee9740e7ff194eb88a8093d8b631405a1da290209e748bf265bd17441118b',
+    resourceCount: 96,
+  }),
+]);
 const groups = {Namespace:['v1','namespaces'],ServiceAccount:['v1','serviceaccounts'],
   Role:['rbac.authorization.k8s.io/v1','roles'],RoleBinding:['rbac.authorization.k8s.io/v1','rolebindings'],
   ClusterRole:['rbac.authorization.k8s.io/v1','clusterroles'],ClusterRoleBinding:['rbac.authorization.k8s.io/v1','clusterrolebindings']};
@@ -37,16 +50,80 @@ const projection = r=>({apiVersion:r.apiVersion,kind:r.kind,name:r.metadata?.nam
 const fail = (code,message,evidence)=>Object.assign(new Error(message),{code,...(evidence?{evidence}:{})});
 export const HISS_VALIDATION_ARTIFACT = 'deploy/installation-profiles/hiss-validation.yaml';
 const VALIDATION_SHA256 = '286b837d4104a8936cee5169f2a70f52fb20490f0df5c3ac6f6037c2cde342d4';
+// Both captures are the fixed Console prefix followed by the exact owner YAML.
+// The earlier capture is observation-only: applying it could remove the later
+// approved monitoring canary rule from an already prepared validation Role.
+export const HISS_VALIDATION_PROFILES = Object.freeze([
+  Object.freeze({sha256:VALIDATION_SHA256,resourceCount:7,sourceRevision:'13b298879247915defaa934b5333e234a025390f',preparation:'server-side-apply'}),
+  Object.freeze({sha256:'f079f22c8420c196f7ad834f42fc0d8acddf8b4c5134d9522fc5499fa219957d',resourceCount:7,
+    sourceRevision:'0e2e79b828d355c735882628185414c5776d80ae',preparation:'observe-existing-only'}),
+]);
+function capturedHissValidationContract(raw) {
+  const contract=typeof raw==='string'&&HISS_VALIDATION_PROFILES.find(item=>item.sha256===digest(raw));
+  if(!contract)throw fail('UNTRUSTED_PROFILE','HISS validation bytes differ from the approved contract');
+  const documents=parseAllDocuments(raw).map(d=>d.toJSON()).filter(Boolean);
+  if(documents.length!==contract.resourceCount)throw fail('UNTRUSTED_PROFILE','HISS validation envelope differs');
+  return {contract,documents};
+}
 
 export function verifyHissValidationArtifact(raw) {
-  if (typeof raw !== 'string' || digest(raw) !== VALIDATION_SHA256) throw fail('UNTRUSTED_PROFILE','HISS validation bytes differ from the approved contract');
+  capturedHissValidationContract(raw);
   return raw;
+}
+
+function validationProjection(resource) {
+  return {...projection(resource),labels:resource.metadata?.labels||{},ownerReferences:resource.metadata?.ownerReferences||[],
+    spec:resource.kind==='ResourceQuota'?resource.spec:undefined,secrets:resource.kind==='ServiceAccount'?resource.secrets||[]:undefined};
+}
+function preserveCapturedHissValidation(raw,target,runner) {
+  const {contract,documents}=capturedHissValidationContract(raw);
+  const approvedMonitoringRule={apiGroups:['monitoring.coreos.com'],resources:['servicemonitors','prometheusrules'],verbs:['get','list','watch','create','delete']};
+  const read=()=>{
+    let result;
+    try{result=JSON.parse(runner('kubectl',['--context',target.context,'get','--ignore-not-found','-f','-','-o','json','--request-timeout=10s'],
+      {capture:true,input:JSON.stringify({apiVersion:'v1',kind:'List',items:documents}),spawn:{maxBuffer:1024*1024,timeout:60000}})||'null');}
+    catch{throw fail('OBSERVATION_UNAVAILABLE','Cannot verify historical HISS validation resources; no writes were made');}
+    const returned=result?.kind==='List'?result.items:null;
+    if(!Array.isArray(returned)||returned.length!==documents.length)throw fail('PRECONDITION_FAILED','Historical HISS validation resources are missing; use the separately approved HISS preparation path');
+    const byId=new Map();
+    for(const resource of returned){
+      if(!resource?.metadata||typeof resource.metadata.name!=='string'||typeof resource.apiVersion!=='string'||typeof resource.kind!=='string')
+        throw fail('OBSERVATION_UNAVAILABLE','Historical HISS validation observation is malformed; no writes were made');
+      const expected=documents.find(document=>identity(document)===identity(resource));
+      if(!expected||byId.has(identity(resource))||!resource.metadata?.uid||!resource.metadata?.resourceVersion||resource.metadata.deletionTimestamp
+        ||(resource.metadata.ownerReferences||[]).length||Object.keys(resource.metadata.annotations||{}).some(key=>key.startsWith('helm.sh/hook'))
+        ||!holds(resource.metadata.labels||{},expected.metadata.labels||{}))
+        throw fail('PRECONDITION_FAILED','Historical HISS validation identity or authority differs; no writes were made');
+      const actual=validationProjection(resource),wanted=validationProjection(expected);
+      // Server-added labels are harmless, but required authority and PSA labels
+      // above must match. Compare every other security field exactly.
+      delete actual.labels;delete wanted.labels;
+      let roleProfileSha256=contract.sha256;
+      if(expected.kind==='Role'&&canonical(resource.rules)===canonical([...expected.rules,approvedMonitoringRule])){
+        wanted.rules=[...expected.rules,approvedMonitoringRule];roleProfileSha256=VALIDATION_SHA256;
+      }
+      if(canonical(actual)!==canonical(wanted))throw fail('PRECONDITION_FAILED','Historical HISS validation security fields differ; no writes were made');
+      byId.set(identity(resource),{resource,roleProfileSha256});
+    }
+    return byId;
+  };
+  const before=read(),after=read();
+  for(const [id,first]of before){
+    const last=after.get(id);
+    if(!last||first.resource.metadata.uid!==last.resource.metadata.uid||canonical(validationProjection(first.resource))!==canonical(validationProjection(last.resource)))
+      throw fail('PREPARATION_INCOMPLETE','Historical HISS validation authority changed during observation; no writes were made');
+  }
+  const role=[...after.values()].find(item=>item.resource.kind==='Role');
+  return {state:'Preserved',applied:false,resourceCount:documents.length,profileSha256:contract.sha256,
+    observedRoleProfileSha256:role.roleProfileSha256,installationComplete:false,
+    observed:[...after].map(([id,{resource}])=>({identity:id,uid:resource.metadata.uid,resourceVersion:resource.metadata.resourceVersion}))};
 }
 
 export function prepareHissValidation(raw, scope, {runner=run}={}) {
   // Reuse the same target boundary; validate before any API call.
   const target = installTarget(scope);
   verifyHissValidationArtifact(raw);
+  if(capturedHissValidationContract(raw).contract.preparation==='observe-existing-only')return preserveCapturedHissValidation(raw,target,runner);
   // Server-side apply makes the default ServiceAccount upsert atomic with the
   // namespace controller. Never force conflicts or modify unrelated fields.
   runner('kubectl',['--context',target.context,'apply','--server-side','--field-manager=opensphere-setup-hiss','-f','-','--request-timeout=20s'],
@@ -314,11 +391,16 @@ function observationIndex(returned, requested) {
   return byId;
 }
 
+function capturedHissExecutionContract(raw) {
+  if(typeof raw!=='string'||Buffer.byteLength(raw)>1024*1024)throw fail('UNTRUSTED_PROFILE','HISS prerequisite bytes differ from the captured contract');
+  const sha256=digest(raw),contract=HISS_EXECUTION_PROFILES.find(captured=>captured.sha256===sha256);
+  if(!contract)throw fail('UNTRUSTED_PROFILE','HISS prerequisite bytes differ from the captured contract');
+  return contract;
+}
 export function verifyHissExecutionProfile(raw,scope) {
   installTarget(scope);
-  if(typeof raw!=='string'||Buffer.byteLength(raw)>1024*1024||digest(raw)!==HISS_EXECUTION_PROFILE.sha256)throw fail('UNTRUSTED_PROFILE','HISS prerequisite bytes differ from the captured contract');
-  const profile=JSON.parse(raw);
-  if(profile.schemaVersion!==1||profile.status!=='proposed-not-applied'||profile.resources.length!==105)throw fail('UNTRUSTED_PROFILE','HISS prerequisite envelope differs');
+  const contract=capturedHissExecutionContract(raw),profile=JSON.parse(raw);
+  if(profile.schemaVersion!==1||profile.status!=='proposed-not-applied'||!Array.isArray(profile.resources)||profile.resources.length!==contract.resourceCount)throw fail('UNTRUSTED_PROFILE','HISS prerequisite envelope differs');
   return profile;
 }
 function references(resources) {
@@ -352,8 +434,8 @@ async function observe(profile,dependencies,client) {
   const dependencyFailures=dependencies.filter(r=>!byId.get(identity(r))?.metadata?.uid||byId.get(identity(r))?.metadata?.deletionTimestamp).map(identity);
   return {resources,byId,dependencyFailures};
 }
-function publicPlan(observation,scope) {
-  return {profile:HISS_EXECUTION_PROFILE.id,profileSha256:HISS_EXECUTION_PROFILE.sha256,context:scope.context,
+function publicPlan(observation,scope,contract) {
+  return {profile:contract.id,profileSha256:contract.sha256,resourceCount:contract.resourceCount,context:scope.context,
     status:observation.dependencyFailures.length||observation.resources.some(r=>r.status==='Conflict')?'Blocked'
       :observation.resources.some(r=>r.status==='Missing')?'NeedsPreparation':'Prepared',
     resources:observation.resources.map(r=>({identity:r.identity,status:r.status})),dependencyFailures:observation.dependencyFailures,
@@ -362,8 +444,8 @@ function publicPlan(observation,scope) {
 
 export async function prepareHissPrerequisites(raw,scope,{client,apply=false,onProgress=()=>{}}) {
   scope={...scope};
-  const profile=verifyHissExecutionProfile(raw,scope),dependencies=references(profile.resources);
-  const initial=await observe(profile,dependencies,client),plan=publicPlan(initial,scope);
+  const profile=verifyHissExecutionProfile(raw,scope),contract=capturedHissExecutionContract(raw),dependencies=references(profile.resources);
+  const initial=await observe(profile,dependencies,client),plan=publicPlan(initial,scope,contract);
   if(!apply)return {...plan,applied:false,created:[],preserved:[]};
   if(plan.status==='Blocked')throw fail('PRECONDITION_FAILED','HISS prerequisite conflicts or missing dependencies must be resolved before preparation',plan);
   const created=[],preserved=[],observedAfterCreate=[];
@@ -374,7 +456,7 @@ export async function prepareHissPrerequisites(raw,scope,{client,apply=false,onP
   const ordered=[...profile.resources].sort((a,b)=>rank[a.kind]-rank[b.kind]||identity(a).localeCompare(identity(b)));
   const expectedById=new Map(profile.resources.map(r=>[identity(r),r]));
   const dependencyOriginal=new Map(dependencies.map(r=>[identity(r),initial.byId.get(identity(r))]));
-  const evidence=()=>({profile:HISS_EXECUTION_PROFILE.id,profileSha256:HISS_EXECUTION_PROFILE.sha256,context:scope.context,
+  const evidence=()=>({profile:contract.id,profileSha256:contract.sha256,resourceCount:contract.resourceCount,context:scope.context,
     created:[...created],preserved:[...preserved],observedAfterCreate:[...observedAfterCreate],installationComplete:false});
   const report=event=>{try{onProgress(event);}catch{/* Logging cannot change authority or turn a confirmed write into an unknown outcome. */}};
   for(const resource of ordered){
@@ -418,7 +500,7 @@ export async function prepareHissPrerequisites(raw,scope,{client,apply=false,onP
     if(!actual||actual.metadata.uid!==before.metadata.uid||canonical(projection(actual))!==canonical(projection(before)))throw fail('PREPARATION_INCOMPLETE','An external prerequisite changed; re-inspection is required',evidence());
   }
   for(const [id,uid]of observedUids)if(final.byId.get(id)?.metadata.uid!==uid)throw fail('PREPARATION_INCOMPLETE','A prerequisite was replaced during preparation; resources were preserved',evidence());
-  const finalPlan=publicPlan(final,scope);
+  const finalPlan=publicPlan(final,scope,contract);
   if(finalPlan.status!=='Prepared')throw fail('PREPARATION_INCOMPLETE','Final prerequisite verification failed; resources were preserved',evidence());
   return {...finalPlan,applied:true,...evidence()};
 }
