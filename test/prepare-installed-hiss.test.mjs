@@ -29,7 +29,9 @@ function fixture(change=false,{longhorn=false}={}){
   if(args.includes('opensphere-installation-lock'))return JSON.stringify({metadata:{uid:'install-a'},data:{'config.json':JSON.stringify({consoleUrl:'https://console.example.test'}),'release.json':JSON.stringify({channel:'edge',releaseDigest:'sha256:'+'a'.repeat(64)})}});
   if(args.includes('namespace')&&args.includes('kube-system'))return JSON.stringify({metadata:{uid:cluster}});
   if(args.includes('observabilitybindings.observability.opensphere.io'))return '';
-  if(args.includes('volumes.longhorn.io')||args.includes('longhorn-system'))return longhorn?args[args.indexOf('get')+1]+'/x\n':'';
+  if(args.includes('volumes.longhorn.io')||args.includes('recurringjobs.longhorn.io')||args.includes('longhorn-system'))return longhorn?args[args.indexOf('get')+1]+'/x\n':'';
+  // RKE2 readiness R1 scrape access (2026-10-24): neither ingress-nginx nor cert-manager exists in this fixture.
+  if(args[2]==='get'&&args[3]==='namespace'&&['ingress-nginx','cert-manager'].includes(args[4]))return '';
   // Node maintenance (2026-10-22): its namespaces exist; none of its objects is present yet.
   if(args[2]==='get'&&args[3]==='namespace'&&['monitoring','opensphere-console'].includes(args[4]))return `namespace/${args[4]}\n`;
   if(args[2]==='get'&&args[3]==='-f')return '';
@@ -55,17 +57,22 @@ test('invalid context is rejected before contacting Kubernetes',async()=>{
 });
 test('storage observation is applied only where Longhorn runs',async()=>{
  const without=fixture();const plain=await prepareInstalledHiss({context:'rke2',apply:true,runner:without.runner});
- assert.equal(plain.storageObservation.state,'NotApplicable');assert.equal(plain.observabilityBindingCrd.state,'Applied');assert.equal(without.applies.length,6);
+ assert.equal(plain.storageObservation.state,'NotApplicable');assert.equal(plain.observabilityBindingCrd.state,'Applied');assert.equal(without.applies.length,8);
  assert.equal(plain.operatorStackgres.state,'Applied');assert.equal(plain.operatorStackgres.guardProbe,'denied');
+ assert.equal(plain.backupAlerting.state,'Applied');assert.equal(plain.backupAlerting.longhorn,'NotApplicable');
+ assert.deepEqual(plain.scrapeAccess.policies.map(p=>p.state),['NamespaceMissing','NamespaceMissing']);
  assert.match(without.applies[1],/kind: CustomResourceDefinition/);
  const lh=fixture(false,{longhorn:true});const planned=await prepareInstalledHiss({context:'rke2',runner:lh.runner});
  assert.equal(planned.storageObservation.state,'NeedsPreparation');assert.equal(planned.observabilityBindingCrd.state,'NeedsPreparation');assert.equal(lh.applies.length,0);
  assert.equal(planned.operatorStackgres.state,'NeedsPreparation');
- assert.equal(plain.storageObservation.state,'NotApplicable');assert.equal(plain.observabilityBindingCrd.state,'Applied');assert.equal(plain.nodeMaintenance.state,'Applied');assert.equal(without.applies.length,6);
+ assert.equal(plain.storageObservation.state,'NotApplicable');assert.equal(plain.observabilityBindingCrd.state,'Applied');assert.equal(plain.nodeMaintenance.state,'Applied');assert.equal(without.applies.length,8);
  assert.match(without.applies[4],/name: opensphere-hiss-node-maintenance-workload/);assert.match(without.applies[5],/kind: ClusterRole\nmetadata:\n  name: opensphere-hiss-kured\n/);
+ assert.match(without.applies[6],/name: opensphere-hiss-alert-emergency-route/);assert.match(without.applies[7],/name: opensphere-hiss-core-alerts/);
  assert.equal(planned.storageObservation.state,'NeedsPreparation');assert.equal(planned.observabilityBindingCrd.state,'NeedsPreparation');assert.equal(planned.nodeMaintenance.state,'NeedsPreparation');assert.equal(lh.applies.length,0);
+ assert.equal(planned.backupAlerting.state,'NeedsPreparation');assert.equal(planned.backupAlerting.longhorn,'Included');
  const applied=await prepareInstalledHiss({context:'rke2',apply:true,runner:lh.runner});
- assert.equal(applied.storageObservation.state,'Applied');assert.equal(lh.applies.length,7);
+ assert.equal(applied.storageObservation.state,'Applied');assert.equal(lh.applies.length,11);
+ assert.equal(applied.backupAlerting.longhorn,'Included');assert.match(lh.applies[9],/name: opensphere-hiss-backup-volume-labels/);assert.match(lh.applies[10],/name: opensphere-hiss-backup-executor/);
  assert.match(lh.applies[1],/name: opensphere-hiss-storage-observer/);assert.doesNotMatch(lh.applies[1],/kind: ClusterRole/);
 });
 test('H-P6: the storage observation Role reads one Longhorn setting by name and the backup targets, and writes nothing',()=>{
