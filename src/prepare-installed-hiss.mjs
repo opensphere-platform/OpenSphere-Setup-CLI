@@ -4,30 +4,40 @@ import storageObservation from './hiss-storage-observation-artifact.json' with {
 import bindingCrd from './hiss-observability-binding-crd-artifact.json' with {type:'json'};
 import operatorStackgres from './hiss-operator-stackgres-artifact.json' with {type:'json'};
 import nodeMaintenance from './hiss-node-maintenance-artifact.json' with {type:'json'};
+import backupAlerting from './hiss-backup-alerting-artifact.json' with {type:'json'};
+import scrapeAccess from './hiss-scrape-access-artifact.json' with {type:'json'};
+import {prepareHissBackupAlerting,prepareHissScrapeAccess,verifyHissBackupAlertingArtifact,verifyHissScrapeAccessArtifact} from './hiss-backup-alerting.mjs';
 import {createHissPrerequisiteClient,prepareHissNodeMaintenance,prepareHissObservabilityBindingCrd,prepareHissOperatorStackgres,prepareHissPrerequisites,prepareHissStorageObservation,prepareHissValidation,verifyHissNodeMaintenanceArtifact,verifyHissObservabilityBindingCrd,verifyHissOperatorStackgresArtifact,verifyHissStorageObservationArtifact,verifyHissValidationArtifact} from './hiss-prerequisites.mjs';
 import {run} from './process.mjs';
 import {installTarget} from './install-target.mjs';
 
 // Existing installs use this same immutable profile as bootstrap. Bind every
 // write to the installation UID, release digest, origin and physical cluster.
-export async function prepareInstalledHiss({context,apply=false,runner=run,onProgress=()=>{}}) {
-  const read=args=>JSON.parse(runner('kubectl',['--context',context,...args,'--request-timeout=10s','-o','json'],{capture:true}));
-  const observe=()=>{
-    const cluster=read(['get','namespace','kube-system']);
-    const record=read(['-n','opensphere-console','get','configmap','opensphere-installation-lock']);
-    const lock=JSON.parse(record.data?.['release.json']||'null'),config=JSON.parse(record.data?.['config.json']||'null');
-    if(!cluster.metadata?.uid||!record.metadata?.uid||!/^sha256:[a-f0-9]{64}$/.test(lock?.releaseDigest||''))throw Error('Managed installation identity is unavailable');
-    const scope=installTarget({context,channel:lock.channel,consoleUrl:config?.consoleUrl});
-    return {scope,clusterUid:cluster.metadata.uid,installationUid:record.metadata.uid,releaseDigest:lock.releaseDigest};
-  };
+// The managed installation a HISS preparation or HISS secret write is bound to: cluster UID, installation lock UID,
+// release digest, and the target scope recorded with them.
+export function observeInstalledHissTarget(context,runner=run){
   // Validate context before it is used as a kubectl argument.
   if(typeof context!=='string'||!context||context.startsWith('-')||/\s/.test(context))throw Error('Explicit Kubernetes context required');
+  const read=args=>JSON.parse(runner('kubectl',['--context',context,...args,'--request-timeout=10s','-o','json'],{capture:true}));
+  const cluster=read(['get','namespace','kube-system']);
+  const record=read(['-n','opensphere-console','get','configmap','opensphere-installation-lock']);
+  const lock=JSON.parse(record.data?.['release.json']||'null'),config=JSON.parse(record.data?.['config.json']||'null');
+  if(!cluster.metadata?.uid||!record.metadata?.uid||!/^sha256:[a-f0-9]{64}$/.test(lock?.releaseDigest||''))throw Error('Managed installation identity is unavailable');
+  const scope=installTarget({context,channel:lock.channel,consoleUrl:config?.consoleUrl});
+  return {scope,clusterUid:cluster.metadata.uid,installationUid:record.metadata.uid,releaseDigest:lock.releaseDigest};
+}
+
+export async function prepareInstalledHiss({context,apply=false,runner=run,onProgress=()=>{}}) {
+  if(typeof context!=='string'||!context||context.startsWith('-')||/\s/.test(context))throw Error('Explicit Kubernetes context required');
+  const observe=()=>observeInstalledHissTarget(context,runner);
   const target=observe(),client=createHissPrerequisiteClient(target.scope,runner);
   verifyHissValidationArtifact(validation.yaml);
   verifyHissStorageObservationArtifact(storageObservation.yaml);
   verifyHissObservabilityBindingCrd(bindingCrd.yaml);
   verifyHissOperatorStackgresArtifact(operatorStackgres.yaml);
   verifyHissNodeMaintenanceArtifact(nodeMaintenance.yaml);
+  verifyHissBackupAlertingArtifact(backupAlerting.yaml);
+  verifyHissScrapeAccessArtifact(scrapeAccess.yaml);
   const assertTarget=()=>{if(JSON.stringify(observe())!==JSON.stringify(target))throw Error('Installation or cluster changed; no further HISS preparation writes allowed');};
   const result=await prepareHissPrerequisites(JSON.stringify(profile,null,2)+'\n',target.scope,{apply,onProgress,client:{
     read:resources=>{assertTarget();return client.read(resources);},
@@ -44,5 +54,11 @@ export async function prepareInstalledHiss({context,apply=false,runner=run,onPro
   const stackgresResult=prepareHissOperatorStackgres(operatorStackgres.yaml,target.scope,{runner,apply});
   // Node maintenance (2026-10-22) after the profile, so its monitoring namespace exists.
   const nodeMaintenanceResult=prepareHissNodeMaintenance(nodeMaintenance.yaml,target.scope,{runner,apply});
-  assertTarget();return {...result,target,validation:validationResult,storageObservation:storageResult,observabilityBindingCrd:crdResult,operatorStackgres:stackgresResult,nodeMaintenance:nodeMaintenanceResult};
+  assertTarget();
+  // RKE2 readiness R1 (2026-10-24): core alerts, the emergency route and Longhorn backup B1 (BK-P6, AL-P4), then the
+  // Prometheus scrape access policies where those namespaces already isolate their Pods (AL-P5).
+  const backupAlertingResult=prepareHissBackupAlerting(backupAlerting.yaml,target.scope,{runner,apply});
+  assertTarget();
+  const scrapeAccessResult=prepareHissScrapeAccess(scrapeAccess.yaml,target.scope,{runner,apply});
+  assertTarget();return {...result,target,validation:validationResult,storageObservation:storageResult,observabilityBindingCrd:crdResult,operatorStackgres:stackgresResult,nodeMaintenance:nodeMaintenanceResult,backupAlerting:backupAlertingResult,scrapeAccess:scrapeAccessResult};
 }

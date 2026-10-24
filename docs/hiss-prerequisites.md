@@ -48,3 +48,28 @@ Setup은 설치 시 고정된 실행 준비물만 마련한다. 이후 HISS 설�
 - `prepare-hiss --apply`는 server-side apply(`opensphere-setup-hiss`, conflict 강제 안 함)를 두 번 한다. 울타리 정책이 먼저, 권한은 그다음이다. 울타리 적용이 실패하면 권한은 적용하지 않는다.
 - 다른 HISS 실행 프로필과 달리 server-side apply다. 승인 kured digest가 바뀌면 울타리 정책을 제자리에서 고쳐야 하기 때문이다. 다른 field manager가 가진 필드는 conflict로 멈춘다.
 - 새 설치 경로(bootstrap)는 아직 이 준비물을 적용하지 않는다. 설치된 클러스터에 `prepare-hiss`로 적용한다.
+
+## 경보·백업 준비물과 보안 입력 (RKE2 준비 R1, 2026-10-24)
+
+계획: `rke2-readiness-audit-20261024/01-NEXT-STAGE-PLAN-20261024.md` R1-4·R1-5. 대표 승인 "전부 승인 (권장)".
+
+- **경보·백업 권한**: 원본은 Cluster Manager `deploy/hiss-backup-alerting.yaml`. Setup은 `src/hiss-backup-alerting-artifact.json`에 바이트를 고정한다(`BACKUP_ALERTING_SOURCE`).
+  - `monitoring`: 핵심 경보 규칙 `opensphere-core-alerts` 갱신, 비상 경로 AlertmanagerConfig `opensphere-alert-emergency` 하나, 같은 이름 Secret 읽기.
+  - `longhorn-system`(Longhorn이 있을 때만): default 백업 대상 갱신, 반복 작업, 백업 읽기, 볼륨 라벨 갱신.
+  - admission 정책 넷이 이 쓰기를 검토된 모양으로 묶는다(Deny). 정책을 먼저, 권한을 그다음에 적용한다.
+  - Secret 쓰기 권한은 없다. Secret은 아래 보안 입력으로 Setup이 쓴다.
+- **수집 허용 NetworkPolicy**: 원본은 `deploy/hiss-scrape-access.yaml`(`SCRAPE_ACCESS_SOURCE`). ingress-nginx·cert-manager에 Prometheus를 들이는 정책 둘이다.
+  - 다른 정책이 이미 그 Pod를 격리할 때만 적용한다. 격리가 없는 namespace에 이 정책을 넣으면 80/443과 webhook이 막힌다. 그래서 그때는 `NotNeeded`다.
+  - Setup이 넣은 정책만 남아 혼자 격리하게 되면 `IsolatesAlone`으로 알리고, `--apply`에서 지운다.
+  - 2026-10-24 RKE2 읽기 결과: 두 namespace 모두 `NotNeeded`.
+- **보안 입력** `prepare-hiss-secret`: 값은 stdin의 JSON 하나로만 받는다. 인자·출력·오류에 값이 나오지 않는다. kubectl 오류는 진단을 지우고 종료 코드만 알린다.
+  - `alert-emergency` → `monitoring/opensphere-alert-emergency`. Slack(`hooks.slack.com`만) 또는 SMTP(DNS 이름만), 선택 dead-man URL(https). 만료는 최대 2026-11-30.
+  - `backup-store --name <n>` → `longhorn-system/opensphere-backup-<n>`. Longhorn S3 키(`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINTS`, 선택 `AWS_CERT`·`VIRTUAL_HOSTED_STYLE`).
+  - `etcd-s3` → `kube-system/opensphere-etcd-s3`. RKE2 `etcd-s3-config-secret` 키(`etcd-s3-endpoint` 등). master `config.yaml` 변경은 따로 하는 호스트 작업이다.
+  - `--clear --confirm <Secret 이름>`으로 지운다.
+
+```sh
+# 예: 비상 수신처(Slack). 파일은 관리자만 읽을 수 있는 곳에 두고, 쓴 뒤 지운다.
+opensphere-setup prepare-hiss-secret alert-emergency --context rke2 < emergency.json
+# 그다음 OS Shell: cluster-manager.hiss.alerts.apply part=emergency
+```
