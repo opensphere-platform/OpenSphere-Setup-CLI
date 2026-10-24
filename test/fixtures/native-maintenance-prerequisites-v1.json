@@ -1,0 +1,306 @@
+{
+  "synthetic": true,
+  "scope": "Pure current renderer contract fixture; API defaulting in tests remains simulated, not an RKE2 server dry-run",
+  "producerPath": "apps/osaa-gateway/openclaw-runtime-resources.cjs",
+  "producerSha256": "8bd16c08b82bc9e82b9c978135bafd35e84807662258d2e121980d0fa0614e12",
+  "input": {
+    "policy": {
+      "installationId": "11111111-1111-4111-8111-111111111111",
+      "image": "ghcr.io/opensphere-platform/opensphere-console-r2d2-openclaw@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "bridgeImage": "ghcr.io/opensphere-platform/opensphere-console-osaa-gateway@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "imagePullSecretName": "opensphere-ghcr-pull",
+      "storage": {
+        "className": "synthetic-storage",
+        "accessMode": "ReadWriteOncePod",
+        "sizeGi": 8
+      },
+      "resources": {
+        "cpuRequestMilli": 500,
+        "cpuLimitMilli": 2000,
+        "memoryRequestMi": 768,
+        "memoryLimitMi": 2048,
+        "temporaryMi": 256
+      },
+      "bridgeResources": {
+        "cpuRequestMilli": 50,
+        "cpuLimitMilli": 250,
+        "memoryRequestMi": 128,
+        "memoryLimitMi": 256
+      }
+    },
+    "capacity": {
+      "maxRuntimes": 2,
+      "totalStorageGi": 16,
+      "cpuLimitMilli": 4500,
+      "memoryLimitMi": 4608
+    }
+  },
+  "objects": [
+    {
+      "apiVersion": "v1",
+      "kind": "Namespace",
+      "metadata": {
+        "name": "opensphere-r2d2",
+        "labels": {
+          "app.kubernetes.io/part-of": "opensphere-console",
+          "opensphere.io/scope": "r2d2-personal-runtimes",
+          "pod-security.kubernetes.io/enforce": "restricted",
+          "pod-security.kubernetes.io/audit": "restricted",
+          "pod-security.kubernetes.io/warn": "restricted"
+        }
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "name": "r2d2-personal-runtime",
+        "namespace": "opensphere-r2d2"
+      },
+      "automountServiceAccountToken": false
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "Role",
+      "metadata": {
+        "name": "r2d2-personal-runtime-provisioner",
+        "namespace": "opensphere-r2d2"
+      },
+      "rules": [
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "secrets",
+            "persistentvolumeclaims",
+            "services"
+          ],
+          "verbs": [
+            "get",
+            "create"
+          ]
+        },
+        {
+          "apiGroups": [
+            ""
+          ],
+          "resources": [
+            "configmaps"
+          ],
+          "verbs": [
+            "get",
+            "create",
+            "update"
+          ]
+        },
+        {
+          "apiGroups": [
+            "apps"
+          ],
+          "resources": [
+            "deployments"
+          ],
+          "verbs": [
+            "get",
+            "create",
+            "update"
+          ]
+        }
+      ]
+    },
+    {
+      "apiVersion": "rbac.authorization.k8s.io/v1",
+      "kind": "RoleBinding",
+      "metadata": {
+        "name": "r2d2-personal-runtime-provisioner",
+        "namespace": "opensphere-r2d2"
+      },
+      "roleRef": {
+        "apiGroup": "rbac.authorization.k8s.io",
+        "kind": "Role",
+        "name": "r2d2-personal-runtime-provisioner"
+      },
+      "subjects": [
+        {
+          "kind": "ServiceAccount",
+          "name": "opensphere-console-osaa-gateway",
+          "namespace": "opensphere-console"
+        }
+      ]
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "NetworkPolicy",
+      "metadata": {
+        "name": "r2d2-default-deny",
+        "namespace": "opensphere-r2d2"
+      },
+      "spec": {
+        "podSelector": {},
+        "policyTypes": [
+          "Ingress",
+          "Egress"
+        ],
+        "ingress": [],
+        "egress": []
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "NetworkPolicy",
+      "metadata": {
+        "name": "r2d2-personal-runtime",
+        "namespace": "opensphere-r2d2"
+      },
+      "spec": {
+        "podSelector": {
+          "matchLabels": {
+            "app.kubernetes.io/name": "r2d2-openclaw-runtime"
+          }
+        },
+        "policyTypes": [
+          "Ingress",
+          "Egress"
+        ],
+        "ingress": [
+          {
+            "from": [
+              {
+                "namespaceSelector": {
+                  "matchLabels": {
+                    "kubernetes.io/metadata.name": "opensphere-console"
+                  }
+                },
+                "podSelector": {
+                  "matchLabels": {
+                    "app": "opensphere-console-osaa-gateway"
+                  }
+                }
+              }
+            ],
+            "ports": [
+              {
+                "protocol": "TCP",
+                "port": 18790
+              }
+            ]
+          }
+        ],
+        "egress": [
+          {
+            "to": [
+              {
+                "namespaceSelector": {
+                  "matchLabels": {
+                    "kubernetes.io/metadata.name": "opensphere-console"
+                  }
+                },
+                "podSelector": {
+                  "matchLabels": {
+                    "app": "opensphere-console-osaa-gateway"
+                  }
+                }
+              }
+            ],
+            "ports": [
+              {
+                "protocol": "TCP",
+                "port": 8080
+              }
+            ]
+          },
+          {
+            "to": [
+              {
+                "namespaceSelector": {
+                  "matchLabels": {
+                    "kubernetes.io/metadata.name": "kube-system"
+                  }
+                },
+                "podSelector": {
+                  "matchLabels": {
+                    "k8s-app": "kube-dns"
+                  }
+                }
+              }
+            ],
+            "ports": [
+              {
+                "protocol": "UDP",
+                "port": 53
+              },
+              {
+                "protocol": "TCP",
+                "port": 53
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "networking.k8s.io/v1",
+      "kind": "NetworkPolicy",
+      "metadata": {
+        "name": "r2d2-personal-runtime-to-gateway",
+        "namespace": "opensphere-console"
+      },
+      "spec": {
+        "podSelector": {
+          "matchLabels": {
+            "app": "opensphere-console-osaa-gateway"
+          }
+        },
+        "policyTypes": [
+          "Ingress"
+        ],
+        "ingress": [
+          {
+            "from": [
+              {
+                "namespaceSelector": {
+                  "matchLabels": {
+                    "kubernetes.io/metadata.name": "opensphere-r2d2"
+                  }
+                },
+                "podSelector": {
+                  "matchLabels": {
+                    "app.kubernetes.io/name": "r2d2-openclaw-runtime"
+                  }
+                }
+              }
+            ],
+            "ports": [
+              {
+                "protocol": "TCP",
+                "port": 8080
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ResourceQuota",
+      "metadata": {
+        "name": "r2d2-personal-runtime-capacity",
+        "namespace": "opensphere-r2d2"
+      },
+      "spec": {
+        "hard": {
+          "count/deployments.apps": "2",
+          "count/services": "2",
+          "count/persistentvolumeclaims": "2",
+          "count/configmaps": "3",
+          "count/secrets": "3",
+          "count/pods": "4",
+          "requests.storage": "16Gi",
+          "limits.cpu": "4500m",
+          "limits.memory": "4608Mi"
+        }
+      }
+    }
+  ]
+}

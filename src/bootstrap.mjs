@@ -19,7 +19,7 @@ import {captureControllerSource,controllerSourceData,CONTROLLER_SOURCE_KEY} from
 import { CLUSTER_SCOPED_MANAGED_CRDS, listManagedClusterResiduals, assertNoManagedClusterResiduals, assertManagedAdmissionParameters } from './installation-residuals.mjs';
 import {purgeBeszelHostState,purgeExternalConsoleRbac} from './uninstall-residuals.mjs';
 import { preflight } from './preflight.mjs';
-import { comparePreparedOwners, requiresOwnerPreservation } from './adoption-owner-preservation.mjs';
+import { comparePreparedOwners, requiresOwnerPreservation, assertNativeMaintenancePolicyUnchanged } from './adoption-owner-preservation.mjs';
 import { fetchWithRetry } from './http.mjs';
 import { sourceArtifactRequest } from './source-artifact-credential.mjs';
 import { renderKnowledgeManifest, materializeKnowledgeDirectory, KNOWLEDGE_LOCK_PATH } from './knowledge-artifact.mjs';
@@ -3256,9 +3256,13 @@ export async function upgrade(
   let targetVerifiedBom;
   let previousVerifiedLock;
   let targetVerifiedLock;
+  const verifyMaintenanceRecoveryPrevious=recovery&&isLocalEdgeLock(previousLock)&&isLocalEdgeLock(targetLock)
+    &&!!previousLock.components?.r2d2OpenClawGateway&&!!targetLock.components?.r2d2OpenClawGateway
+    &&previousLock.releaseDigest!==targetLock.releaseDigest;
   await Promise.all([
-    // Forward repair and one-way recovery never install the previous release, so it is not fetched.
-    repair || recovery ? Promise.resolve() : Promise.resolve(operations.verifyReleaseLock(previousLock, {
+    // A maintenance crash may retain the old lock in its first Installing
+    // record. Verify that exact installed source too; never install it back.
+    repair || (recovery && !verifyMaintenanceRecoveryPrevious) ? Promise.resolve() : Promise.resolve(operations.verifyReleaseLock(previousLock, {
       registryCredentials,
       requiredPlatforms,
       allowLegacyComponentSet: true,
@@ -3320,6 +3324,9 @@ export async function upgrade(
   };
   operations.preflight({ storageClass: config.storageClass, channel: targetLock.channel });
   const legacyNativeCutover=isLegacyNativeCutover(previousLock,targetLock);
+  const nativeMaintenanceUpdate=isLocalEdgeLock(previousLock)&&isLocalEdgeLock(targetLock)
+    &&!!previousLock.components?.r2d2OpenClawGateway&&!!targetLock.components?.r2d2OpenClawGateway
+    &&targetLock.releaseScope!==RELEASE_SCOPE_COMPONENT;
   if (!profiledAdoption) {
     operations.ensureManagedNamespaces();
     // OAuth here authenticates supply-chain reads only. Preserve the installed
@@ -3393,7 +3400,7 @@ export async function upgrade(
           config.authEnvironment,
           { sourceArtifactCredential, registryCredentials,verifiedBom:targetVerifiedBom,r2d2RuntimePolicyPath }
         ),
-        recovery||legacyNativeCutover ? Promise.resolve({ foundation: { root: rollbackWork, release: [], migration: null }, base: [], all: [] }) : operations.prepareRelease(
+        recovery||legacyNativeCutover||nativeMaintenanceUpdate ? Promise.resolve({ foundation: { root: rollbackWork, release: [], migration: null }, base: [], all: [] }) : operations.prepareRelease(
           previousLock,
           rollbackWork,
           config.storageClass,
@@ -3413,7 +3420,7 @@ export async function upgrade(
     if (profiledAdoption) {
       ownerComparison=comparePreparedOwners(previousLock, targetLock, target, {
         verifiedBom: targetVerifiedBom,
-        verifiedLocalLocks:isLocalEdgeLock(targetLock)?{previous:recovery?targetVerifiedLock:previousVerifiedLock,target:targetVerifiedLock}:undefined,
+        verifiedLocalLocks:isLocalEdgeLock(targetLock)?{previous:previousLock.releaseDigest===targetLock.releaseDigest?targetVerifiedLock:previousVerifiedLock,target:targetVerifiedLock}:undefined,
         client: operations.ownerPreservationClient,nativeRecovery:recovery
       });
       // No namespace, pull-secret, installation record, installer, apply or
@@ -3422,6 +3429,7 @@ export async function upgrade(
         if (isLocalEdgeLock(targetLock) && (!owner || ownerComparison.baseResourceVersion !== owner.resourceVersion || !ownsRecord())) {
           throw new Error('Local native installation record changed before prerequisite writes; stopped without advancing the transition');
         }
+        assertNativeMaintenancePolicyUnchanged(ownerComparison,{client:operations.ownerPreservationClient});
       };
       assertLocalComparisonLease();
       operations.ensureManagedNamespaces();
@@ -3446,7 +3454,7 @@ export async function upgrade(
     }
     // A recovery never goes back, so it prunes only what the record says the installation owns.
     const previousInventory = recordedInventory ?? recoveredInventory?.inventory
-      ?? (recovery||legacyNativeCutover ? [] : operations.releaseResourceInventory(rollback.all));
+      ?? (recovery||legacyNativeCutover||nativeMaintenanceUpdate ? [] : operations.releaseResourceInventory(rollback.all));
     const previousComponentInventory = componentTransition && rollback.all.length > 0
       ? operations.releaseResourceInventory(rollback.all)
       : [];
@@ -3493,7 +3501,10 @@ export async function upgrade(
     // the same source and checks the rollback preparation uses (readRollbackMigrationChain), not the
     // migration owners' chains, which answer a different question (previousFits above). Not being
     // able to read either is its own error, never a verdict.
-    const needsOwnChainRollback = Boolean(boundary?.pending.length && !componentTransition&&!legacyNativeCutover);
+    // The separately proven native maintenance path is forward-only too; it
+    // cannot prepare or promise an old policy/image rollback. Ledger and
+    // committed-chain compatibility above remain mandatory.
+    const needsOwnChainRollback = Boolean(boundary?.pending.length && !componentTransition&&!legacyNativeCutover&&!nativeMaintenanceUpdate);
     let rollbackChain = null;
     let rollbackVerdict = null;
     if (needsOwnChainRollback && (!recovery || startState?.phase === 'Ready')) {
@@ -3538,6 +3549,7 @@ export async function upgrade(
       startedAt: new Date().toISOString(),
       rollback: recovery||legacyNativeCutover||target.foundation?.nativeRuntime ? 'never' : boundary?.pending.length ? 'decided-after-failure' : 'available',
       ...(ownerComparison?.nativeCutoverCheckpoint?{nativeCutoverCheckpoint:ownerComparison.nativeCutoverCheckpoint}:{}),
+      ...(ownerComparison?.nativeMaintenanceCheckpoint?{nativeMaintenanceCheckpoint:ownerComparison.nativeMaintenanceCheckpoint}:{}),
       ...(boundary ? { oneWay: transitionOneWay(boundary) } : {})
     };
     // Re-review N2: what this run has already done, for an exact account when it must stop.
@@ -3588,6 +3600,7 @@ export async function upgrade(
     // Claim before the first change: a crash or a concurrent run now finds a non-Ready record that
     // names this transition, so neither an ordinary upgrade nor another run proceeds silently.
     if (!repair) {
+      assertNativeMaintenancePolicyUnchanged(ownerComparison,{client:operations.ownerPreservationClient});
       ownedWrite(previousLock, 'Installing', { transition,
         ...(target.foundation?.controllerSource?{pendingControllerSource:target.foundation.controllerSource,pendingControllerLock:targetLock}:{}) });
       assertOwned('before installing the target');

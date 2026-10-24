@@ -147,3 +147,117 @@ export function buildNativeRecoveryProof({previousLock,targetLock,plan,before,af
   targetReleaseDigest:targetLock.releaseDigest,sourceRevision:targetLock.sourceRevision,
   reviewedPolicyDigest:plan.inputSha256,recordUid:record.metadata.uid,recordResourceVersion:record.metadata.resourceVersion};
 }
+
+// Maintenance keeps the already-native Owner. It never reuses the exception
+// that removed Hermes, and it grants no new policy, capacity or configuration.
+const policyBinding=o=>({uid:o.metadata.uid,resourceVersion:o.metadata.resourceVersion,contentSha256:sha(o)});
+export function nativeMaintenancePolicyBinding(object){return policyBinding(object);}
+function maintenancePolicy(object){
+ assert.equal(object?.kind,'ConfigMap','Native maintenance requires the existing public runtime policy');
+ assert.equal(object.metadata?.namespace,'opensphere-console');assert.equal(object.metadata?.name,'opensphere-r2d2-runtime-policy','Native maintenance requires the existing public runtime policy');
+ assert.equal(object.metadata.labels?.['app.kubernetes.io/managed-by'],'opensphere-setup','Native maintenance policy is not Setup-owned');
+ assert.ok(object.metadata.uid);assert.match(object.metadata.resourceVersion??'',/^[0-9]+$/);
+ exactKeys(object.data,['installationId','policy.json','preparation.json']);
+ const reviewed=JSON.parse(object.data['preparation.json']);assert.equal(reviewed.schema,'opensphere.r2d2-runtime-preparation/v1');
+ assert.equal(object.data.installationId,reviewed.installationId);assert.deepEqual(JSON.parse(object.data['policy.json']),reviewed.policy);
+ return reviewed;
+}
+function maintenanceInput({previousLock,targetLock,plan,record,runtimePolicy}){
+ assert.ok(isLocalEdgeLock(previousLock)&&isLocalEdgeLock(targetLock),'Native maintenance preserves exact local trust');
+ assert.ok(!previousLock.releaseBom&&!targetLock.releaseBom,'Native maintenance cannot claim a signed BOM');
+ for(const lock of[previousLock,targetLock])assert.ok(lock.components?.r2d2OpenClawGateway&&!lock.components.r2d2HermesWorker,'Native maintenance requires native inventories');
+ assert.notEqual(targetLock.releaseScope,'component','Native maintenance requires an integrated target');
+ assert.equal(plan?.schema,'opensphere.r2d2-runtime-preparation/v1','Native maintenance preparation schema differs');
+ const {planDigest,...content}=plan??{};assert.equal(planDigest,sha(content),'Native maintenance preparation changed');
+ assert.equal(plan.installedRecordUid,record.metadata.uid);assert.equal(plan.installedRecordResourceVersion,record.metadata.resourceVersion,'Native maintenance preparation record is stale');
+ assert.deepEqual(JSON.parse(record.data['release.json']),previousLock,'Native maintenance installed lock changed');
+ assert.equal(plan.installedReleaseDigest,previousLock.releaseDigest);assert.equal(plan.releaseDigest,targetLock.releaseDigest);
+ const entry=plan.entries.find(e=>e.object?.kind==='ConfigMap'&&e.object.metadata?.name==='opensphere-r2d2-runtime-policy');
+ assert.ok(entry,'Native maintenance reviewed policy is missing');
+ const current=maintenancePolicy(runtimePolicy),reviewed=maintenancePolicy({...entry.object,metadata:{...entry.object.metadata,uid:runtimePolicy.metadata.uid,resourceVersion:runtimePolicy.metadata.resourceVersion}});
+ assert.deepEqual(entry.before,policyBinding(runtimePolicy),'Native maintenance policy binding changed');
+ assert.equal(sha(reviewed),plan.inputSha256,'Native maintenance reviewed bytes changed');
+ assert.equal(reviewed.installedReleaseDigest,previousLock.releaseDigest);
+ assert.equal(reviewed.installationId,plan.installationId);assert.equal(reviewed.clusterUid,plan.clusterUid);
+ assert.equal(JSON.parse(record.data['config.json']).installationId,plan.installationId);
+ assert.equal(reviewed.policy.installationId,plan.installationId);
+ assert.equal(reviewed.policy.image,targetLock.components.r2d2OpenClawGateway.image);assert.equal(reviewed.policy.bridgeImage,targetLock.components.osaaGateway.image);
+ return {current,reviewed};
+}
+function maintenanceOwner(workload,gatewayImage,nativeImage){
+ assert.equal(identity(workload),'Deployment/opensphere-console/opensphere-console-osaa-gateway');
+ const spec=structuredClone(workload.spec),containers=spec.template.spec.containers;
+ assert.deepEqual(containers.map(c=>c.name),['gateway'],'Native maintenance cannot add or remove a container');
+ const gateway=containers[0];assert.equal(gateway.image,gatewayImage,'Native maintenance C_AI image differs');
+ assert.equal(new Set((gateway.env??[]).map(e=>e.name)).size,(gateway.env??[]).length,'Native maintenance environment is duplicated');
+ assert.ok(!gateway.env.some(e=>e.name.startsWith('R2D2_HERMES_')),'Native maintenance cannot restore Hermes');
+ envValue(gateway.env,'R2D2_BACKEND','openclaw-native');
+ envValue(gateway.env,'R2D2_NATIVE_GATEWAY_IMAGE',nativeImage);envValue(gateway.env,'R2D2_NATIVE_BRIDGE_IMAGE',gatewayImage);
+ for(const[name,component]of[['R2D2_NATIVE_GATEWAY_IMAGE','r2d2OpenClawGateway'],['R2D2_NATIVE_BRIDGE_IMAGE','osaaGateway']])one(gateway.env,name).value='release-component://'+component;
+ delete gateway.image;return spec;
+}
+export function buildNativeMaintenanceProof(input){
+ const {previousLock,targetLock,plan,before,after,record,runtimePolicy}=input,{current,reviewed}=maintenanceInput(input);
+ assert.notEqual(previousLock.releaseDigest,targetLock.releaseDigest,'Native maintenance needs a different target');
+ assert.equal(current.policy.image,previousLock.components.r2d2OpenClawGateway.image);assert.equal(current.policy.bridgeImage,previousLock.components.osaaGateway.image);
+ const adjusted=structuredClone(current);adjusted.installedReleaseDigest=reviewed.installedReleaseDigest;
+ adjusted.policy.image=reviewed.policy.image;adjusted.policy.bridgeImage=reviewed.policy.bridgeImage;
+ assert.deepEqual(reviewed,adjusted,'Native maintenance changes reviewed policy, storage, credentials or capacity');
+ assert.deepEqual(stable(maintenanceOwner(before,previousLock.components.osaaGateway.image,previousLock.components.r2d2OpenClawGateway.image)),
+  stable(maintenanceOwner(after,targetLock.components.osaaGateway.image,targetLock.components.r2d2OpenClawGateway.image)),
+  'Native maintenance changes Owner replicas, identity, permissions or configuration');
+ assert.ok(Number.isSafeInteger(before.spec.replicas)&&before.spec.replicas>0,'Native maintenance requires explicit C_AI replicas');
+ assert.match(previousLock.sourceRevision??'',/^[a-f0-9]{40}$/);assert.match(targetLock.sourceRevision??'',/^[a-f0-9]{40}$/);
+ return {ownerIdentity:identity(before),owner:'osaaGateway',replicas:before.spec.replicas,
+  beforeConfigurationDigest:configuration(before),afterConfigurationDigest:configuration(after),
+  installedReleaseDigest:previousLock.releaseDigest,targetReleaseDigest:targetLock.releaseDigest,
+  previousSourceRevision:previousLock.sourceRevision,sourceRevision:targetLock.sourceRevision,
+  installationId:plan.installationId,clusterUid:plan.clusterUid,policyUid:runtimePolicy.metadata.uid,
+  previousReviewedPolicyDigest:sha(current),reviewedPolicyDigest:plan.inputSha256,
+  previousGatewayImage:previousLock.components.osaaGateway.image,previousNativeImage:previousLock.components.r2d2OpenClawGateway.image,
+  gatewayImage:targetLock.components.osaaGateway.image,nativeImage:targetLock.components.r2d2OpenClawGateway.image};
+}
+export function captureNativeMaintenance(input){
+ const proof=buildNativeMaintenanceProof(input),{record,before,targetLock}=input;
+ const content={schema:'opensphere.r2d2-local-edge-maintenance-checkpoint/v1',recordUid:record.metadata.uid,
+  initialRecordResourceVersion:record.metadata.resourceVersion,ownerUid:before.metadata.uid,
+  targetReleaseDigest:targetLock.releaseDigest,sourceRevision:targetLock.sourceRevision,proof};
+ return {...content,checkpointDigest:sha(content)};
+}
+export function buildNativeMaintenanceRecoveryProof(input){
+ const {previousLock,targetLock,plan,before,after,record,runtimePolicy,installationIdentity}=input;
+ const state=JSON.parse(record.data?.['state.json']??'null'),checkpoint=state?.transition?.nativeMaintenanceCheckpoint;
+ assert.ok(checkpoint,'Native maintenance recovery requires its original persisted checkpoint');
+ exactKeys(checkpoint,['schema','recordUid','initialRecordResourceVersion','ownerUid','targetReleaseDigest','sourceRevision','proof','checkpointDigest']);
+ const {checkpointDigest,...content}=checkpoint;assert.equal(sha(content),checkpointDigest,'Native maintenance checkpoint changed');
+ assert.equal(checkpoint.schema,'opensphere.r2d2-local-edge-maintenance-checkpoint/v1');
+ assert.ok(['Failed','Installing'].includes(state.phase));assert.equal(state.transition.rollback,'never');
+ for(const digest of[state.transition.targetReleaseDigest,checkpoint.targetReleaseDigest])assert.equal(digest,targetLock.releaseDigest,'Native maintenance recovery target changed');
+ assert.equal(checkpoint.sourceRevision,targetLock.sourceRevision);assert.equal(checkpoint.recordUid,record.metadata.uid);
+ assert.match(record.metadata.resourceVersion??'',/^[0-9]+$/);assert.ok(BigInt(record.metadata.resourceVersion)>BigInt(checkpoint.initialRecordResourceVersion));
+ assert.equal(checkpoint.ownerUid,before.metadata.uid,'Native maintenance C_AI identity changed');
+ const {current,reviewed}=maintenanceInput(input),proof=checkpoint.proof;
+ assert.equal(state.releaseDigest,previousLock.releaseDigest,'Native maintenance recovery observed state changed');
+ if(previousLock.releaseDigest===targetLock.releaseDigest)assert.deepEqual(previousLock,targetLock,'Native maintenance recovery target lock changed');
+ else{
+  assert.equal(previousLock.releaseDigest,proof.installedReleaseDigest,'Native maintenance recovery original lock changed');
+  assert.equal(previousLock.sourceRevision,proof.previousSourceRevision);
+  assert.equal(previousLock.components.osaaGateway.image,proof.previousGatewayImage);assert.equal(previousLock.components.r2d2OpenClawGateway.image,proof.previousNativeImage);
+ }
+ assert.equal(proof.targetReleaseDigest,targetLock.releaseDigest);assert.equal(proof.sourceRevision,targetLock.sourceRevision);
+ assert.equal(proof.policyUid,runtimePolicy.metadata.uid,'Native maintenance policy identity changed');
+ assert.ok([proof.previousReviewedPolicyDigest,proof.reviewedPolicyDigest,plan.inputSha256].includes(sha(current)),'Native maintenance current policy drifted');
+ assert.equal(sha({...reviewed,installedReleaseDigest:proof.installedReleaseDigest}),proof.reviewedPolicyDigest,'Native maintenance recovery changes the reviewed policy or capacity');
+ assert.equal(reviewed.installationId,proof.installationId);assert.equal(reviewed.clusterUid,proof.clusterUid);
+ assert.equal(installationIdentity?.immutable,true);assert.equal(installationIdentity.data?.installationId,proof.installationId);assert.equal(installationIdentity.data?.clusterUid,proof.clusterUid);
+ assert.deepEqual(plan.identityBinding,policyBinding(installationIdentity),'Native maintenance immutable identity binding changed');
+ assert.equal(proof.gatewayImage,reviewed.policy.bridgeImage);assert.equal(proof.nativeImage,reviewed.policy.image);
+ assert.equal(configuration(after),proof.afterConfigurationDigest,'Native maintenance target configuration drifted');
+ assert.equal(after.spec.replicas,proof.replicas);assert.equal(before.spec.replicas,proof.replicas);
+ maintenanceOwner(after,proof.gatewayImage,proof.nativeImage);
+ let currentState;
+ if(configuration(before)===proof.afterConfigurationDigest){maintenanceOwner(before,proof.gatewayImage,proof.nativeImage);currentState='target-native';}
+ else {assert.equal(configuration(before),proof.beforeConfigurationDigest,'Native maintenance current Owner drifted');maintenanceOwner(before,proof.previousGatewayImage,proof.previousNativeImage);currentState='previous-native';}
+ return {state:currentState,originalProof:proof,targetReleaseDigest:targetLock.releaseDigest,sourceRevision:targetLock.sourceRevision,
+  reviewedPolicyDigest:plan.inputSha256,recordUid:record.metadata.uid,recordResourceVersion:record.metadata.resourceVersion};
+}

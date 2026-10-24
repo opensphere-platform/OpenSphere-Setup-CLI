@@ -8,9 +8,63 @@ import { kubectl } from './process.mjs';
 import { calculateReleaseBomDigest, isLocalEdgeLock, validateLock, validateReleaseTransition } from './release.mjs';
 import { verifyOwnerPreservation, verifyLocalNativeOwnerPreservation, validateReadinessProfile } from './release-readiness-profile.mjs';
 import artifactVersions from './artifact-version.cjs';
-import {captureNativeCutover,buildNativeRecoveryProof} from './native-r2d2-owner-cutover.mjs';
+import {captureNativeCutover,buildNativeRecoveryProof,captureNativeMaintenance,buildNativeMaintenanceRecoveryProof,nativeMaintenancePolicyBinding} from './native-r2d2-owner-cutover.mjs';
 const RAW_OWNERS=Symbol('private Owner bodies');
 const RAW_RECORD=Symbol('private installation record');
+const readRuntimePolicy=client=>JSON.parse(client(['get','configmap','opensphere-r2d2-runtime-policy','-n','opensphere-console','-o','json'],{capture:true}));
+const maintenanceAccessKinds=new Set(['Namespace','ServiceAccount','Role','RoleBinding','ClusterRole','ClusterRoleBinding','NetworkPolicy','ResourceQuota','LimitRange','ValidatingAdmissionPolicy','ValidatingAdmissionPolicyBinding']);
+const accessKey=o=>`${o.kind}/${o.metadata.namespace??''}/${o.metadata.name}`;
+const readAccess=(object,client)=>JSON.parse(client(['get',object.kind,object.metadata.name,...(object.metadata.namespace?['-n',object.metadata.namespace]:[]),'-o','json'],{capture:true}));
+function accessContent(object){
+  const value=structuredClone(object);delete value.status;
+  for(const name of['uid','resourceVersion','generation','creationTimestamp','managedFields'])delete value.metadata[name];
+  if(value.metadata.annotations){delete value.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration'];if(!Object.keys(value.metadata.annotations).length)delete value.metadata.annotations;}
+  return stable(value);
+}
+function compareMaintenanceAccess(documents,plan,client){
+  for(const object of[...documents,...plan.entries.map(e=>e.object)])assert.ok(object&&typeof object==='object'&&!Array.isArray(object)
+    &&typeof object.kind==='string'&&!object.kind.endsWith('List')&&!Object.hasOwn(object,'items'),
+    'Native maintenance requires flat reviewed declarations; wrapped permission objects are refused');
+  const objects=new Map();
+  for(const [verb,list]of[['apply',documents],['replace',plan.entries.map(e=>e.object)]])for(const object of list.filter(o=>maintenanceAccessKinds.has(o.kind))){
+    const key=verb+'/'+accessKey(object);
+    if(objects.has(key))assert.deepEqual(objects.get(key).object,object,'Native maintenance permission object is declared twice differently');
+    objects.set(key,{object,verb});
+  }
+  const bindings=[];
+  for(const {object,verb}of objects.values()){
+    const live=readAccess(object,client);
+    assert.equal(live?.kind,object.kind,'Native maintenance cannot introduce permission or capacity objects');
+    assert.equal(accessKey(live),accessKey(object));assert.ok(live.metadata.uid);assert.match(live.metadata.resourceVersion??'',/^[0-9]+$/);
+    const preparedEntry=plan.entries.find(e=>accessKey(e.object)===accessKey(object));
+    if(preparedEntry)assert.deepEqual(preparedEntry.before,nativeMaintenancePolicyBinding(live),'Native maintenance prerequisite binding changed');
+    const desired=structuredClone(object);
+    if(verb==='replace'){
+      // Match native prerequisite replacement, including its label custody.
+      // Rendered manifests below use apply instead: never restore a label
+      // that their real three-way apply would remove (including PSA labels).
+      desired.metadata={...live.metadata,...desired.metadata,uid:live.metadata.uid,resourceVersion:live.metadata.resourceVersion,
+        labels:{...live.metadata.labels,...desired.metadata.labels}};delete desired.metadata.managedFields;
+      if(desired.metadata.annotations)delete desired.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration'];
+    }
+    let admitted;
+    try{admitted=JSON.parse(client([verb,'--dry-run=server','-f','-','-o','json'],{capture:true,input:JSON.stringify(desired)}));}
+    catch{throw new Error('Native maintenance permission server dry-run failed; no update writes performed');}
+    assert.deepEqual(accessContent(admitted),accessContent(live),'Native maintenance changes permissions, network, credentials or capacity');
+    bindings.push({kind:live.kind,metadata:{namespace:live.metadata.namespace,name:live.metadata.name},binding:nativeMaintenancePolicyBinding(live)});
+  }
+  return bindings;
+}
+export function assertNativeMaintenancePolicyUnchanged(comparison,{client=kubectl}={}){
+  if(!comparison?.nativeMaintenancePolicyBinding)return;
+  assert.deepEqual(nativeMaintenancePolicyBinding(readRuntimePolicy(client)),comparison.nativeMaintenancePolicyBinding,'Native maintenance policy changed before a write');
+  const identity=JSON.parse(client(['get','configmap','opensphere-installation-identity','-n','opensphere-console','-o','json'],{capture:true}));
+  const cluster=JSON.parse(client(['get','namespace','kube-system','-o','json'],{capture:true}));
+  assert.equal(identity.immutable,true);assert.equal(identity.data?.installationId,comparison.nativeMaintenanceInstallationId);
+  assert.equal(identity.data?.clusterUid,comparison.nativeMaintenanceClusterUid);assert.equal(cluster.metadata?.uid,comparison.nativeMaintenanceClusterUid);
+  assert.deepEqual(nativeMaintenancePolicyBinding(identity),comparison.nativeMaintenanceIdentityBinding,'Native maintenance identity changed before a write');
+  for(const entry of comparison.nativeMaintenanceAccessBindings)assert.deepEqual(nativeMaintenancePolicyBinding(readAccess(entry,client)),entry.binding,'Native maintenance permission object changed before a write');
+}
 
 export function requiresOwnerPreservation(targetLock, previousLock, {nativeRecovery = false} = {}) {
   if (targetLock.components?.r2d2OpenClawGateway && (isLocalEdgeLock(targetLock) || isLocalEdgeLock(previousLock))) {
@@ -139,6 +193,10 @@ export function comparePreparedOwners(previousLock, targetLock, prepared, {
   const normalizeNativeImages = local ? false : pointer.readinessProfile.name!=='native-r2d2-cutover';
   const recoveryRequested = nativeRecovery && (local || pointer.readinessProfile.name==='native-r2d2-cutover');
   const observed = readOwnerObservation(previousLock, { client, now,normalizeNativeImages,recoveryCheckpoint:recoveryRequested });
+  const transition=JSON.parse(observed[RAW_RECORD].data?.['state.json']??'null')?.transition;
+  const maintenance=local&&!!previousLock.components?.r2d2OpenClawGateway&&(!recoveryRequested||!!transition?.nativeMaintenanceCheckpoint);
+  if(maintenance&&recoveryRequested)assert.equal(transition.nativeCutoverCheckpoint,undefined,'Native maintenance cannot reuse a Hermes cutover checkpoint');
+  const runtimePolicy=maintenance?readRuntimePolicy(client):undefined;
   let localIdentity;
   const assertLocalIdentity = () => {
     const config = JSON.parse(observed[RAW_RECORD].data['config.json']);
@@ -166,6 +224,7 @@ export function comparePreparedOwners(previousLock, targetLock, prepared, {
       return doc.toJS();
     }).filter(Boolean);
   });
+  const maintenanceAccess=maintenance?compareMaintenanceAccess(documents,prepared.foundation.nativeRuntime,client):undefined;
   const rendered = new Map();
   for (const document of documents.filter(d => ['Deployment', 'StatefulSet', 'DaemonSet'].includes(d.kind))) {
     assert.ok(!rendered.has(key(document)), 'Rendered plan declares a workload twice');
@@ -194,9 +253,12 @@ export function comparePreparedOwners(previousLock, targetLock, prepared, {
   const nativeInput={previousLock,targetLock,plan:prepared.foundation?.nativeRuntime,record:observed[RAW_RECORD],
     before:observed[RAW_OWNERS].get('Deployment/opensphere-console/opensphere-console-osaa-gateway'),
     after:plannedRaw.find(w=>key(w)==='Deployment/opensphere-console/opensphere-console-osaa-gateway')};
-  const checkpoint=(local || pointer.readinessProfile.name==='native-r2d2-cutover')&&!recoveryRequested?captureNativeCutover(nativeInput):undefined;
-  const recoveryProof=recoveryRequested?buildNativeRecoveryProof({...nativeInput,
+  const checkpoint=!maintenance&&(local || pointer.readinessProfile.name==='native-r2d2-cutover')&&!recoveryRequested?captureNativeCutover(nativeInput):undefined;
+  const recoveryProof=!maintenance&&recoveryRequested?buildNativeRecoveryProof({...nativeInput,
     installationIdentity:JSON.parse(client(['get','configmap','opensphere-installation-identity','-n','opensphere-console','-o','json'],{capture:true}))}):undefined;
+  const maintenanceInput={...nativeInput,runtimePolicy};
+  const maintenanceCheckpoint=maintenance&&!recoveryRequested?captureNativeMaintenance(maintenanceInput):undefined;
+  const maintenanceRecovery=maintenance&&recoveryRequested?buildNativeMaintenanceRecoveryProof({...maintenanceInput,installationIdentity:localIdentity}):undefined;
   const nativeCutover=checkpoint?.proof;
   const planned = plannedRaw.map(w => {
     const before = beforeByKey.get(key(w));
@@ -211,10 +273,19 @@ export function comparePreparedOwners(previousLock, targetLock, prepared, {
   const fresh = readOwnerObservation(previousLock, { client, now,normalizeNativeImages,recoveryCheckpoint:recoveryRequested });
   assert.deepEqual(fresh.installed, observed.installed, 'Installed Owner or lock changed during render comparison');
   if (local) assertLocalIdentity();
+  if(maintenance)assert.deepEqual(readRuntimePolicy(client),runtimePolicy,'Native maintenance runtime policy changed during comparison');
+  if(maintenance)for(const entry of maintenanceAccess)assert.deepEqual(nativeMaintenancePolicyBinding(readAccess(entry,client)),entry.binding,'Native maintenance permission object changed during comparison');
   const compare = local ? verifyLocalNativeOwnerPreservation : verifyOwnerPreservation;
   const result=compare({ ...(local ? {} : {profile: pointer.readinessProfile}), sourceRevision: targetLock.sourceRevision,
     installed: observed.installed, rendered: { sourceRevision: targetLock.sourceRevision,
       baseReleaseDigest: observed.installed.releaseDigest, baseResourceVersion: observed.installed.resourceVersion,
-      deactivations: [], workloads: planned }, now,nativeCutover,nativeRecovery:recoveryProof });
-  return {...result,...(checkpoint?{nativeCutoverCheckpoint:checkpoint}:{}),...(recoveryProof?{nativeCutoverCheckpoint:JSON.parse(observed[RAW_RECORD].data['state.json']).transition.nativeCutoverCheckpoint,nativeRecoveryState:recoveryProof.state}:{})};
+      deactivations: [], workloads: planned }, now,nativeCutover,nativeRecovery:recoveryProof,
+    nativeMaintenance:maintenanceCheckpoint?.proof,nativeMaintenanceRecovery:maintenanceRecovery });
+  return {...result,...(checkpoint?{nativeCutoverCheckpoint:checkpoint}:{}),...(recoveryProof?{nativeCutoverCheckpoint:transition.nativeCutoverCheckpoint,nativeRecoveryState:recoveryProof.state}:{}),
+    ...(maintenance?{nativeMaintenancePolicyBinding:nativeMaintenancePolicyBinding(runtimePolicy),
+      nativeMaintenanceIdentityBinding:prepared.foundation.nativeRuntime.identityBinding,
+      nativeMaintenanceAccessBindings:maintenanceAccess,
+      nativeMaintenanceInstallationId:prepared.foundation.nativeRuntime.installationId,nativeMaintenanceClusterUid:prepared.foundation.nativeRuntime.clusterUid,
+      nativeMaintenanceCheckpoint:maintenanceCheckpoint??transition.nativeMaintenanceCheckpoint,
+      ...(maintenanceRecovery?{nativeMaintenanceRecoveryState:maintenanceRecovery.state}:{})}:{})};
 }

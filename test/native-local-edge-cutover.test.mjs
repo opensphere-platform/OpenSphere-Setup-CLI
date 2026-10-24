@@ -4,11 +4,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
+import {execFileSync} from 'node:child_process';
+import {join} from 'node:path';
 import {comparePreparedOwners,requiresOwnerPreservation} from '../src/adoption-owner-preservation.mjs';
 import {COMPONENTS,AUXILIARY_ARTIFACTS,RELEASE_API_VERSION,SOURCE,LOCAL_EDGE_TRUST,
   RELEASE_TRUST,calculateReleaseDigest,validateReleaseTransition,verifyReleaseLock} from '../src/release.mjs';
 import {upgrade,installationStateDocument} from '../src/bootstrap.mjs';
 import {installationRecordDigest} from '../src/forward-repair.mjs';
+import {readinessProfile,verifyOwnerPreservation,verifyLocalNativeOwnerPreservation} from '../src/release-readiness-profile.mjs';
 const sha=x=>'sha256:'+createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const image=(name,c='a')=>`ghcr.io/opensphere-platform/${name}@sha256:${c.repeat(64)}`;
 const installationId='11111111-1111-4111-8111-111111111111',clusterUid='22222222-2222-4222-8222-222222222222';
@@ -192,7 +195,7 @@ test('a valid canonical C_API component target on local native remains unsupport
  target.releaseDigest=calculateReleaseDigest('edge',target.components,target.trust,undefined,target);f.target=target;
  validateReleaseTransition(f.previous,target);await assert.rejects(upgrade(f.previous,target,{runtime:f.runtime}),/integrated target/);zeroWrites(f);
 });
-test('native-to-another-native local integrated update is not confused with the approved first transition',async()=>{
+test('native-to-another-native local integrated update cannot reuse a first-cutover preparation without its current policy',async()=>{
  const f=fixture();f.previous=structuredClone(f.target);f.target=lock('f'.repeat(40),'f',false);
  f.record.data['release.json']=JSON.stringify(f.previous);const cfg=JSON.parse(f.record.data['config.json']);cfg.releaseDigest=f.previous.releaseDigest;f.record.data['config.json']=JSON.stringify(cfg);
  f.record.data['state.json']=JSON.stringify({phase:'Ready',releaseDigest:f.previous.releaseDigest});f.workloads=[structuredClone(f.after),structuredClone(f.otherAfter)];
@@ -200,10 +203,204 @@ test('native-to-another-native local integrated update is not confused with the 
  gateway.env.find(e=>e.name==='R2D2_NATIVE_GATEWAY_IMAGE').value=f.target.components.r2d2OpenClawGateway.image;gateway.env.find(e=>e.name==='R2D2_NATIVE_BRIDGE_IMAGE').value=f.target.components.osaaGateway.image;
  f.otherAfter=structuredClone(f.otherAfter);f.otherAfter.spec.template.spec.containers[0].image=f.target.components.console.image;
  f.reviewed.installedReleaseDigest=f.previous.releaseDigest;f.reviewed.policy.image=f.target.components.r2d2OpenClawGateway.image;f.reviewed.policy.bridgeImage=f.target.components.osaaGateway.image;replan(f);
- await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/Only the exact retired engine inventory/);zeroWrites(f);
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/existing public runtime policy/);zeroWrites(f);
 });
 test('raw lock recovery flag cannot suppress proof required by the explicit upgrade recovery option',async()=>{
  const f=await interrupted();for(const value of[f.previous,f.target])value.nativeRecovery=false;
  f.record.data['release.json']=JSON.stringify(f.previous);mutateState(f,s=>delete s.transition.nativeCutoverCheckpoint);
  await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime,oneWayRecoveryRecordDigest:installationRecordDigest(f.record)}),/original persisted cutover checkpoint/);zeroWrites(f);
+});
+
+// Native maintenance reuses the API simulator above, not its Hermes exception.
+// It exercises real verification/comparison/upgrade against synthetic public data.
+function maintenanceReplan(f){
+ replan(f);const plan=f.prepared.foundation.nativeRuntime,entry=plan.entries[0];
+ entry.object={apiVersion:'v1',kind:'ConfigMap',metadata:{namespace:'opensphere-console',name:'opensphere-r2d2-runtime-policy',labels:{'app.kubernetes.io/managed-by':'opensphere-setup'}},
+  data:{installationId,'policy.json':JSON.stringify(f.reviewed.policy),'preparation.json':JSON.stringify(f.reviewed)}};
+ entry.before={uid:f.runtimePolicy.metadata.uid,resourceVersion:f.runtimePolicy.metadata.resourceVersion,contentSha256:sha(f.runtimePolicy)};
+ if(f.accessObjects)plan.entries=[...f.desiredAccess.map((object,i)=>({object:structuredClone(object),before:{uid:f.accessObjects[i].metadata.uid,resourceVersion:f.accessObjects[i].metadata.resourceVersion,contentSha256:sha(f.accessObjects[i])}})),entry];
+ if(f.renderedAccess)f.prepared.all.push({yaml:JSON.stringify(f.renderedAccess)});
+ delete plan.planDigest;plan.planDigest=sha(plan);
+}
+function maintenanceFixture(){
+ const f=fixture();f.previous=structuredClone(f.target);f.before=structuredClone(f.after);f.other=structuredClone(f.otherAfter);
+ f.ledger=[[migration.globalId,migration.semanticKey,migration.predecessorGlobalId,migration.sha256,migration.sourceRevision,migration.setDigest,String(migration.setSize)]];
+ f.workloads=[f.before,f.other];f.target=lock('f'.repeat(40),'f',false);
+ const current=structuredClone(f.reviewed);
+ f.runtimePolicy={apiVersion:'v1',kind:'ConfigMap',metadata:{namespace:'opensphere-console',name:'opensphere-r2d2-runtime-policy',uid:'policy-uid',resourceVersion:'15',labels:{'app.kubernetes.io/managed-by':'opensphere-setup'}},
+  data:{installationId,'policy.json':JSON.stringify(current.policy),'preparation.json':JSON.stringify(current)}};
+ f.after=structuredClone(f.before);const g=f.after.spec.template.spec.containers[0];g.image=f.target.components.osaaGateway.image;
+ g.env.find(e=>e.name==='R2D2_NATIVE_GATEWAY_IMAGE').value=f.target.components.r2d2OpenClawGateway.image;g.env.find(e=>e.name==='R2D2_NATIVE_BRIDGE_IMAGE').value=f.target.components.osaaGateway.image;
+ f.otherAfter=structuredClone(f.other);f.otherAfter.spec.template.spec.containers[0].image=f.target.components.console.image;
+ f.record.data['release.json']=JSON.stringify(f.previous);const cfg=JSON.parse(f.record.data['config.json']);cfg.releaseDigest=f.previous.releaseDigest;f.record.data['config.json']=JSON.stringify(cfg);
+ f.record.data['state.json']=JSON.stringify({phase:'Ready',releaseDigest:f.previous.releaseDigest});
+ f.reviewed.installedReleaseDigest=f.previous.releaseDigest;f.reviewed.policy.image=f.target.components.r2d2OpenClawGateway.image;f.reviewed.policy.bridgeImage=f.target.components.osaaGateway.image;
+ f.accessObjects=['Namespace/opensphere-r2d2','ServiceAccount/r2d2-personal-runtime','Role/r2d2-personal-runtime-provisioner','RoleBinding/r2d2-personal-runtime-provisioner','NetworkPolicy/r2d2-default-deny','NetworkPolicy/r2d2-personal-runtime','NetworkPolicy/r2d2-personal-runtime-to-gateway','ResourceQuota/r2d2-personal-runtime-capacity'].map((value,i)=>{
+  const[kind,name]=value.split('/');return {apiVersion:kind==='Role'?'rbac.authorization.k8s.io/v1':'v1',kind,metadata:{name,...(i===0?{}:{namespace:i===6?'opensphere-console':'opensphere-r2d2'}),uid:'access-'+i,resourceVersion:'8',labels:{'app.kubernetes.io/managed-by':'opensphere-setup'}},
+   ...(kind==='Role'?{rules:[{apiGroups:[''],resources:['secrets'],verbs:['get']}]}:kind==='ResourceQuota'?{spec:{hard:{pods:'4'}}}:{spec:{reviewed:true}})};
+ });f.desiredAccess=structuredClone(f.accessObjects);
+ f.controlAccess={apiVersion:'rbac.authorization.k8s.io/v1',kind:'Role',metadata:{name:'opensphere-console-osaa-gateway',namespace:'opensphere-console',uid:'control-role-uid',resourceVersion:'17'},rules:[{apiGroups:[''],resources:['configmaps'],verbs:['get']}]};
+ f.renderedAccess=structuredClone(f.controlAccess);
+ maintenanceReplan(f);const originalClient=f.client;
+ f.client=(args,options)=>{
+  if(args[0]==='get'&&args[1]==='configmap'&&args[2]==='opensphere-r2d2-runtime-policy'){f.calls.push({args:[...args]});const result=JSON.stringify(f.runtimePolicy);f.policyReads=(f.policyReads??0)+1;f.policyReadHook?.(f.policyReads);return result;}
+  if(args[0]==='get'&&[...f.accessObjects,f.controlAccess].some(o=>o.kind===args[1]&&o.metadata.name===args[2])){f.calls.push({args:[...args]});const object=[...f.accessObjects,f.controlAccess].find(o=>o.kind===args[1]&&o.metadata.name===args[2]);return JSON.stringify(object);}
+  if(args.includes('--dry-run=server')&&JSON.parse(options.input).kind!=='List'){
+   f.calls.push({args:[...args]});const object=JSON.parse(options.input),live=[...f.accessObjects,f.controlAccess].find(o=>o.kind===object.kind&&o.metadata.name===object.metadata.name);
+   if(live)object.metadata={...object.metadata,uid:live.metadata.uid,resourceVersion:live.metadata.resourceVersion};
+   return JSON.stringify(f.admitAccess?f.admitAccess(object):object);
+  }
+  const result=originalClient(args,options);if(args.includes('--dry-run=server'))f.dryRunHook?.();return result;
+ };
+ f.runtime.installPreparedRelease=()=>{
+  const transition=JSON.parse(f.record.data['state.json']).transition;
+  assert.equal(transition.nativeCutoverCheckpoint,undefined,'Maintenance cannot use the Hermes removal proof');
+  const checkpoint=transition.nativeMaintenanceCheckpoint;assert.equal(checkpoint?.schema,'opensphere.r2d2-local-edge-maintenance-checkpoint/v1','Maintenance checkpoint must precede first target apply');
+  assert.equal(checkpoint.proof.owner,'osaaGateway');f.checkpoint=structuredClone(checkpoint);f.events.push('install-target');
+  if(f.failAt==='previous-native')throw Error('synthetic pre-apply maintenance failure');
+  const body=structuredClone(f.prepared.foundation.nativeRuntime.entries.find(e=>e.object.data?.['preparation.json']).object);body.metadata={...body.metadata,uid:f.runtimePolicy.metadata.uid,resourceVersion:String(BigInt(f.runtimePolicy.metadata.resourceVersion)+1n)};f.runtimePolicy=body;
+  f.workloads=[structuredClone(f.after),structuredClone(f.otherAfter)];f.workloads[0].metadata.resourceVersion='22';
+  f.ledger=[[migration.globalId,migration.semanticKey,migration.predecessorGlobalId,migration.sha256,migration.sourceRevision,migration.setDigest,String(migration.setSize)]];
+ };
+ f.runtime.verifyInstallation=async release=>{if(f.failAt==='target-native')throw Error('synthetic post-apply maintenance failure');return {releaseDigest:release.releaseDigest,verifiedAt:new Date().toISOString()};};
+ const write=f.runtime.recordInstallationState;f.runtime.recordInstallationState=(...args)=>{const result=write(...args);if(args[6]==='Installing'&&f.loseInitialResponse){f.loseInitialResponse=false;throw Error('synthetic lost first CAS response');}return result;};
+ return f;
+}
+async function interruptedMaintenance(state){
+ const f=maintenanceFixture();f.failAt=state;await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/native-runtime-forward-repair-required/);
+ f.previous=structuredClone(f.target);f.reviewed.installedReleaseDigest=f.previous.releaseDigest;maintenanceReplan(f);f.failAt='';f.events=[];f.calls=[];return f;
+}
+
+test('native maintenance preserves the same Owner and records a separate checkpoint before target apply',async()=>{
+ const f=maintenanceFixture(),result=await upgrade(f.previous,f.target,{runtime:f.runtime});assert.equal(result.changed,true);
+ assert.equal(JSON.parse(f.record.data['state.json']).phase,'Ready');assert.equal(f.checkpoint.proof.installedReleaseDigest,f.previous.releaseDigest);
+ assert.equal(f.checkpoint.proof.previousWorkerImage,undefined);assert.equal(f.checkpoint.proof.removedContainer,undefined);
+ assert.equal(f.events.filter(e=>e==='prepare').length,1,'Forward-only maintenance must not prepare old policy for rollback');
+});
+for(const state of ['previous-native','target-native'])test('native maintenance explicitly recovers the exact target from '+state,async()=>{
+ const f=await interruptedMaintenance(state),checkpoint=structuredClone(f.checkpoint);
+ const result=await upgrade(f.previous,f.target,{runtime:f.runtime,oneWayRecoveryRecordDigest:installationRecordDigest(f.record)});
+ assert.equal(result.changed,true);assert.deepEqual(f.checkpoint,checkpoint);assert.equal(JSON.parse(f.record.data['state.json']).phase,'Ready');assert.equal(f.events.filter(e=>e==='install-target').length,1);
+});
+test('native maintenance resumes its first Installing old-lock checkpoint after an unknown CAS response',async()=>{
+ const f=maintenanceFixture();f.loseInitialResponse=true;
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),error=>error.code==='RecordOwnershipUnknown');
+ const state=JSON.parse(f.record.data['state.json']);assert.equal(state.phase,'Installing');assert.equal(state.releaseDigest,f.previous.releaseDigest);assert.ok(state.transition.nativeMaintenanceCheckpoint);
+ assert.ok(!f.events.includes('install-target'));maintenanceReplan(f);f.events=[];f.calls=[];f.inspected=[];
+ const result=await upgrade(f.previous,f.target,{runtime:f.runtime,oneWayRecoveryRecordDigest:installationRecordDigest(f.record)});
+ assert.equal(result.changed,true);assert.equal(f.inspected.length,46,'Old-lock recovery must actually verify both locked image sets');assert.equal(JSON.parse(f.record.data['state.json']).phase,'Ready');
+});
+for(const [label,change]of[
+ ['runtime capacity',f=>{f.reviewed.capacity.maxRuntimes++;maintenanceReplan(f);}],
+ ['personal resources',f=>{f.reviewed.policy.resources.cpuLimitMilli++;maintenanceReplan(f);}],
+ ['storage',f=>{f.reviewed.policy.storage.sizeGi++;maintenanceReplan(f);}],
+ ['credential reference',f=>{f.reviewed.policy.imagePullSecretName='another-pull-secret';maintenanceReplan(f);}],
+ ['C_AI ServiceAccount',f=>{f.after.spec.template.spec.serviceAccountName='different';maintenanceReplan(f);}],
+ ['C_AI replicas',f=>{f.after.spec.replicas++;maintenanceReplan(f);}],
+ ['C_AI feature',f=>{f.after.spec.template.spec.containers[0].env.find(e=>e.name==='R2D2_BACKEND').value='disabled';maintenanceReplan(f);}],
+ ['C_AI configuration',f=>{f.after.spec.template.spec.containers[0].env.push({name:'NEW_AUTHORITY',value:'true'});maintenanceReplan(f);}],
+ ['another Owner replicas',f=>{f.otherAfter.spec.replicas++;maintenanceReplan(f);}],
+ ['another Owner security',f=>{f.otherAfter.spec.template.spec.containers[0].securityContext.runAsNonRoot=false;maintenanceReplan(f);}],
+ ['policy replacement',f=>{f.runtimePolicy.metadata.uid='replaced';}],
+ ['foreign policy',f=>{f.runtimePolicy.metadata.labels['app.kubernetes.io/managed-by']='another-owner';}],
+ ['stale policy RV',f=>{f.runtimePolicy.metadata.resourceVersion='99';}],
+ ['unverified lock metadata',f=>{f.runtime.verifyReleaseLock=async release=>release;}],
+ ['additional native Role grant',f=>{f.desiredAccess[2].rules[0].verbs.push('update');maintenanceReplan(f);}],
+ ['personal NetworkPolicy',f=>{f.desiredAccess[4].spec.allowAll=true;maintenanceReplan(f);}],
+ ['namespace PSA policy',f=>{f.desiredAccess[0].metadata.labels['pod-security.kubernetes.io/enforce']='privileged';maintenanceReplan(f);}],
+ ['quota hidden by the renderer',f=>{f.desiredAccess[7].spec.hard.pods='40';maintenanceReplan(f);}],
+ ['rendered C_AI Role grant',f=>{f.renderedAccess.rules[0].verbs.push('update');maintenanceReplan(f);}],
+ ['new rendered ClusterRole',f=>{f.renderedAccess={apiVersion:'rbac.authorization.k8s.io/v1',kind:'ClusterRole',metadata:{name:'unreviewed-new-role'},rules:[{apiGroups:['*'],resources:['*'],verbs:['*']}]};maintenanceReplan(f);}],
+])test('native maintenance refuses '+label+' before any write',async()=>{
+ const f=maintenanceFixture();change(f);await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}));zeroWrites(f);
+});
+test('native maintenance detects policy TOCTOU after dry-run before any prerequisite write',async()=>{
+ const f=maintenanceFixture();f.dryRunHook=()=>{f.runtimePolicy.metadata.resourceVersion='99';};
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/policy changed during comparison/);zeroWrites(f);
+});
+test('native maintenance detects policy drift between comparison and first resource write',async()=>{
+ const f=maintenanceFixture();f.policyReadHook=n=>{if(n===2)f.runtimePolicy.metadata.resourceVersion='99';};
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/policy changed before a write/);zeroWrites(f);
+});
+for(const [label,change]of[
+ ['immutable identity',f=>{f.identity.metadata.resourceVersion='99';}],
+ ['cluster',f=>{f.cluster='another-cluster';}],
+])test('native maintenance rechecks '+label+' before the first resource write',async()=>{
+ const f=maintenanceFixture();f.policyReadHook=n=>{if(n===2)change(f);};
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}));zeroWrites(f);
+});
+test('native maintenance rechecks policy before registry custody after namespace checks',async()=>{
+ const f=maintenanceFixture();f.runtime.ensureManagedNamespaces=()=>{f.events.push('namespaces');f.runtimePolicy.metadata.resourceVersion='99';};
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/policy changed before a write/);
+ assert.deepEqual(f.events.filter(e=>['namespaces','registry','install-target'].includes(e)),['namespaces']);assert.ok(!f.events.some(e=>e.startsWith('record:')));
+});
+test('native maintenance cannot downgrade the native inventory to the retired engine',async()=>{
+ const f=maintenanceFixture();f.target=lock('e'.repeat(40),'e',true);
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}));zeroWrites(f);
+});
+test('native maintenance cannot cross into formal trust using the local proof',async()=>{
+ const f=maintenanceFixture();f.target.trust=RELEASE_TRUST;
+ f.target.releaseDigest=calculateReleaseDigest('edge',f.target.components,f.target.trust,undefined,{auxiliaryArtifacts:f.target.auxiliaryArtifacts});
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/trust class/);zeroWrites(f);
+});
+test('native maintenance proof cannot substitute a signed profile or a Hermes cutover proof',async()=>{
+ const f=maintenanceFixture(),comparison=await compare(f),proof=comparison.nativeMaintenanceCheckpoint.proof;
+ assert.throws(()=>verifyOwnerPreservation({profile:readinessProfile('full',f.target.sourceRevision),sourceRevision:f.target.sourceRevision,nativeMaintenance:proof}),/cannot substitute a formal/);
+ assert.throws(()=>verifyLocalNativeOwnerPreservation({sourceRevision:f.target.sourceRevision,nativeCutover:{},nativeMaintenance:proof}),/mutually exclusive/);zeroWrites(f);
+});
+test('native maintenance permission binding drift is rejected before first resource write',async()=>{
+ const f=maintenanceFixture();f.policyReadHook=n=>{if(n===3)f.controlAccess.metadata.resourceVersion='99';};
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/permission object changed before a write/);zeroWrites(f);
+});
+function actualPrerequisiteFixture(){
+ const f=maintenanceFixture(),contract=JSON.parse(readFileSync(new URL('./fixtures/native-maintenance-prerequisites-v1.json',import.meta.url)));
+ assert.equal(contract.synthetic,true);const input=contract.input,source=process.env.OPENSPHERE_CONSOLE_SOURCE;
+ // Explicit producer/consumer conformance input only. Production Setup uses
+ // its verified artifact; no runtime code imports a sibling source checkout.
+ const objects=source?JSON.parse(execFileSync(process.execPath,['-e',
+  'process.stdout.write(JSON.stringify(require(process.argv[1]).renderPersonalRuntimePrerequisites(JSON.parse(require("node:fs").readFileSync(0,"utf8")))))',
+  join(source,contract.producerPath)],{input:JSON.stringify(input),encoding:'utf8',timeout:15000})):contract.objects;
+ assert.deepEqual(objects,contract.objects,'Current producer prerequisite output changed from the reviewed fixture');
+ f.reviewed.policy=structuredClone(input.policy);f.reviewed.capacity=structuredClone(input.capacity);
+ const current=JSON.parse(f.runtimePolicy.data['preparation.json']);current.policy={...structuredClone(input.policy),image:f.previous.components.r2d2OpenClawGateway.image,bridgeImage:f.previous.components.osaaGateway.image};current.capacity=structuredClone(input.capacity);
+ f.runtimePolicy.data['preparation.json']=JSON.stringify(current);f.runtimePolicy.data['policy.json']=JSON.stringify(current.policy);
+ f.desiredAccess=objects.map(o=>({...structuredClone(o),metadata:{...o.metadata,labels:{...o.metadata.labels,'app.kubernetes.io/managed-by':'opensphere-setup','opensphere.io/r2d2-prerequisite':'true'}}}));
+ f.accessObjects=f.desiredAccess.map((o,i)=>({...structuredClone(o),metadata:{...structuredClone(o.metadata),uid:'actual-access-'+i,resourceVersion:'25',creationTimestamp:'2026-10-24T00:00:00Z',managedFields:[{manager:'synthetic-apiserver'}],labels:{...o.metadata.labels,'app.kubernetes.io/version':'existing-unmanaged-label'}}}));
+ Object.assign(f.accessObjects[0],{spec:{finalizers:['kubernetes']},status:{phase:'Active'}});f.accessObjects[0].metadata.labels['kubernetes.io/metadata.name']='opensphere-r2d2';
+ // These are simulated API defaults, not a claim that RKE2 admitted them.
+ f.admitAccess=o=>o.kind==='Namespace'?{...o,spec:{finalizers:['kubernetes']},status:{phase:'Active'},metadata:{...o.metadata,labels:{...o.metadata.labels,'kubernetes.io/metadata.name':o.metadata.name}}}:o;
+ maintenanceReplan(f);return f;
+}
+test('actual renderer prerequisites preserve API defaults and existing version labels during maintenance',async()=>{
+ const f=actualPrerequisiteFixture(),result=await upgrade(f.previous,f.target,{runtime:f.runtime});assert.equal(result.changed,true);assert.equal(f.accessObjects.length,8);
+ assert.ok(f.calls.some(c=>c.args[0]==='replace'&&c.args.includes('--dry-run=server')));assert.ok(f.calls.some(c=>c.args[0]==='apply'&&c.args.includes('--dry-run=server')));
+});
+test('actual renderer Role grant change is rejected despite unchanged reviewed policy JSON',async()=>{
+ const f=actualPrerequisiteFixture();f.desiredAccess.find(o=>o.kind==='Role').rules[0].verbs.push('delete');maintenanceReplan(f);
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/changes permissions/);zeroWrites(f);
+});
+test('rendered apply cannot delete an existing declared namespace PSA label hidden by prerequisite replacement',async()=>{
+ const f=actualPrerequisiteFixture();f.renderedAccess=structuredClone(f.desiredAccess[0]);
+ f.renderedAccess.metadata.labels={...f.accessObjects[0].metadata.labels};delete f.renderedAccess.metadata.labels['pod-security.kubernetes.io/enforce'];maintenanceReplan(f);
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/changes permissions/);zeroWrites(f);
+});
+for(const kind of['List','RoleList','Unstructured'])test('native maintenance refuses '+kind+' permission wrappers before any write',async()=>{
+ const f=actualPrerequisiteFixture();f.renderedAccess={apiVersion:'v1',kind,items:[{...structuredClone(f.controlAccess),rules:[{apiGroups:['*'],resources:['*'],verbs:['*']}]}]};maintenanceReplan(f);
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/flat reviewed declarations/);zeroWrites(f);
+});
+test('native maintenance refuses top-level items hidden on a prerequisite Role before any write',async()=>{
+ const f=actualPrerequisiteFixture();f.desiredAccess.find(o=>o.kind==='Role').items=[{kind:'ClusterRole',metadata:{name:'hidden-role'},rules:[{apiGroups:['*'],resources:['*'],verbs:['*']}]}];maintenanceReplan(f);
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/flat reviewed declarations/);zeroWrites(f);
+});
+for(const [label,change]of[
+ ['missing checkpoint',f=>mutateState(f,s=>delete s.transition.nativeMaintenanceCheckpoint)],
+ ['checkpoint data tampering',f=>mutateState(f,s=>s.transition.nativeMaintenanceCheckpoint.proof.owner='another-owner')],
+ ['another target',f=>{f.target=lock('e'.repeat(40),'e',false);f.reviewed.policy.image=f.target.components.r2d2OpenClawGateway.image;f.reviewed.policy.bridgeImage=f.target.components.osaaGateway.image;maintenanceReplan(f);}],
+ ['record replacement',f=>{f.record.metadata.uid='other-record';maintenanceReplan(f);}],
+ ['stale preparation',f=>{f.record.metadata.resourceVersion='99';}],
+ ['policy capacity drift',f=>{f.reviewed.capacity.totalStorageGi++;maintenanceReplan(f);}],
+ ['current Owner drift',f=>{f.workloads[0].spec.template.spec.serviceAccountName='another';}],
+])test('native maintenance recovery refuses '+label+' without new writes',async()=>{
+ const f=await interruptedMaintenance('target-native');change(f);
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime,oneWayRecoveryRecordDigest:installationRecordDigest(f.record)}));zeroWrites(f);
 });

@@ -161,14 +161,54 @@ function validateNativeRecovery(proof, installed, sourceRevision) {
   return proof;
 }
 
+function validateNativeMaintenanceProof(proof, installed, sourceRevision) {
+  const keys=['ownerIdentity','owner','replicas','beforeConfigurationDigest','afterConfigurationDigest','installedReleaseDigest','targetReleaseDigest',
+    'previousSourceRevision','sourceRevision','installationId','clusterUid','policyUid','previousReviewedPolicyDigest','reviewedPolicyDigest',
+    'previousGatewayImage','previousNativeImage','gatewayImage','nativeImage'];
+  assert.ok(proof&&typeof proof==='object'&&!Array.isArray(proof),'Bound native maintenance proof is required');
+  assert.deepEqual(sorted(Object.keys(proof)),sorted(keys),'Native maintenance proof shape differs');
+  assert.equal(proof.ownerIdentity,nativeOwnerIdentity);assert.equal(proof.owner,'osaaGateway');
+  assert.ok(Number.isSafeInteger(proof.replicas)&&proof.replicas>0);
+  for(const name of ['beforeConfigurationDigest','afterConfigurationDigest','installedReleaseDigest','targetReleaseDigest','previousReviewedPolicyDigest','reviewedPolicyDigest'])assert.match(proof[name]??'',digest,'Native maintenance digest is missing');
+  assert.equal(proof.installedReleaseDigest,installed.releaseDigest,'Native maintenance installed release differs');
+  assert.notEqual(proof.targetReleaseDigest,proof.installedReleaseDigest,'Native maintenance requires a new target');
+  for(const name of ['previousSourceRevision','sourceRevision'])assert.match(proof[name]??'',revision);
+  assert.equal(proof.sourceRevision,sourceRevision,'Native maintenance target source differs');
+  for(const name of ['installationId','clusterUid'])assert.match(proof[name]??'',uuid);
+  assert.ok(typeof proof.policyUid==='string'&&proof.policyUid.length>0);
+  for(const [name,repository]of[['previousGatewayImage','opensphere-console-osaa-gateway'],['gatewayImage','opensphere-console-osaa-gateway'],['previousNativeImage','opensphere-console-r2d2-openclaw'],['nativeImage','opensphere-console-r2d2-openclaw']])assert.match(proof[name]??'',new RegExp(`^ghcr\\.io/opensphere-platform/${repository}@sha256:[a-f0-9]{64}$`,'u'));
+  return proof;
+}
+function validateNativeMaintenanceRecovery(proof,installed,sourceRevision){
+  assert.ok(proof&&typeof proof==='object'&&!Array.isArray(proof),'Bound native maintenance recovery proof is required');
+  assert.deepEqual(sorted(Object.keys(proof)),sorted(['state','originalProof','targetReleaseDigest','sourceRevision','reviewedPolicyDigest','recordUid','recordResourceVersion']));
+  assert.ok(['previous-native','target-native'].includes(proof.state));
+  validateNativeMaintenanceProof(proof.originalProof,{releaseDigest:proof.originalProof?.installedReleaseDigest},sourceRevision);
+  assert.ok([proof.originalProof.installedReleaseDigest,proof.targetReleaseDigest].includes(installed.releaseDigest),'Native maintenance recovery installed lock differs');
+  assert.equal(proof.targetReleaseDigest,proof.originalProof.targetReleaseDigest);
+  assert.equal(proof.sourceRevision,sourceRevision);assert.equal(proof.recordUid,installed.recordUid);assert.equal(proof.recordResourceVersion,installed.resourceVersion);
+  assert.match(proof.reviewedPolicyDigest??'',digest);return proof;
+}
+function assertNativeMaintenanceOwner(before,after,proof,state){
+  assert.equal(before.owner,proof.owner);assert.equal(after.owner,proof.owner);
+  assert.equal(before.configurationDigest,state==='target-native'?proof.afterConfigurationDigest:proof.beforeConfigurationDigest,'Native maintenance current configuration differs');
+  assert.equal(after.configurationDigest,proof.afterConfigurationDigest,'Native maintenance target configuration differs');
+  assert.equal(before.replicas,proof.replicas);assert.equal(after.replicas,proof.replicas);
+  assert.deepEqual(before.containers.map(c=>[c.name,c.image]),[['gateway',state==='target-native'?proof.gatewayImage:proof.previousGatewayImage]]);
+  assert.deepEqual(after.containers.map(c=>[c.name,c.image]),[['gateway',proof.gatewayImage]]);
+  assert.deepEqual(before.containers[0].features,{R2D2_BACKEND:'openclaw-native'});assert.deepEqual(after.containers[0].features,before.containers[0].features);
+}
+
 // Invoke before any adoption write and again if the installation lock or live
 // workload resourceVersions change. Replica/container/feature preservation is
 // mandatory even when the Owner is outside the bootstrap readiness partition.
 // Only the explicit native profile and trusted Setup proof admit the one C_AI
 // replacement below; they cannot authorize another Owner or container removal.
 // Ready Pods do not prove functional acceptance; that remains a post-deploy gate.
-export function verifyOwnerPreservation({ profile, sourceRevision, installed, rendered, nativeCutover, nativeRecovery, now = Date.now() }) {
+export function verifyOwnerPreservation({ profile, sourceRevision, installed, rendered, nativeCutover, nativeRecovery, nativeMaintenance, nativeMaintenanceRecovery, now = Date.now() }) {
   validateReadinessProfile(profile, sourceRevision);
+  assert.equal(nativeMaintenance,undefined,'Native maintenance cannot substitute a formal readiness profile');
+  assert.equal(nativeMaintenanceRecovery,undefined,'Native maintenance recovery cannot substitute a formal readiness profile');
   const native = profile.name === NATIVE_R2D2_CUTOVER_PROFILE;
   if (!native) assert.equal(nativeCutover, undefined, 'Native cutover proof requires its explicit signed profile');
   if (!native) assert.equal(nativeRecovery, undefined, 'Native recovery proof requires its explicit signed profile');
@@ -178,14 +218,14 @@ export function verifyOwnerPreservation({ profile, sourceRevision, installed, re
 // Pure comparison only. Setup's closed local-edge adapter establishes the
 // existing local trust and actual image/installation checks before calling it.
 // This creates no signed readiness predicate or publication authority.
-export function verifyLocalNativeOwnerPreservation({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, now = Date.now() }) {
+export function verifyLocalNativeOwnerPreservation({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, nativeMaintenance, nativeMaintenanceRecovery, now = Date.now() }) {
   assert.match(sourceRevision ?? '', revision, 'Local Owner comparison source is missing');
-  assert.ok(nativeCutover || nativeRecovery, 'Local native comparison requires its exact cutover or recovery proof');
-  return compareOwnerObservations({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, native: true, now });
+  assert.ok(nativeCutover || nativeRecovery || nativeMaintenance || nativeMaintenanceRecovery, 'Local native comparison requires its exact cutover, maintenance or recovery proof');
+  return compareOwnerObservations({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, nativeMaintenance, nativeMaintenanceRecovery, native: true, now });
 }
 
-function compareOwnerObservations({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, native, now }) {
-  assert.ok(!(nativeCutover && nativeRecovery), 'Native cutover and recovery proofs are mutually exclusive');
+function compareOwnerObservations({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, nativeMaintenance, nativeMaintenanceRecovery, native, now }) {
+  assert.ok([nativeCutover,nativeRecovery,nativeMaintenance,nativeMaintenanceRecovery].filter(Boolean).length<=1, 'Native cutover, maintenance and recovery proofs are mutually exclusive');
   assert.match(installed?.releaseDigest ?? '', digest, 'Installed release digest is missing');
   assert.match(installed?.resourceVersion ?? '', /^[0-9]+$/u, 'Installation lock observation is missing');
   const observed = Date.parse(installed?.observedUtc);
@@ -200,8 +240,10 @@ function compareOwnerObservations({ sourceRevision, installed, rendered, nativeC
   // reviewed policy, immutable installation and exact admitted manifests. A
   // self-reported field in rendered JSON is never an approval or a proof.
   const recovery = native && nativeRecovery ? validateNativeRecovery(nativeRecovery, installed, sourceRevision) : null;
+  const maintenanceRecovery=nativeMaintenanceRecovery?validateNativeMaintenanceRecovery(nativeMaintenanceRecovery,installed,sourceRevision):null;
+  const maintenance=maintenanceRecovery?maintenanceRecovery.originalProof:nativeMaintenance?validateNativeMaintenanceProof(nativeMaintenance,installed,sourceRevision):null;
   const proof = recovery ? recovery.state === 'pending-legacy' ? recovery.originalProof : null
-    : native ? validateNativeCutoverProof(nativeCutover, installed) : null;
+    : native&&!maintenance ? validateNativeCutoverProof(nativeCutover, installed) : null;
   if (native) assert.ok(live.has(nativeOwnerIdentity) && planned.has(nativeOwnerIdentity), 'Native cutover C_AI Owner is missing');
   for (const [key, before] of live) {
     assert.equal(typeof before.uid, 'string', 'Live workload UID is missing');
@@ -209,6 +251,8 @@ function compareOwnerObservations({ sourceRevision, installed, rendered, nativeC
     const after = planned.get(key);
     assert.ok(after, `Active Owner workload would be removed: ${key}`);
     const cutoverOwner = proof && key === nativeOwnerIdentity;
+    const maintenanceOwner=maintenance&&key===nativeOwnerIdentity;
+    if(maintenanceOwner)assertNativeMaintenanceOwner(before,after,maintenance,maintenanceRecovery?.state);
     if (recovery && key === nativeOwnerIdentity) {
       assert.equal(after.configurationDigest, recovery.originalProof.afterConfigurationDigest, 'Native recovery target configuration differs');
       assert.equal(after.containers.find(c => c.name === 'gateway')?.image, recovery.originalProof.gatewayImage, 'Native recovery target image differs');
@@ -221,8 +265,9 @@ function compareOwnerObservations({ sourceRevision, installed, rendered, nativeC
     else assert.equal(after.owner, before.owner, `Owner writer would change: ${key}`);
     assert.equal(after.baseUid, before.uid, `Owner workload identity changed: ${key}`);
     assert.equal(after.baseResourceVersion, before.resourceVersion, `Owner observation changed: ${key}`);
-    assert.ok(after.replicas >= before.replicas, `Active Owner would shrink: ${key}`);
-    if (!cutoverOwner) assert.equal(after.configurationDigest, before.configurationDigest, `Active Owner configuration would change: ${key}`);
+    if(maintenance)assert.equal(after.replicas,before.replicas,`Native maintenance cannot change Owner capacity: ${key}`);
+    else assert.ok(after.replicas >= before.replicas, `Active Owner would shrink: ${key}`);
+    if (!cutoverOwner&&!maintenanceOwner) assert.equal(after.configurationDigest, before.configurationDigest, `Active Owner configuration would change: ${key}`);
     for (const container of before.containers) {
       if (cutoverOwner && container.name === proof.removedContainer) continue;
       const target = after.containers.find(c => c.name === container.name);
@@ -235,7 +280,8 @@ function compareOwnerObservations({ sourceRevision, installed, rendered, nativeC
   }
   return { contract: CONTRACT, sourceRevision, baseReleaseDigest: installed.releaseDigest,
     baseResourceVersion: installed.resourceVersion, comparedWorkloads: live.size, status: 'preserved',
-    ...(proof ? { nativeCutover: { ownerIdentity: proof.ownerIdentity, reviewedPolicyDigest: proof.reviewedPolicyDigest } } : {}) };
+    ...(proof ? { nativeCutover: { ownerIdentity: proof.ownerIdentity, reviewedPolicyDigest: proof.reviewedPolicyDigest } } : {}),
+    ...(maintenance?{nativeMaintenance:{ownerIdentity:maintenance.ownerIdentity,reviewedPolicyDigest:maintenance.reviewedPolicyDigest}}:{}) };
 }
 
 if (process.argv[1] && basename(process.argv[1]) === 'release-readiness-profile.mjs'
