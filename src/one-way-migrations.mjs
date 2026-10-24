@@ -8,6 +8,7 @@
 // the target's migration chain. Component counts and migration numbers decide nothing.
 export const ONE_WAY_MIGRATIONS = Object.freeze({
   'console.osdst.task_engine_cutover': 'R2D2 task engine cutover',
+  'console.r2d2.native_request_journal': 'R2D2 native runtime request journal cutover',
 });
 
 export class LedgerMismatch extends Error {}

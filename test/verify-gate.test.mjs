@@ -7,7 +7,8 @@ import {
   hasBeszelBootstrapHistory,
   isBeszelBootstrapWorkload,
   isRetryableInstallationReadinessError,
-  releaseWorkloadSpecs
+  releaseWorkloadSpecs,
+  verifyNativeRuntimeReferences
 } from '../src/verify.mjs';
 import { BOOTSTRAP_CORE_COMPONENTS } from '../src/release.mjs';
 
@@ -102,20 +103,65 @@ test('expired Beszel bootstrap Job requires evidence bound to the exact installa
   ), false);
 });
 
-test('every bootstrap core component, including the R2D2 Hermes worker sidecar, has a verified workload container', () => {
+test('bootstrap workloads exclude private on-demand native Pods and never retain a shared Hermes sidecar', () => {
   const specs = releaseWorkloadSpecs();
-  for (const component of BOOTSTRAP_CORE_COMPONENTS) {
+  for (const component of BOOTSTRAP_CORE_COMPONENTS.filter(value => value !== 'r2d2OpenClawGateway')) {
     assert.ok(specs.some((spec) => spec.component === component), component);
   }
-  const worker = specs.filter((spec) => spec.component === 'r2d2HermesWorker');
-  assert.deepEqual(worker, [{
-    component: 'r2d2HermesWorker',
-    namespace: 'opensphere-console',
-    kind: 'deployment',
-    name: 'opensphere-console-osaa-gateway',
-    container: 'hermes-worker'
-  }]);
+  assert.deepEqual(specs.filter(spec => spec.component === 'r2d2OpenClawGateway'), []);
+  assert.ok(specs.every(spec => spec.container !== 'hermes-worker' && spec.component !== 'r2d2HermesWorker'));
   const gateway = specs.find((spec) => spec.component === 'osaaGateway');
-  assert.equal(gateway.name, worker[0].name);
+  assert.equal(gateway.name, 'opensphere-console-osaa-gateway');
   assert.equal(gateway.container, 'gateway');
 });
+
+function nativeReferenceFixture() {
+  const lock = JSON.parse(readFileSync(new URL('./fixtures/knowledge-release-v1.json', import.meta.url))).base;
+  const installationId = '1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b';
+  const clusterUid = '6c1a7b2e-3f4d-4a5b-9c8d-7e6f5a4b3c2d';
+  const container = { name: 'gateway', image: lock.components.osaaGateway.image, env: [
+    { name: 'R2D2_BACKEND', value: 'openclaw-native' },
+    { name: 'R2D2_NATIVE_GATEWAY_IMAGE', value: lock.components.r2d2OpenClawGateway.image },
+    { name: 'R2D2_NATIVE_BRIDGE_IMAGE', value: lock.components.osaaGateway.image },
+    { name: 'OPENSPHERE_INSTALLATION_ID', valueFrom: { configMapKeyRef: { name: 'opensphere-r2d2-runtime-policy', key: 'installationId', optional: false } } },
+    { name: 'R2D2_NATIVE_RUNTIME_POLICY', valueFrom: { configMapKeyRef: { name: 'opensphere-r2d2-runtime-policy', key: 'policy.json', optional: false } } },
+  ] };
+  const policy = { metadata: { name: 'opensphere-r2d2-runtime-policy', namespace: 'opensphere-console', labels: { 'app.kubernetes.io/managed-by': 'opensphere-setup' } }, data: { installationId,
+    'policy.json': JSON.stringify({ installationId, image: lock.components.r2d2OpenClawGateway.image, bridgeImage: lock.components.osaaGateway.image }) } };
+  const identity = { immutable: true, data: { installationId, clusterUid } };
+  return { lock, container, policy, identity, clusterUid };
+}
+
+test('native readiness proves exact on-demand images and required policy references without inventing a personal Pod', () => {
+  const f = nativeReferenceFixture();
+  assert.equal(verifyNativeRuntimeReferences(f.lock, f.container, f), true);
+  assert.equal(f.container.env.some(entry => entry.name.startsWith('R2D2_HERMES_')), false);
+  const historical = structuredClone(f.lock); delete historical.components.r2d2OpenClawGateway;
+  assert.equal(verifyNativeRuntimeReferences(historical, {}, {}), false, 'Installed historical evidence never claims the native engine is ready');
+});
+
+for (const [name, mutate] of [
+  ['missing native image', f => f.container.env.splice(1, 1)],
+  ['duplicate native image', f => f.container.env.push({ ...f.container.env[1] })],
+  ['another native image', f => f.container.env[1].value += 'different'],
+  ['another bridge image', f => f.container.env[2].value += 'different'],
+  ['disabled native backend', f => f.container.env[0].value = 'disabled'],
+  ['optional policy reference', f => f.container.env[4].valueFrom.configMapKeyRef.optional = true],
+  ['another policy name', f => f.container.env[4].valueFrom.configMapKeyRef.name = 'other'],
+  ['another policy key', f => f.container.env[3].valueFrom.configMapKeyRef.key = 'other'],
+  ['inline policy override', f => f.container.env[4].value = '{}'],
+  ['malformed policy JSON', f => f.policy.data['policy.json'] = '{'],
+  ['another policy image', f => { const value = JSON.parse(f.policy.data['policy.json']); value.image += 'different'; f.policy.data['policy.json'] = JSON.stringify(value); }],
+  ['another policy bridge', f => { const value = JSON.parse(f.policy.data['policy.json']); value.bridgeImage += 'different'; f.policy.data['policy.json'] = JSON.stringify(value); }],
+  ['another policy installation', f => { const value = JSON.parse(f.policy.data['policy.json']); value.installationId = 'different'; f.policy.data['policy.json'] = JSON.stringify(value); }],
+  ['mutable installation identity', f => f.identity.immutable = false],
+  ['another cluster identity', f => f.clusterUid = 'different'],
+  ['another installation identity', f => f.identity.data.installationId = 'different'],
+  ['foreign policy owner', f => f.policy.metadata.labels['app.kubernetes.io/managed-by'] = 'foreign'],
+  ['retired Hermes activation', f => f.container.env.push({ name: 'R2D2_HERMES_ENABLED', value: 'true' })],
+]) {
+  test(`native reference verification refuses ${name}`, () => {
+    const f = nativeReferenceFixture(); mutate(f);
+    assert.throws(() => verifyNativeRuntimeReferences(f.lock, f.container, f));
+  });
+}

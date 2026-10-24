@@ -1,15 +1,90 @@
-// Setup consumes the versioned signed readiness predicate. It never maps its
-// source minimum to a runtime deactivation list. Existing Owner lifecycle stays
-// with Setup/owner paths. This comparison grants no execution authority.
+// Setup consumes verified signed readiness predicates or the closed, existing
+// local-edge native transition contract. Neither maps source readiness to a
+// runtime deactivation list. This comparison grants no execution authority.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { parseAllDocuments } from 'yaml';
 import { kubectl } from './process.mjs';
-import { calculateReleaseBomDigest } from './release.mjs';
-import { verifyOwnerPreservation, validateReadinessProfile } from './release-readiness-profile.mjs';
+import { calculateReleaseBomDigest, isLocalEdgeLock, validateLock, validateReleaseTransition } from './release.mjs';
+import { verifyOwnerPreservation, verifyLocalNativeOwnerPreservation, validateReadinessProfile } from './release-readiness-profile.mjs';
 import artifactVersions from './artifact-version.cjs';
+import {captureNativeCutover,buildNativeRecoveryProof,captureNativeMaintenance,buildNativeMaintenanceRecoveryProof,nativeMaintenancePolicyBinding} from './native-r2d2-owner-cutover.mjs';
+const RAW_OWNERS=Symbol('private Owner bodies');
+const RAW_RECORD=Symbol('private installation record');
+const readRuntimePolicy=client=>JSON.parse(client(['get','configmap','opensphere-r2d2-runtime-policy','-n','opensphere-console','-o','json'],{capture:true}));
+const maintenanceAccessKinds=new Set(['Namespace','ServiceAccount','Role','RoleBinding','ClusterRole','ClusterRoleBinding','NetworkPolicy','ResourceQuota','LimitRange','ValidatingAdmissionPolicy','ValidatingAdmissionPolicyBinding']);
+const accessKey=o=>`${o.kind}/${o.metadata.namespace??''}/${o.metadata.name}`;
+const readAccess=(object,client)=>JSON.parse(client(['get',object.kind,object.metadata.name,...(object.metadata.namespace?['-n',object.metadata.namespace]:[]),'-o','json'],{capture:true}));
+function accessContent(object){
+  const value=structuredClone(object);delete value.status;
+  for(const name of['uid','resourceVersion','generation','creationTimestamp','managedFields'])delete value.metadata[name];
+  if(value.metadata.annotations){delete value.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration'];if(!Object.keys(value.metadata.annotations).length)delete value.metadata.annotations;}
+  return stable(value);
+}
+function compareMaintenanceAccess(documents,plan,client){
+  for(const object of[...documents,...plan.entries.map(e=>e.object)])assert.ok(object&&typeof object==='object'&&!Array.isArray(object)
+    &&typeof object.kind==='string'&&!object.kind.endsWith('List')&&!Object.hasOwn(object,'items'),
+    'Native maintenance requires flat reviewed declarations; wrapped permission objects are refused');
+  const objects=new Map();
+  for(const [verb,list]of[['apply',documents],['replace',plan.entries.map(e=>e.object)]])for(const object of list.filter(o=>maintenanceAccessKinds.has(o.kind))){
+    const key=verb+'/'+accessKey(object);
+    if(objects.has(key))assert.deepEqual(objects.get(key).object,object,'Native maintenance permission object is declared twice differently');
+    objects.set(key,{object,verb});
+  }
+  const bindings=[];
+  for(const {object,verb}of objects.values()){
+    const live=readAccess(object,client);
+    assert.equal(live?.kind,object.kind,'Native maintenance cannot introduce permission or capacity objects');
+    assert.equal(accessKey(live),accessKey(object));assert.ok(live.metadata.uid);assert.match(live.metadata.resourceVersion??'',/^[0-9]+$/);
+    const preparedEntry=plan.entries.find(e=>accessKey(e.object)===accessKey(object));
+    if(preparedEntry)assert.deepEqual(preparedEntry.before,nativeMaintenancePolicyBinding(live),'Native maintenance prerequisite binding changed');
+    const desired=structuredClone(object);
+    if(verb==='replace'){
+      // Match native prerequisite replacement, including its label custody.
+      // Rendered manifests below use apply instead: never restore a label
+      // that their real three-way apply would remove (including PSA labels).
+      desired.metadata={...live.metadata,...desired.metadata,uid:live.metadata.uid,resourceVersion:live.metadata.resourceVersion,
+        labels:{...live.metadata.labels,...desired.metadata.labels}};delete desired.metadata.managedFields;
+      if(desired.metadata.annotations)delete desired.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration'];
+    }
+    let admitted;
+    try{admitted=JSON.parse(client([verb,'--dry-run=server','-f','-','-o','json'],{capture:true,input:JSON.stringify(desired)}));}
+    catch{throw new Error('Native maintenance permission server dry-run failed; no update writes performed');}
+    assert.deepEqual(accessContent(admitted),accessContent(live),'Native maintenance changes permissions, network, credentials or capacity');
+    bindings.push({kind:live.kind,metadata:{namespace:live.metadata.namespace,name:live.metadata.name},binding:nativeMaintenancePolicyBinding(live)});
+  }
+  return bindings;
+}
+export function assertNativeMaintenancePolicyUnchanged(comparison,{client=kubectl}={}){
+  if(!comparison?.nativeMaintenancePolicyBinding)return;
+  assert.deepEqual(nativeMaintenancePolicyBinding(readRuntimePolicy(client)),comparison.nativeMaintenancePolicyBinding,'Native maintenance policy changed before a write');
+  const identity=JSON.parse(client(['get','configmap','opensphere-installation-identity','-n','opensphere-console','-o','json'],{capture:true}));
+  const cluster=JSON.parse(client(['get','namespace','kube-system','-o','json'],{capture:true}));
+  assert.equal(identity.immutable,true);assert.equal(identity.data?.installationId,comparison.nativeMaintenanceInstallationId);
+  assert.equal(identity.data?.clusterUid,comparison.nativeMaintenanceClusterUid);assert.equal(cluster.metadata?.uid,comparison.nativeMaintenanceClusterUid);
+  assert.deepEqual(nativeMaintenancePolicyBinding(identity),comparison.nativeMaintenanceIdentityBinding,'Native maintenance identity changed before a write');
+  for(const entry of comparison.nativeMaintenanceAccessBindings)assert.deepEqual(nativeMaintenancePolicyBinding(readAccess(entry,client)),entry.binding,'Native maintenance permission object changed before a write');
+}
 
-export function requiresOwnerPreservation(targetLock, previousLock) {
+export function requiresOwnerPreservation(targetLock, previousLock, {nativeRecovery = false} = {}) {
+  if (targetLock.components?.r2d2OpenClawGateway && (isLocalEdgeLock(targetLock) || isLocalEdgeLock(previousLock))) {
+    assert.ok(isLocalEdgeLock(targetLock) && isLocalEdgeLock(previousLock), 'Native local adoption cannot change the installed trust class');
+    assert.ok(!targetLock.releaseBom && !previousLock.releaseBom, 'Local native adoption cannot claim a signed BOM');
+    // Preserve observation-only and non-engine updates, but never trust an
+    // unvalidated changedComponents=[] claim or use them to enter recovery.
+    if (!nativeRecovery && targetLock.releaseDigest === previousLock.releaseDigest) {
+      validateReleaseTransition(previousLock, targetLock);
+      return false;
+    }
+    if (!nativeRecovery && previousLock.components?.r2d2OpenClawGateway && targetLock.releaseScope === 'component'
+      && Array.isArray(targetLock.changedComponents) && targetLock.changedComponents.length === 0
+      && ((Array.isArray(targetLock.changedAuxiliaryArtifacts) && targetLock.changedAuxiliaryArtifacts.length > 0) || targetLock.changedKnowledge === true)) {
+      validateReleaseTransition(previousLock, targetLock);
+      return false;
+    }
+    assert.notEqual(targetLock.releaseScope, 'component', 'Native local adoption currently requires an integrated target');
+    return true;
+  }
   const profile = targetLock.releaseBom?.readinessProfile;
   if (targetLock.releaseBom && artifactVersions.parseArtifactVersion(targetLock.releaseBom.releaseTag)?.format === 'build'
     && targetLock.releaseDigest !== previousLock.releaseDigest) {
@@ -21,16 +96,29 @@ export function requiresOwnerPreservation(targetLock, previousLock) {
 const key = w => `${w.kind}/${w.metadata.namespace}/${w.metadata.name}`;
 const stable = v => Array.isArray(v) ? v.map(stable) : v && typeof v === 'object'
   ? Object.fromEntries(Object.keys(v).sort().map(k => [k, stable(v[k])])) : v;
-function project(workload, repositories, fallback) {
+export function projectOwnerObservation(workload, repositories, fallback, nativeReferenceLock) {
   const spec = structuredClone(workload.spec);
   delete spec.replicas;
   // Init-container configuration and images remain unchanged in this minimal
   // adoption. They cannot silently substitute an unverified executable.
   for (const c of spec.template?.spec?.containers ?? []) delete c.image;
+  if(nativeReferenceLock?.components?.r2d2OpenClawGateway&&key(workload)==='Deployment/opensphere-console/opensphere-console-osaa-gateway'){
+    const gateways=(spec.template?.spec?.containers??[]).filter(c=>c.name==='gateway');
+    assert.equal(gateways.length,1,'Native image reference requires its exact control-plane container');
+    for(const[name,component]of[['R2D2_NATIVE_GATEWAY_IMAGE','r2d2OpenClawGateway'],['R2D2_NATIVE_BRIDGE_IMAGE','osaaGateway']]){
+      const entries=(gateways[0].env??[]).filter(e=>e.name===name);
+      assert.equal(entries.length,1,'Native release image reference is missing or duplicated');
+      assert.equal(entries[0].value,nativeReferenceLock.components[component].image,'Native image environment differs from the verified release');
+      assert.deepEqual(Object.keys(entries[0]).sort(),['name','value'],'Native image reference is not a public literal');
+      // These are release image references, like container.image above. No
+      // other environment, policy or configuration field is normalized.
+      entries[0].value='release-component://'+component;
+    }
+  }
   const hash = 'sha256:' + createHash('sha256').update(JSON.stringify(stable(spec))).digest('hex');
   const containers = workload.spec.template.spec.containers.map(c => ({
     name: c.name, image: c.image,
-    features: Object.fromEntries((c.env ?? []).filter(e => e.name === 'R2D2_HERMES_ENABLED')
+    features: Object.fromEntries((c.env ?? []).filter(e => ['R2D2_HERMES_ENABLED','R2D2_BACKEND'].includes(e.name))
       .map(e => [e.name, e.value])),
   }));
   const owner = [...new Set(containers.map(c => repositories[c.image?.split('@')[0]]).filter(Boolean))].sort().join('+');
@@ -40,32 +128,95 @@ function project(workload, repositories, fallback) {
     configurationDigest: hash, containers };
 }
 
-export function readOwnerObservation(previousLock, { client = kubectl, now = Date.now() } = {}) {
+// The dedicated per-user runtimes are dynamically owned by C_AI, not part of
+// the static Console release inventory. Exclude only the exact owned shape;
+// an unexpected workload remains in the comparison and fails closed.
+export function isPersonalNativeOwnerWorkload(workload,installationId){
+ const m=workload.metadata??{},labels=m.labels??{},annotations=m.annotations??{},p=workload.spec?.template?.spec??{};
+ const id=labels['opensphere.io/r2d2-runtime'],owner=annotations['opensphere.io/r2d2-owner-digest'];
+ const installation=typeof installationId==='string'?createHash('sha256').update(installationId).digest('hex'):null;
+ return workload.kind==='Deployment'&&m.namespace==='opensphere-r2d2'&&/^[a-f0-9]{40}$/.test(id??'')&&m.name==='r2d2-'+id
+  &&labels['app.kubernetes.io/name']==='r2d2-openclaw-runtime'&&labels['app.kubernetes.io/managed-by']==='opensphere-r2d2'
+  &&/^[a-f0-9]{64}$/.test(owner??'')&&owner.startsWith(id)&&installation!==null&&annotations['opensphere.io/r2d2-installation-digest']===installation
+  &&workload.spec?.template?.metadata?.annotations?.['opensphere.io/r2d2-owner-digest']===owner
+  &&workload.spec?.template?.metadata?.annotations?.['opensphere.io/r2d2-installation-digest']===installation
+  &&p.serviceAccountName==='r2d2-personal-runtime'&&p.automountServiceAccountToken===false
+  &&JSON.stringify((p.containers??[]).map(c=>c.name))===JSON.stringify(['gateway','bridge'])
+  &&/^ghcr\.io\/opensphere-platform\/opensphere-console-r2d2-openclaw@sha256:[a-f0-9]{64}$/.test(p.containers[0].image??'')
+  &&/^ghcr\.io\/opensphere-platform\/opensphere-console-osaa-gateway@sha256:[a-f0-9]{64}$/.test(p.containers[1].image??'');
+}
+
+export function readOwnerObservation(previousLock, { client = kubectl, now = Date.now(),normalizeNativeImages=false,recoveryCheckpoint } = {}) {
   const record = JSON.parse(client(['get', 'configmap', 'opensphere-installation-lock', '-n', 'opensphere-console', '-o', 'json'], { capture: true }));
   const current = JSON.parse(record.data?.['release.json'] ?? 'null');
+  const config=JSON.parse(record.data?.['config.json']??'null');
   assert.equal(current?.releaseDigest, previousLock.releaseDigest, 'Installation changed before Owner comparison');
   const repositories = Object.fromEntries(Object.entries({ ...previousLock.components, ...previousLock.auxiliaryArtifacts })
     .map(([name, component]) => [`ghcr.io/opensphere-platform/${component.repository}`, name]));
+  if(recoveryCheckpoint) repositories['ghcr.io/opensphere-platform/opensphere-console-r2d2-hermes-worker']='r2d2HermesWorker';
   const raw = JSON.parse(client(['get', 'deployment,statefulset,daemonset', '-A', '-o', 'json'], { capture: true }));
   assert.ok(Array.isArray(raw.items), 'Owner discovery returned no Kubernetes list');
-  const active = raw.items.filter(w => (w.spec?.template?.spec?.containers ?? []).some(c => repositories[c.image?.split('@')[0]])
+  const active = raw.items.filter(w => !isPersonalNativeOwnerWorkload(w,config?.installationId)
+    && (w.spec?.template?.spec?.containers ?? []).some(c => repositories[c.image?.split('@')[0]])
     && (w.kind === 'DaemonSet' ? w.status?.desiredNumberScheduled > 0 : (w.spec?.replicas ?? 1) > 0));
-  return { repositories, installed: { observedUtc: new Date(now).toISOString(),
-    releaseDigest: previousLock.releaseDigest, resourceVersion: record.metadata.resourceVersion,
-    workloads: active.map(w => project(w, repositories)) } };
+  const result={ repositories, installed: { observedUtc: new Date(now).toISOString(),
+    releaseDigest: previousLock.releaseDigest, recordUid: record.metadata.uid, resourceVersion: record.metadata.resourceVersion,
+    workloads: active.map(w => projectOwnerObservation(w, repositories,undefined,normalizeNativeImages?previousLock:undefined)) } };
+  Object.defineProperty(result,RAW_OWNERS,{value:new Map(active.map(w=>[key(w),w]))});
+  Object.defineProperty(result,RAW_RECORD,{value:record});
+  return result;
 }
 
 export function comparePreparedOwners(previousLock, targetLock, prepared, {
-  verifiedBom, client = kubectl, now = Date.now()
+  verifiedBom, verifiedLocalLocks, client = kubectl, now = Date.now(), nativeRecovery = false
 } = {}) {
+  const local = isLocalEdgeLock(targetLock);
   const pointer = targetLock.releaseBom;
-  assert.ok(pointer?.readinessProfile, 'Signed readiness predicate is missing from installation lock');
-  validateReadinessProfile(pointer.readinessProfile, targetLock.sourceRevision);
-  assert.ok(verifiedBom?.bom, 'Verified signed BOM is required before Owner comparison');
-  assert.equal(verifiedBom.digest, pointer.digest, 'Verified BOM and installation lock differ');
-  assert.equal(calculateReleaseBomDigest(verifiedBom.bom), pointer.digest, 'Verified BOM bytes changed');
-  assert.deepEqual(verifiedBom.bom.readinessProfile, pointer.readinessProfile, 'Signed readiness predicate changed');
-  const observed = readOwnerObservation(previousLock, { client, now });
+  if (local) {
+    assert.ok(requiresOwnerPreservation(targetLock, previousLock, {nativeRecovery}), 'Local native comparison requires its supported transition');
+    for (const [name, lock] of [['previous',previousLock],['target',targetLock]]) {
+      validateLock(lock, { allowLegacyComponentSet: name === 'previous', allowInstalledAgentIdentityCutover: name === 'previous' });
+      const {localVerifiedAt, ...verified} = verifiedLocalLocks?.[name] ?? {};
+      const {localVerifiedAt: recordedVerification, ...expected} = lock;
+      const at = Date.parse(localVerifiedAt);
+      assert.ok(Number.isFinite(at) && at <= now, 'Actual local image verification is missing or invalid');
+      assert.deepEqual(verified, expected, 'Verified local image lock changed');
+    }
+  } else {
+    assert.ok(pointer?.readinessProfile, 'Signed readiness predicate is missing from installation lock');
+    validateReadinessProfile(pointer.readinessProfile, targetLock.sourceRevision);
+    assert.ok(verifiedBom?.bom, 'Verified signed BOM is required before Owner comparison');
+    assert.equal(verifiedBom.digest, pointer.digest, 'Verified BOM and installation lock differ');
+    assert.equal(calculateReleaseBomDigest(verifiedBom.bom), pointer.digest, 'Verified BOM bytes changed');
+    assert.deepEqual(verifiedBom.bom.readinessProfile, pointer.readinessProfile, 'Signed readiness predicate changed');
+  }
+  const normalizeNativeImages = local ? false : pointer.readinessProfile.name!=='native-r2d2-cutover';
+  const recoveryRequested = nativeRecovery && (local || pointer.readinessProfile.name==='native-r2d2-cutover');
+  const observed = readOwnerObservation(previousLock, { client, now,normalizeNativeImages,recoveryCheckpoint:recoveryRequested });
+  const transition=JSON.parse(observed[RAW_RECORD].data?.['state.json']??'null')?.transition;
+  const maintenance=local&&!!previousLock.components?.r2d2OpenClawGateway&&(!recoveryRequested||!!transition?.nativeMaintenanceCheckpoint);
+  if(maintenance&&recoveryRequested)assert.equal(transition.nativeCutoverCheckpoint,undefined,'Native maintenance cannot reuse a Hermes cutover checkpoint');
+  const runtimePolicy=maintenance?readRuntimePolicy(client):undefined;
+  let localIdentity;
+  const assertLocalIdentity = () => {
+    const config = JSON.parse(observed[RAW_RECORD].data['config.json']);
+    const plan = prepared.foundation?.nativeRuntime;
+    assert.ok(plan, 'Local native adoption requires reviewed runtime preparation');
+    assert.equal(config.authEnvironment, 'production', 'Local native adoption preserves production authentication');
+    assert.equal(config.channel, 'edge', 'Local native adoption preserves the installed edge channel');
+    assert.equal(config.installationId, plan.installationId, 'Local native installation identity changed');
+    const identity = JSON.parse(client(['get','configmap','opensphere-installation-identity','-n','opensphere-console','-o','json'],{capture:true}));
+    const cluster = JSON.parse(client(['get','namespace','kube-system','-o','json'],{capture:true}));
+    assert.equal(cluster.metadata?.uid, plan.clusterUid, 'Local native cluster identity changed');
+    assert.equal(identity.immutable, true, 'Local native installation identity must be immutable');
+    assert.equal(identity.data?.installationId, plan.installationId);
+    assert.equal(identity.data?.clusterUid, plan.clusterUid);
+    assert.deepEqual(plan.identityBinding, {uid:identity.metadata.uid,resourceVersion:identity.metadata.resourceVersion,
+      contentSha256:'sha256:'+createHash('sha256').update(JSON.stringify(identity)).digest('hex')}, 'Local native identity binding changed');
+    if (localIdentity) assert.deepEqual(identity, localIdentity, 'Local native identity changed during comparison');
+    localIdentity = identity;
+  };
+  if (local) assertLocalIdentity();
   const documents = prepared.all.flatMap(item => {
     assert.equal(typeof item.yaml, 'string', 'Rendered artifact bytes are missing');
     return parseAllDocuments(item.yaml).map(doc => {
@@ -73,6 +224,7 @@ export function comparePreparedOwners(previousLock, targetLock, prepared, {
       return doc.toJS();
     }).filter(Boolean);
   });
+  const maintenanceAccess=maintenance?compareMaintenanceAccess(documents,prepared.foundation.nativeRuntime,client):undefined;
   const rendered = new Map();
   for (const document of documents.filter(d => ['Deployment', 'StatefulSet', 'DaemonSet'].includes(d.kind))) {
     assert.ok(!rendered.has(key(document)), 'Rendered plan declares a workload twice');
@@ -98,20 +250,42 @@ export function comparePreparedOwners(previousLock, targetLock, prepared, {
   const plannedRaw = dryRun.kind === 'List' ? dryRun.items : [dryRun];
   assert.ok(Array.isArray(plannedRaw) && plannedRaw.length === inputs.length, 'Server dry-run Owner set is incomplete');
   const beforeByKey = new Map(observed.installed.workloads.map(w => [`${w.kind}/${w.namespace}/${w.name}`, w]));
+  const nativeInput={previousLock,targetLock,plan:prepared.foundation?.nativeRuntime,record:observed[RAW_RECORD],
+    before:observed[RAW_OWNERS].get('Deployment/opensphere-console/opensphere-console-osaa-gateway'),
+    after:plannedRaw.find(w=>key(w)==='Deployment/opensphere-console/opensphere-console-osaa-gateway')};
+  const checkpoint=!maintenance&&(local || pointer.readinessProfile.name==='native-r2d2-cutover')&&!recoveryRequested?captureNativeCutover(nativeInput):undefined;
+  const recoveryProof=!maintenance&&recoveryRequested?buildNativeRecoveryProof({...nativeInput,
+    installationIdentity:JSON.parse(client(['get','configmap','opensphere-installation-identity','-n','opensphere-console','-o','json'],{capture:true}))}):undefined;
+  const maintenanceInput={...nativeInput,runtimePolicy};
+  const maintenanceCheckpoint=maintenance&&!recoveryRequested?captureNativeMaintenance(maintenanceInput):undefined;
+  const maintenanceRecovery=maintenance&&recoveryRequested?buildNativeMaintenanceRecoveryProof({...maintenanceInput,installationIdentity:localIdentity}):undefined;
+  const nativeCutover=checkpoint?.proof;
   const planned = plannedRaw.map(w => {
     const before = beforeByKey.get(key(w));
     assert.ok(before, 'Server dry-run returned an unrequested Owner');
-    const after = project(w, observed.repositories, before);
+    const after = projectOwnerObservation(w, observed.repositories, before,normalizeNativeImages?targetLock:undefined);
     // Image digests must belong to the already verified target lock. Matching
     // package names alone is not enough to substitute an unverified image.
     for (const c of after.containers) assert.ok(Object.values({ ...targetLock.components, ...targetLock.auxiliaryArtifacts })
       .some(a => a.image === c.image), 'Rendered Owner contains an image outside the verified target lock');
     return { ...after, baseUid: after.uid, baseResourceVersion: after.resourceVersion };
   });
-  const fresh = readOwnerObservation(previousLock, { client, now });
+  const fresh = readOwnerObservation(previousLock, { client, now,normalizeNativeImages,recoveryCheckpoint:recoveryRequested });
   assert.deepEqual(fresh.installed, observed.installed, 'Installed Owner or lock changed during render comparison');
-  return verifyOwnerPreservation({ profile: pointer.readinessProfile, sourceRevision: targetLock.sourceRevision,
+  if (local) assertLocalIdentity();
+  if(maintenance)assert.deepEqual(readRuntimePolicy(client),runtimePolicy,'Native maintenance runtime policy changed during comparison');
+  if(maintenance)for(const entry of maintenanceAccess)assert.deepEqual(nativeMaintenancePolicyBinding(readAccess(entry,client)),entry.binding,'Native maintenance permission object changed during comparison');
+  const compare = local ? verifyLocalNativeOwnerPreservation : verifyOwnerPreservation;
+  const result=compare({ ...(local ? {} : {profile: pointer.readinessProfile}), sourceRevision: targetLock.sourceRevision,
     installed: observed.installed, rendered: { sourceRevision: targetLock.sourceRevision,
       baseReleaseDigest: observed.installed.releaseDigest, baseResourceVersion: observed.installed.resourceVersion,
-      deactivations: [], workloads: planned }, now });
+      deactivations: [], workloads: planned }, now,nativeCutover,nativeRecovery:recoveryProof,
+    nativeMaintenance:maintenanceCheckpoint?.proof,nativeMaintenanceRecovery:maintenanceRecovery });
+  return {...result,...(checkpoint?{nativeCutoverCheckpoint:checkpoint}:{}),...(recoveryProof?{nativeCutoverCheckpoint:transition.nativeCutoverCheckpoint,nativeRecoveryState:recoveryProof.state}:{}),
+    ...(maintenance?{nativeMaintenancePolicyBinding:nativeMaintenancePolicyBinding(runtimePolicy),
+      nativeMaintenanceIdentityBinding:prepared.foundation.nativeRuntime.identityBinding,
+      nativeMaintenanceAccessBindings:maintenanceAccess,
+      nativeMaintenanceInstallationId:prepared.foundation.nativeRuntime.installationId,nativeMaintenanceClusterUid:prepared.foundation.nativeRuntime.clusterUid,
+      nativeMaintenanceCheckpoint:maintenanceCheckpoint??transition.nativeMaintenanceCheckpoint,
+      ...(maintenanceRecovery?{nativeMaintenanceRecoveryState:maintenanceRecovery.state}:{})}:{})};
 }

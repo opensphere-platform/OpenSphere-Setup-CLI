@@ -10,7 +10,7 @@ test('OAuth cannot be handed to a Console without the enabled lifecycle contract
 test('Setup rejects handing broad or unverified host credentials to runtime',()=>{
  const c=credentials();c.lifecycle.scopes.push('repo');assert.throws(()=>ensureRegistryPullSecrets({},c,{lifecycleEnabled:true}),/excessive registry credential/);
 });
-test('Setup waits for matching runtime generation and all six observed namespaces',async()=>{
+test('Setup waits for matching runtime generation and all eight observed namespaces',async()=>{
  let now=Date.now(),reads=0;const state=initialRegistryState(credentials(),[]);const ready={...state,phase:'Ready',observation:{generation:state.generation,namespaces:[...REGISTRY_NAMESPACES],verifiedAt:new Date(now).toISOString()}};
  await verifyRegistryHandoff(state.generation,{now:()=>now,sleep:async(ms)=>{now+=ms;},read:()=>registryStateSecret(++reads===1?state:ready)});assert.equal(reads,2);
 });
@@ -44,4 +44,13 @@ test('upgrade preflight requires current owner and all runtime pull Secret gener
  assert.throws(()=>assertManagedRegistryReady(state,pulls,{now}),/runtime GHCR connection is not ready/);
  first.metadata.annotations[GENERATION_ANNOTATION]=state.generation;delete first.data['.dockerconfigjson'];
  assert.throws(()=>assertManagedRegistryReady(state,pulls,{now}),/runtime GHCR connection is not ready/);
+});
+
+test('retired native namespace bootstrap accepts exactly seven prior generations only at the explicit transition entry',()=>{
+ const now=Date.now(),state=initialRegistryState(credentials(),[]),names=REGISTRY_NAMESPACES.filter(n=>n!=='opensphere-r2d2');
+ state.phase='Ready';state.observation={generation:state.generation,namespaces:names,verifiedAt:new Date(now).toISOString()};
+ const pulls=new Map(names.map(n=>[n,{metadata:{annotations:{[GENERATION_ANNOTATION]:state.generation}},type:'kubernetes.io/dockerconfigjson',data:pullSecretData(state.credentials,state.generation)}]));
+ assert.throws(()=>assertManagedRegistryReady(state,pulls,{now}),/runtime GHCR connection is not ready/);
+ assert.doesNotThrow(()=>assertManagedRegistryReady(state,pulls,{now,retiredNativeNamespaceBootstrap:true}));
+ for(const changed of [names.slice(1),[...names,'foreign'],[...names,names[0]]])assert.throws(()=>assertManagedRegistryReady({...state,observation:{...state.observation,namespaces:changed}},pulls,{now,retiredNativeNamespaceBootstrap:true}),/runtime GHCR connection is not ready/);
 });
