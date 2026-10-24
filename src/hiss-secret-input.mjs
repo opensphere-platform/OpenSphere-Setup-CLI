@@ -75,19 +75,24 @@ function backupStoreData(input) {
   closed(input, ['accessKeyId', 'secretAccessKey', 'endpoint'], ['caCertificates', 'virtualHostedStyle']);
   const data = { AWS_ACCESS_KEY_ID: str(input.accessKeyId, 'accessKeyId', 256), AWS_SECRET_ACCESS_KEY: str(input.secretAccessKey, 'secretAccessKey', 1024),
     AWS_ENDPOINTS: httpsUrl(input.endpoint, 'endpoint', { allowIp: true }).replace(/\/$/, '') };
-  if (input.caCertificates !== undefined) data.AWS_CERT = pem(input.caCertificates, 'caCertificates');
+  // Longhorn 1.12 rejects an AWS_CERT that ends with a newline (B0 lab 2026-10-24).
+  if (input.caCertificates !== undefined) data.AWS_CERT = pem(input.caCertificates, 'caCertificates').trimEnd();
   if (input.virtualHostedStyle !== undefined) data.VIRTUAL_HOSTED_STYLE = bool(input.virtualHostedStyle, 'virtualHostedStyle');
   return data;
 }
 
 // RKE2's etcd-s3-config-secret keys (one per etcd-s3-* server option; k3s pkg/etcd/s3/config_secret.go, read in the B0 lab).
 function etcdS3Data(input) {
-  closed(input, ['endpoint', 'accessKey', 'secretKey', 'bucket'], ['region', 'folder', 'endpointCa', 'skipSslVerify', 'timeout', 'retention']);
+  closed(input, ['endpoint', 'accessKey', 'secretKey', 'bucket'], ['region', 'folder', 'endpointCa', 'skipSslVerify', 'timeout', 'retention', 'bucketLookupType']);
   const endpoint = str(input.endpoint, 'endpoint', 253);
   if (!/^[a-z0-9.-]+(:[0-9]{1,5})?$/i.test(endpoint) || endpoint.includes('://')) throw fail('INVALID_INPUT', 'endpoint is host[:port] without a scheme, as RKE2 expects');
   const bucket = str(input.bucket, 'bucket', 63);
   if (!S3_BUCKET.test(bucket)) throw fail('INVALID_INPUT', 'bucket is not an S3 bucket name');
-  const data = { 'etcd-s3-endpoint': endpoint, 'etcd-s3-access-key': str(input.accessKey, 'accessKey', 256), 'etcd-s3-secret-key': str(input.secretKey, 'secretKey', 1024), 'etcd-s3-bucket': bucket };
+  // Path-style lookup by default: an in-house S3 (address or plain host) rarely serves bucket subdomains (B0 lab 2026-10-24).
+  const lookup = input.bucketLookupType === undefined ? 'path' : str(input.bucketLookupType, 'bucketLookupType', 8);
+  if (!['auto', 'dns', 'path'].includes(lookup)) throw fail('INVALID_INPUT', 'bucketLookupType is auto, dns or path');
+  const data = { 'etcd-s3-endpoint': endpoint, 'etcd-s3-access-key': str(input.accessKey, 'accessKey', 256), 'etcd-s3-secret-key': str(input.secretKey, 'secretKey', 1024), 'etcd-s3-bucket': bucket,
+    'etcd-s3-bucket-lookup-type': lookup };
   if (input.region !== undefined) { const r = str(input.region, 'region', 32); if (!REGION.test(r)) throw fail('INVALID_INPUT', 'region is not a region name'); data['etcd-s3-region'] = r; }
   if (input.folder !== undefined) { const f = str(input.folder, 'folder', 200); if (!/^[A-Za-z0-9._\/-]+$/.test(f)) throw fail('INVALID_INPUT', 'folder is not an object prefix'); data['etcd-s3-folder'] = f; }
   if (input.endpointCa !== undefined) data['etcd-s3-endpoint-ca'] = pem(input.endpointCa, 'endpointCa');

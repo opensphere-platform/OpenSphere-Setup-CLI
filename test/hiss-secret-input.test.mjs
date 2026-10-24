@@ -45,7 +45,12 @@ test('backup store and etcd S3: the key names Longhorn and RKE2 read',()=>{
  const store=decode(buildHissSecret('backup-store',{accessKeyId:'AK',secretAccessKey:'SK',endpoint:'https://s3.example.com/'},{name:'main',now:NOW}));
  assert.deepEqual(store,{AWS_ACCESS_KEY_ID:'AK',AWS_ENDPOINTS:'https://s3.example.com',AWS_SECRET_ACCESS_KEY:'SK'});
  const etcd=decode(buildHissSecret('etcd-s3',{endpoint:'s3.example.com',accessKey:'AK',secretKey:'SK',bucket:'osp-etcd',region:'kr-1',folder:'rke2/etcd',timeout:'5m'},{now:NOW}));
- assert.deepEqual(Object.keys(etcd).sort(),['etcd-s3-access-key','etcd-s3-bucket','etcd-s3-endpoint','etcd-s3-folder','etcd-s3-region','etcd-s3-secret-key','etcd-s3-timeout']);
+ assert.deepEqual(Object.keys(etcd).sort(),['etcd-s3-access-key','etcd-s3-bucket','etcd-s3-bucket-lookup-type','etcd-s3-endpoint','etcd-s3-folder','etcd-s3-region','etcd-s3-secret-key','etcd-s3-timeout']);
+ assert.equal(etcd['etcd-s3-bucket-lookup-type'],'path');
+ assert.throws(()=>buildHissSecret('etcd-s3',{endpoint:'s3.example.com',accessKey:'a',secretKey:'b',bucket:'osp-etcd',bucketLookupType:'virtual'},{now:NOW}),{code:'INVALID_INPUT'});
+ // Longhorn rejects a CA bundle that ends with a newline.
+ const ca='-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n\n';
+ assert.equal(decode(buildHissSecret('backup-store',{accessKeyId:'AK',secretAccessKey:'SK',endpoint:'https://s3.example.com',caCertificates:ca},{name:'main',now:NOW})).AWS_CERT,'-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----');
  assert.throws(()=>buildHissSecret('etcd-s3',{endpoint:'https://s3.example.com',accessKey:'a',secretKey:'b',bucket:'osp-etcd'},{now:NOW}),/without a scheme/);
  assert.throws(()=>buildHissSecret('backup-store',{accessKeyId:'AK',secretAccessKey:'SK',endpoint:'http://s3.example.com'},{name:'main',now:NOW}),{code:'INVALID_INPUT'});
  // An in-house S3 may be reachable by address only.
