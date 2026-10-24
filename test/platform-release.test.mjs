@@ -75,3 +75,26 @@ test('public platform installation is unauthenticated and checksum verified', ()
   assert.match(documentation, /OPENSPHERE_CONSOLE_SOURCE_TOKEN/);
   assert.match(documentation, /공개 Setup 다운로드는 인증 없이 가능/);
 });
+
+
+test('Linux SEA uses the reviewed security runtime before building and inside the packaged archive', () => {
+  assert.match(workflow, /NODE_RELEASE: 26[.]12[.]1/u);
+  assert.match(workflow, /NODE_LINUX_X64_SHA256: 6170b2d474e1c626f43cff3adc118df9fe3b573258a4fc3d850c8dbc6b079bbd/u);
+  assert.match(workflow, /node-version: '24[.]22[.]1'/u);
+  const steps = workflow.split(/(?=^      - (?:name|uses):)/mu);
+  const verifyIndex = steps.findIndex(step => step.includes('name: Download and verify pinned Linux Node runtime'));
+  const buildIndex = steps.findIndex(step => step.includes('name: Bundle and build native SEA'));
+  assert.ok(verifyIndex >= 0 && buildIndex > verifyIndex, 'the reviewed runtime must be verified before SEA execution');
+  const runtime = steps[verifyIndex];
+  assert.match(runtime, /linux\/amd64 only/u);
+  assert.match(runtime, /https:\/\/nodejs[.]org\/dist\/v\$version\/\$asset/u);
+  assert.match(runtime, /if \(\$actual -cne \$env:NODE_LINUX_X64_SHA256\) \{ throw/u);
+  assert.match(runtime, /\$actualVersion -ne \$version/u);
+  assert.ok(runtime.indexOf('Get-FileHash') < runtime.indexOf('tar -xJf'), 'reject wrong archive before extraction');
+  assert.ok(runtime.indexOf('tar -xJf') < runtime.indexOf('process.versions.node'), 'execute only extracted verified bytes');
+  assert.ok(runtime.indexOf('process.versions.node') < runtime.indexOf('$env:GITHUB_PATH'), 'reject wrong runtime before exposing it to build steps');
+  const smoke = steps.find(step => step.includes('name: Smoke-test packaged runtime'));
+  assert.match(smoke, /runtime\/bin\//u);
+  assert.match(smoke, /\$actualRuntimeVersion -ne \$env:NODE_RELEASE/u);
+  assert.match(smoke, /throw 'Packaged Node runtime differs/u);
+});
