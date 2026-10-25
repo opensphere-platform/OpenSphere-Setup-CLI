@@ -19,6 +19,7 @@ import {bindNativeInstallerAuthEnvironment,renderNativeOwnerPreview,renderFounda
 import {fetchLocalNativeOwnerReferenceSources} from './owner-release-references.mjs';
 import {verifyCapturedShellHistory} from './shell-release-history.mjs';
 import {readOwnerReferenceRecovery} from './owner-reference-checkpoint.mjs';
+import {buildPreparedInventoryArtifacts,preparedInventoryArtifacts} from './prepared-resource-inventory.mjs';
 import {captureControllerSource,controllerSourceData,CONTROLLER_SOURCE_KEY} from './controller-source.mjs';
 import { CLUSTER_SCOPED_MANAGED_CRDS, listManagedClusterResiduals, assertNoManagedClusterResiduals, assertManagedAdmissionParameters } from './installation-residuals.mjs';
 import {purgeBeszelHostState,purgeExternalConsoleRbac} from './uninstall-residuals.mjs';
@@ -1349,7 +1350,7 @@ async function materializeFoundationInstallers(
     hissScope: prepareHiss ? hissScope : null,
     migration,
     controllerSource: manifestArtifacts.find(a=>a.controllerSource)?.controllerSource,
-    ...(nativeOwnerPreview?{ownerPreview:[...renderFoundationOwnerPreview(manifestArtifacts.map(({spec,rendered})=>({path:spec.path,yaml:rendered})),artifacts),...nativeOwnerPreview]}:{}),
+    ...(nativeOwnerPreview?{nativeInstallerRelease:nativeOwnerPreview,ownerPreview:[...renderFoundationOwnerPreview(manifestArtifacts.map(({spec,rendered})=>({path:spec.path,yaml:rendered})),artifacts),...nativeOwnerPreview]}:{}),
     release: manifestArtifacts.map(({ spec, rendered }) => ({
       path: spec.path,
       yaml: rendered
@@ -2706,13 +2707,14 @@ export async function prepareRelease(
     inputPath:options.r2d2RuntimePolicyPath,input:options.r2d2RuntimePolicy,
     rendererPath:join(root,NATIVE_RUNTIME_RENDERER),manifest:foundation.migration?.manifest});
   const all=[...foundation.release,...base];
+  const inventoryArtifacts=buildPreparedInventoryArtifacts(all,foundation,{nativeRequired:needsNativeRuntimePreparation(lock),rollbackEvidenceOnly:!!options.rollbackEvidenceOnly});
   const historicalShell=options.ownerReferenceBaseline?await verifyCapturedShellHistory(options.ownerReferenceBaseline,{
     verificationOptions:{registryCredentials:options.registryCredentials,requiredPlatforms:options.requiredPlatforms}
   }):undefined;
   const ownerReferenceSources=options.ownerReferenceBaseline&&isLocalEdgeLock(lock)&&isLocalEdgeLock(options.ownerReferenceBaseline)&&needsNativeRuntimePreparation(lock)
     ?await fetchLocalNativeOwnerReferenceSources(options.ownerReferenceBaseline,lock,(selected,path,{sourceRevision})=>fetchReleaseArtifact(selected,path,{sourceRevision,sourceArtifactCredential:options.sourceArtifactCredential}),{historicalShell})
     :undefined;
-  return {foundation,base,all,...(foundation.ownerPreview?{ownerPreview:[...foundation.ownerPreview,...base]}:{}),...(ownerReferenceSources?{ownerReferenceSources}:{})};
+  return {foundation,base,all,inventoryArtifacts,...(foundation.ownerPreview?{ownerPreview:[...foundation.ownerPreview,...base]}:{}),...(ownerReferenceSources?{ownerReferenceSources}:{})};
 }
 
 export function componentMigrationSourceRevision(lock, changedComponents, includeMigrations = true) {
@@ -2820,7 +2822,10 @@ export async function prepareComponentRelease(
     foundation.nativeRuntime=prepareNativeRuntimePrerequisites(lock,{inputPath:r2d2RuntimePolicyPath,input:r2d2RuntimePolicy,
       rendererPath:join(root,NATIVE_RUNTIME_RENDERER),manifest:nativeManifest});
   }
-  return { foundation, base, all: [...foundationRelease, ...base] };
+  const all=[...foundationRelease,...base];
+  const inventoryArtifacts=foundation.nativeRuntime
+    ?buildPreparedInventoryArtifacts(all,foundation,{componentScoped:true,nativeRequired:true}):all;
+  return { foundation, base, all, inventoryArtifacts };
 }
 
 export async function preflightReleaseArtifacts(lock, {
@@ -3156,7 +3161,7 @@ export async function bootstrap(lock, {
       onProgress: message => progress?.item('외부 접속',message)
     });
     const controllerDeployment=prepared.foundation.controllerSource ? readControllerDeployment() : undefined;
-    recordReleaseInventory(lock, releaseResourceInventory(prepared.all));
+    recordReleaseInventory(lock, releaseResourceInventory(preparedInventoryArtifacts(prepared)));
     recordInstallationState(
       lock,
       cluster.storageClass,
@@ -3452,6 +3457,7 @@ export async function upgrade(
           }
         )
       ]);
+    const targetInventoryArtifacts=preparedInventoryArtifacts(target);
     let ownerComparison;
     if (profiledAdoption) {
       ownerComparison=comparePreparedOwners(previousLock, targetLock, target, {
@@ -3491,16 +3497,16 @@ export async function upgrade(
     }
     // A recovery never goes back, so it prunes only what the record says the installation owns.
     const previousInventory = recordedInventory ?? recoveredInventory?.inventory
-      ?? (recovery||legacyNativeCutover||nativeMaintenanceUpdate ? [] : operations.releaseResourceInventory(rollback.all));
+      ?? (recovery||legacyNativeCutover||nativeMaintenanceUpdate ? [] : operations.releaseResourceInventory(preparedInventoryArtifacts(rollback)));
     const previousComponentInventory = componentTransition && rollback.all.length > 0
-      ? operations.releaseResourceInventory(rollback.all)
+      ? operations.releaseResourceInventory(preparedInventoryArtifacts(rollback))
       : [];
     const targetComponentInventory = componentTransition
-      ? operations.releaseResourceInventory(target.all)
+      ? operations.releaseResourceInventory(targetInventoryArtifacts)
       : [];
     const targetInventory = componentTransition
       ? replaceComponentInventory(previousInventory, previousComponentInventory, targetComponentInventory)
-      : operations.releaseResourceInventory(target.all);
+      : operations.releaseResourceInventory(targetInventoryArtifacts);
     // Capture before Installing clears the previous Ready verification anchor.
     // Only the fixed Beszel bootstrap Job with unchanged images can reuse it;
     // all live services, credentials, databases and workloads are checked anew.

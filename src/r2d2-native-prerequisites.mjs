@@ -15,6 +15,13 @@ export const NATIVE_RUNTIME_SOURCE_PATHS=Object.freeze([
  'apps/osaa-gateway/openclaw-native-config.cjs',
 ]);
 export const NATIVE_RUNTIME_POLICY='opensphere-r2d2-runtime-policy';
+export const NATIVE_RUNTIME_PREREQUISITE_IDENTITIES=Object.freeze([
+ 'Namespace//opensphere-r2d2','ServiceAccount/opensphere-r2d2/r2d2-personal-runtime',
+ 'Role/opensphere-r2d2/r2d2-personal-runtime-provisioner','RoleBinding/opensphere-r2d2/r2d2-personal-runtime-provisioner',
+ 'NetworkPolicy/opensphere-r2d2/r2d2-default-deny','NetworkPolicy/opensphere-r2d2/r2d2-personal-runtime',
+ 'NetworkPolicy/opensphere-console/r2d2-personal-runtime-to-gateway','ResourceQuota/opensphere-r2d2/r2d2-personal-runtime-capacity',
+ 'ConfigMap/opensphere-console/'+NATIVE_RUNTIME_POLICY,
+]);
 export const NATIVE_JOURNAL='console.r2d2.native_request_journal';
 export const NATIVE_ACTION_INTENT='console.r2d2.native_action_intent';
 export const NATIVE_SESSION_FENCE='console.r2d2.native_session_dispatch_fence';
@@ -70,9 +77,8 @@ export function prepareNativeRuntimePrerequisites(lock,{inputPath,input,renderer
  const request={policy:reviewed.policy,capacity:reviewed.capacity};
  const objects=render?render(request):JSON.parse(run('node',['-e',"const fs=require('node:fs');let t='';process.stdin.on('data',b=>t+=b);process.stdin.on('end',()=>process.stdout.write(JSON.stringify(require(process.argv[1]).renderPersonalRuntimePrerequisites(JSON.parse(t)))));",rendererPath],{capture:true,input:JSON.stringify(request)}));
  if(!Array.isArray(objects)||objects.length!==8)fail('NativeRuntimeRendererInvalid','Pinned runtime renderer returned an unexpected prerequisite inventory');
- const expected=['Namespace/opensphere-r2d2','ServiceAccount/r2d2-personal-runtime','Role/r2d2-personal-runtime-provisioner','RoleBinding/r2d2-personal-runtime-provisioner','NetworkPolicy/r2d2-default-deny','NetworkPolicy/r2d2-personal-runtime','NetworkPolicy/r2d2-personal-runtime-to-gateway','ResourceQuota/r2d2-personal-runtime-capacity'];
  for(const [i,object]of objects.entries()){
-  if(object.kind+'/'+object.metadata?.name!==expected[i]||(object.kind!=='Namespace'&&object.metadata.namespace!==(i===6?'opensphere-console':'opensphere-r2d2')))fail('NativeRuntimeRendererInvalid','Pinned runtime prerequisite scope differs');
+  if(object.kind+'/'+(object.metadata?.namespace??'')+'/'+object.metadata?.name!==NATIVE_RUNTIME_PREREQUISITE_IDENTITIES[i])fail('NativeRuntimeRendererInvalid','Pinned runtime prerequisite scope differs');
   object.metadata.labels={...object.metadata.labels,'app.kubernetes.io/managed-by':OWNER,'opensphere.io/r2d2-prerequisite':'true'};
  }
  objects.push({apiVersion:'v1',kind:'ConfigMap',metadata:{name:NATIVE_RUNTIME_POLICY,namespace:'opensphere-console',labels:{'app.kubernetes.io/managed-by':OWNER,'opensphere.io/r2d2-prerequisite':'true'}},data:{installationId:reviewed.installationId,'policy.json':JSON.stringify(reviewed.policy),'preparation.json':JSON.stringify(reviewed)}});
