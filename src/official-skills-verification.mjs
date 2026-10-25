@@ -2,13 +2,18 @@
 // Review R2 (2026-09-25): whether Skills are required comes from the verified release, not from
 // the answer. The Gateway image declares its Skill manifest digest in the label
 // io.opensphere.official-skills; release resolution records it in the lock
-// (components.osaaGateway.officialSkills). After an installation, update or rollback the Gateway
-// running the locked image must report on /readyz that same manifest with every Skill loaded.
+// (components.osaaGateway.officialSkills). In the legacy HTTP contract, after an installation,
+// update or rollback the locked Gateway reports that manifest and loaded inventory on /readyz.
 // A release that declares no Skills is recorded as NotShipped only when its Gateway reports none.
 // This is the Skill files' load state only: not Gateway readiness and not R2D2 acceptance.
+// Native releases keep their minimal readiness contract and verify the same file
+// invariant through the separately bound installed-official-skill-loader origin.
 const MAX_BODY = 64 * 1024;
 const DIGEST = /^sha256:[a-f0-9]{64}$/;
 const SKILL_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+// The native consumer uses the same file/inventory validator with a separately
+// identified installed-loader origin. It must never synthesize a legacy service.
+export { report as officialSkillReport };
 
 function report(skills) {
   if (!skills || typeof skills !== 'object' || !Number.isSafeInteger(skills.shipped) || !Number.isSafeInteger(skills.valid)
