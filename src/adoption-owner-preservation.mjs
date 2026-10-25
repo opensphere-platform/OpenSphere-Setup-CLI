@@ -24,7 +24,27 @@ function accessContent(object){
   if(value.metadata.annotations){delete value.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration'];if(!Object.keys(value.metadata.annotations).length)delete value.metadata.annotations;}
   return stable(value);
 }
-function compareMaintenanceAccess(documents,plan,client){
+function maintenanceAccessContent(admitted,live,previousLock,targetLock){
+  const content=accessContent(admitted),current=accessContent(live);
+  if(accessKey(live)!=='ValidatingAdmissionPolicy//opensphere-shell-runtime-template-v1')return content;
+  const before=previousLock.auxiliaryArtifacts?.osShellRuntime?.image,after=targetLock.auxiliaryArtifacts?.osShellRuntime?.image;
+  const pattern=/^ghcr\.io\/opensphere-platform\/opensphere-os-shell-runtime@sha256:[a-f0-9]{64}$/;
+  assert.match(before??'',pattern,'Native maintenance requires the verified previous OS Shell image pin');
+  assert.match(after??'',pattern,'Native maintenance requires the verified target OS Shell image pin');
+  if(before===after)return content;
+  // Only the literal image selected by the already verified release tuple can
+  // change. Keep every CEL condition, message, selector and policy field exact.
+  const oldLiteral="'"+before+"'",newLiteral="'"+after+"'";
+  const rules=current.spec?.validations??[],indices=rules.map((rule,index)=>rule.expression?.includes(oldLiteral)?index:-1).filter(index=>index>=0);
+  assert.equal(indices.length,1,'Native maintenance OS Shell policy must contain one previous image pin');
+  const index=indices[0],expression=rules[index].expression;
+  assert.equal(expression.split(oldLiteral).length,2,'Native maintenance OS Shell image pin must be unique');
+  assert.equal(content.spec?.validations?.[index]?.expression,expression.replace(oldLiteral,newLiteral),
+    'Native maintenance may rotate only the verified OS Shell image literal');
+  content.spec.validations[index].expression=expression;
+  return content;
+}
+function compareMaintenanceAccess(documents,plan,client,previousLock,targetLock){
   for(const object of[...documents,...plan.entries.map(e=>e.object)])assert.ok(object&&typeof object==='object'&&!Array.isArray(object)
     &&typeof object.kind==='string'&&!object.kind.endsWith('List')&&!Object.hasOwn(object,'items'),
     'Native maintenance requires flat reviewed declarations; wrapped permission objects are refused');
@@ -53,7 +73,7 @@ function compareMaintenanceAccess(documents,plan,client){
     let admitted;
     try{admitted=JSON.parse(client([verb,'--dry-run=server','-f','-','-o','json'],{capture:true,input:JSON.stringify(desired)}));}
     catch{throw new Error('Native maintenance permission server dry-run failed; no update writes performed');}
-    assert.deepEqual(accessContent(admitted),accessContent(live),'Native maintenance changes permissions, network, credentials or capacity');
+    assert.deepEqual(maintenanceAccessContent(admitted,live,previousLock,targetLock),accessContent(live),'Native maintenance changes permissions, network, credentials or capacity');
     bindings.push({kind:live.kind,metadata:{namespace:live.metadata.namespace,name:live.metadata.name},binding:nativeMaintenancePolicyBinding(live)});
   }
   return bindings;
@@ -242,7 +262,7 @@ export function comparePreparedOwners(previousLock, targetLock, prepared, {
       return doc.toJS();
     }).filter(Boolean);
   });
-  const maintenanceAccess=maintenance?compareMaintenanceAccess(documents,prepared.foundation.nativeRuntime,client):undefined;
+  const maintenanceAccess=maintenance?compareMaintenanceAccess(documents,prepared.foundation.nativeRuntime,client,previousLock,targetLock):undefined;
   const rendered = new Map();
   for (const document of documents.filter(d => ['Deployment', 'StatefulSet', 'DaemonSet'].includes(d.kind))) {
     assert.ok(!rendered.has(key(document)), 'Rendered plan declares a workload twice');
