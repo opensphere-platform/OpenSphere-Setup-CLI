@@ -1,0 +1,18 @@
+{
+  "schema": "opensphere.native-runtime-source-capture/v1",
+  "sourceRepository": "opensphere-platform/OpenSphere-console",
+  "sourceRevision": "320e5031ad4ab1353daed82337a891dab5125fc4",
+  "scope": "Exact immutable producer bytes for isolated consumer conformance; not operating acceptance",
+  "entries": [
+    {
+      "path": "apps/osaa-gateway/openclaw-runtime-resources.cjs",
+      "bytes": 37714,
+      "sha256": "733d3aa833a3f19d5a266ef77cb1934ccb241dba0b29d5ad9613560e0184e04a"
+    },
+    {
+      "path": "apps/osaa-gateway/openclaw-native-config.cjs",
+      "bytes": 1435,
+      "sha256": "5c9a14a3e64ee810b702d6500084aa1f8237be95e7e9c71083faa65738182209"
+    }
+  ]
+}

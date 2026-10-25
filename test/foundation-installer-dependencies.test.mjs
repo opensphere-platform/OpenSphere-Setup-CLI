@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {fetchFoundationInstallerArtifacts,FOUNDATION_ARTIFACT_PATHS} from '../src/bootstrap.mjs';
-const lock={components:{consoleApi:{},extensionController:{}}};
+const lock={components:{consoleApi:{},extensionController:{},r2d2OpenClawGateway:{}}};
 const script='scripts/Install-ConsoleApiRuntime.ps1';
 const extra=['scripts/Prepare-FoundationPrerequisites.ps1','apps/extension-controller/src/foundation-bootstrap.json'];
 test('earlier Console sources never request future Foundation dependencies',async()=>{

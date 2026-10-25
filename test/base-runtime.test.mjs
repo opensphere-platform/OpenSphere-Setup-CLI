@@ -150,6 +150,7 @@ test('Setup consumes the Console global migration manifest and materialized-rele
 
   assert.deepEqual(FOUNDATION_ARTIFACT_PATHS, [
     'apps/osaa-gateway/openclaw-runtime-resources.cjs',
+    'apps/osaa-gateway/openclaw-native-config.cjs',
     'deploy/installation-profiles/platform-core.json',
     'deploy/installation-profiles/hiss-execution.json',
     'deploy/installation-profiles/hiss-validation.yaml',

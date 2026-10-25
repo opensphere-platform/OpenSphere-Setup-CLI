@@ -7,6 +7,13 @@ import {readClusterUid,INSTALLATION_IDENTITY_CONFIGMAP} from './installation-ide
 import {REGISTRY_PULL_SECRET,secretHasGhcrCredential} from './registry-pull-secret.mjs';
 
 export const NATIVE_RUNTIME_RENDERER='apps/osaa-gateway/openclaw-runtime-resources.cjs';
+// Fixed transitive source closure of the release-selected renderer. Both files
+// are downloaded from the same immutable C_AI Console revision; never resolved
+// from a sibling checkout or an installer host's ambient module search path.
+export const NATIVE_RUNTIME_SOURCE_PATHS=Object.freeze([
+ NATIVE_RUNTIME_RENDERER,
+ 'apps/osaa-gateway/openclaw-native-config.cjs',
+]);
 export const NATIVE_RUNTIME_POLICY='opensphere-r2d2-runtime-policy';
 export const NATIVE_JOURNAL='console.r2d2.native_request_journal';
 export const NATIVE_ACTION_INTENT='console.r2d2.native_action_intent';

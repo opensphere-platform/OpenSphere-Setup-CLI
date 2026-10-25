@@ -14,7 +14,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { kubectl, run } from './process.mjs';
 import { ensureInstallationIdentity } from './installation-identity.mjs';
-import {NATIVE_RUNTIME_RENDERER,needsNativeRuntimePreparation,isLegacyNativeCutover,prepareNativeRuntimePrerequisites,applyNativeRuntimePrerequisites,bootstrapNativeRegistryCredential} from './r2d2-native-prerequisites.mjs';
+import {NATIVE_RUNTIME_RENDERER,NATIVE_RUNTIME_SOURCE_PATHS,needsNativeRuntimePreparation,isLegacyNativeCutover,prepareNativeRuntimePrerequisites,applyNativeRuntimePrerequisites,bootstrapNativeRegistryCredential} from './r2d2-native-prerequisites.mjs';
 import {captureControllerSource,controllerSourceData,CONTROLLER_SOURCE_KEY} from './controller-source.mjs';
 import { CLUSTER_SCOPED_MANAGED_CRDS, listManagedClusterResiduals, assertNoManagedClusterResiduals, assertManagedAdmissionParameters } from './installation-residuals.mjs';
 import {purgeBeszelHostState,purgeExternalConsoleRbac} from './uninstall-residuals.mjs';
@@ -511,7 +511,7 @@ const LEGACY_SUPABASE_MANIFEST = Object.freeze({
 });
 
 export const FOUNDATION_ARTIFACT_PATHS = Object.freeze([
-  NATIVE_RUNTIME_RENDERER,
+  ...NATIVE_RUNTIME_SOURCE_PATHS,
   PLATFORM_CORE_ARTIFACT,
   HISS_EXECUTION_PROFILE.consoleArtifactPath,
   HISS_VALIDATION_ARTIFACT,
@@ -568,7 +568,7 @@ function foundationManifestSpecs(lock) {
 
 function foundationArtifactPaths(lock) {
   return isTargetConsoleRelease(lock)
-    ? FOUNDATION_ARTIFACT_PATHS
+    ? FOUNDATION_ARTIFACT_PATHS.filter(path=>needsNativeRuntimePreparation(lock)||!NATIVE_RUNTIME_SOURCE_PATHS.includes(path))
     : LEGACY_FOUNDATION_ARTIFACT_PATHS;
 }
 
@@ -2785,8 +2785,10 @@ export async function prepareComponentRelease(
   const foundation = { root, release: foundationRelease, migration,controllerSource,
     ...(foundationRuntimeRbac ? { foundationRuntimeRbac } : {}) };
   if(needsNativeRuntimePreparation(lock,changedComponents)&&!rollbackEvidenceOnly){
-    const renderer=await fetchReleaseArtifact(lock,NATIVE_RUNTIME_RENDERER,{sourceRevision:lock.components.osaaGateway.sourceRevision,sourceArtifactCredential});
-    await writeReleaseArtifact(root,NATIVE_RUNTIME_RENDERER,renderer);
+    for(const path of NATIVE_RUNTIME_SOURCE_PATHS){
+      const contents=await fetchReleaseArtifact(lock,path,{sourceRevision:lock.components.osaaGateway.sourceRevision,sourceArtifactCredential});
+      await writeReleaseArtifact(root,path,contents);
+    }
     // An image-only native update still proves the registered journal from
     // the release source; it does not infer it from a running Pod.
     const nativeManifest=migration?.manifest??(await readVerifiedMigrationManifest(lock,lock.components.osaaGateway.sourceRevision,undefined,SUPABASE_MIGRATION_MANIFEST,{sourceArtifactCredential})).manifest;

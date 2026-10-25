@@ -132,3 +132,5 @@ Setup `0.5.0-edge.44` 후보는 검증된 Console release lock의 소스에서 �
 검증 YAML도 정확한 두 캡처만 허용한다. 현재 `286b837d…342d4`의 기존 server-side apply 경로는 유지한다. 이전 `f079f22c…9957d`는 **기존 자원 관측·보존 전용**이다. 고정 자원 7개의 UID, 삭제 상태, namespace의 authority/PSA, ServiceAccount, ResourceQuota, RBAC를 두 번 읽어 확인한다. Role은 이전 3개 규칙 또는 이미 승인된 현재 4개 규칙만 허용하며, 임의의 권한 상위집합은 거부한다. 두 관측 사이의 UID나 보안 설정 변경도 거부한다. 결과는 요청 캡처와 실제 관측한 Role 캡처를 구분하고 `applied: false`로 보고한다. 이전 YAML을 적용하여 현재 Role의 monitoring 규칙을 제거하지 않는다.
 
 이전 검증 캡처에서 고정 자원 7개가 준비되지 않았다면 명시적으로 중단한다. 별도로 승인된 HISS 준비 경로를 먼저 사용해야 하며, 이 호환 처리가 새 권한을 암묵적으로 부여하지 않는다. 따라서 기존 설치 업데이트 호환을 일반적인 과거 Console의 클린 설치 완료 증거로 취급하지 않는다. 알 수 없는 캡처, 변경된 바이트, 누락·충돌 자원은 허용하지 않는다.
+
+Native R2D2 준비는 선택한 불변 Console 소스의 `openclaw-runtime-resources.cjs`와 그 유일한 상대 의존성 `openclaw-native-config.cjs`를 함께 다운로드한다. 전체 설치와 구성요소 업데이트가 같은 고정 파일 목록을 사용하며, 구성요소 업데이트에서는 두 파일 모두 C_AI의 정확한 source revision을 따른다. native 구성요소가 없는 과거 release에는 이 파일들을 요구하지 않는다. 설치 호스트의 다른 checkout이나 `node_modules`에서 누락된 helper를 가져오는 대체 경로는 없다. 이 준비물 다운로드는 Console 이미지나 R2D2 실행 권한을 변경하지 않는다.
