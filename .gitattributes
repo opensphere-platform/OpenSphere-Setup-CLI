@@ -2,5 +2,6 @@
 test/fixtures/hiss-execution-profile.v1.proposed.json -text
 test/fixtures/hiss-execution-profile.v1.initial-96.json -text
 test/fixtures/hiss-validation.initial.yaml -text
+test/fixtures/native-runtime-source-C3/** -text
 # Provider fixtures are exact upstream bytes checked against a SHA-256 manifest.
 test/fixtures/console-contract-v66/** -text
