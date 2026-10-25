@@ -1,0 +1,106 @@
+# OpenSphere Dialogue State Tracker (OSDST) — CBSS Core Service.
+# It owns conversation persistence, turn leases and the Dialogue State transition/projection writer.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opensphere-osdst
+  namespace: opensphere-console
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensphere-osdst
+  namespace: opensphere-console
+  labels:
+    app: opensphere-osdst
+    app.kubernetes.io/name: opensphere-osdst
+    app.kubernetes.io/component: cbss-core-service
+    app.kubernetes.io/part-of: opensphere-console
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector: { matchLabels: { app: opensphere-osdst } }
+  template:
+    metadata:
+      labels:
+        app: opensphere-osdst
+        app.kubernetes.io/name: opensphere-osdst
+        app.kubernetes.io/component: cbss-core-service
+        app.kubernetes.io/part-of: opensphere-console
+      annotations:
+        opensphere.io/osdst-mode: mutation-enforce
+    spec:
+      serviceAccountName: opensphere-osdst
+      imagePullSecrets: [{ name: opensphere-ghcr-pull }]
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector: { matchLabels: { app: opensphere-osdst } }
+      securityContext: { runAsNonRoot: true, runAsUser: 1000, runAsGroup: 1000, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: osdst
+          image: __OPENSPHERE_OSDST_IMAGE__
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: CONSOLE_IDENTITY_URL, value: "http://opensphere-console-api.opensphere-console.svc.cluster.local:8080" }
+            - { name: CONSOLE_ADMIN_GROUP, value: console-admins }
+            - { name: OSDST_PG_HOST, value: opensphere-supabase-postgres.opensphere-console-data.svc.cluster.local }
+            - { name: OSDST_PG_PORT, value: "5432" }
+            - { name: OSDST_PG_DB, value: postgres }
+            - name: OSDST_PG_USER
+              valueFrom: { secretKeyRef: { name: opensphere-osdst-db, key: username } }
+            - name: OSDST_PG_PASSWORD
+              valueFrom: { secretKeyRef: { name: opensphere-osdst-db, key: password } }
+            - name: OSDST_MAINTENANCE_PG_USER
+              valueFrom: { secretKeyRef: { name: opensphere-osdst-maintenance-db, key: username } }
+            - name: OSDST_MAINTENANCE_PG_PASSWORD
+              valueFrom: { secretKeyRef: { name: opensphere-osdst-maintenance-db, key: password } }
+            - name: OSDST_MODE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.annotations['opensphere.io/osdst-mode']
+          ports: [{ name: http, containerPort: 8080 }]
+          startupProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 3, failureThreshold: 40 }
+          readinessProbe: { httpGet: { path: /readyz, port: http }, periodSeconds: 5, timeoutSeconds: 5, failureThreshold: 3 }
+          livenessProbe: { httpGet: { path: /healthz, port: http }, periodSeconds: 10, failureThreshold: 6 }
+          resources:
+            requests: { cpu: 20m, memory: 48Mi }
+            limits: { cpu: 300m, memory: 192Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensphere-osdst
+  namespace: opensphere-console
+  labels: { app: opensphere-osdst }
+spec:
+  selector: { app: opensphere-osdst }
+  ports: [{ name: http, port: 8080, targetPort: http }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: { name: opensphere-osdst, namespace: opensphere-console }
+spec: { minAvailable: 1, selector: { matchLabels: { app: opensphere-osdst } } }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: opensphere-osdst-ingress, namespace: opensphere-console }
+spec:
+  podSelector: { matchLabels: { app: opensphere-osdst } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [opensphere-console-osaa-gateway]
+      ports: [{ protocol: TCP, port: 8080 }]

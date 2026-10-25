@@ -134,3 +134,11 @@ Setup `0.5.0-edge.44` 후보는 검증된 Console release lock의 소스에서 �
 이전 검증 캡처에서 고정 자원 7개가 준비되지 않았다면 명시적으로 중단한다. 별도로 승인된 HISS 준비 경로를 먼저 사용해야 하며, 이 호환 처리가 새 권한을 암묵적으로 부여하지 않는다. 따라서 기존 설치 업데이트 호환을 일반적인 과거 Console의 클린 설치 완료 증거로 취급하지 않는다. 알 수 없는 캡처, 변경된 바이트, 누락·충돌 자원은 허용하지 않는다.
 
 Native R2D2 준비는 선택한 불변 Console 소스의 `openclaw-runtime-resources.cjs`와 그 유일한 상대 의존성 `openclaw-native-config.cjs`를 함께 다운로드한다. 전체 설치와 구성요소 업데이트가 같은 고정 파일 목록을 사용하며, 구성요소 업데이트에서는 두 파일 모두 C_AI의 정확한 source revision을 따른다. native 구성요소가 없는 과거 release에는 이 파일들을 요구하지 않는다. 설치 호스트의 다른 checkout이나 `node_modules`에서 누락된 helper를 가져오는 대체 경로는 없다. 이 준비물 다운로드는 Console 이미지나 R2D2 실행 권한을 변경하지 않는다.
+
+전체 native 설치의 Owner 보존 검사는 실제 installer가 나중에 적용하는 C_AI·OSDST·OS Shell 선언도 `ownerPreview`로 먼저 렌더링한다. Knowledge는 실제 materialized package projector를 사용하고, OS Shell은 원본 선언·runtime template 해시와 발견한 Kubernetes API endpoint를 그대로 결속한다. 이 목록은 보존 검사 전용이며 `all`·`base` 적용 목록에 추가하지 않는다. API/DB 마이그레이션 뒤 native installer가 한 번 적용하는 순서는 유지한다. C_AI 인증 환경 placeholder는 채널에서 다시 추론하지 않도록 검증된 설치 입력으로 먼저 결속하여, 기존 `edge` + `production` 설치의 production 설정을 보존한다. 이 렌더링 자체가 실제 Owner 보존이나 운영 교체 수용의 성공을 뜻하지는 않으며, 원래 비교·서버 dry-run·13항 전환 검사에서 발견한 실제 차이는 계속 거부한다.
+
+닫힌 local-native 경로의 비교 복사본만 고정 init image 7개와 공개 release env 8개를 각 선언의 불변 component source 및 정상 검증된 이전/대상 artifact에 결속한다. command·권한·Secret 참조·새 env·추가 init은 무시하지 않는다. C_AI는 13항 제거 뒤 이름별로 동일한 env의 순서만 비교에서 정렬한다. 중복·`$(VAR)` 확장은 거부하고 원형 hash/checkpoint는 보존한다. formal/signed 비교 경로는 바꾸지 않는다. Gitea 비교 preview의 최종 replica 1은 원 installer의 고정 scale 명령에서 검증하며, 실제 bootstrap의 staged replica 0을 선행 변경하지 않는다.
+
+기존 Shell trace는 원 공개 lock `fa92… → eb9ac553… → 7930…` 세 개의 정확한 raw SHA와 정상 release digest, C_EXT 단독 변경 및 불변 Shell tuple에 결속한다. 이 최소 캡처에는 승인서·사용자 데이터·자격증명을 넣지 않는다. 실행 시 정상 OCI 검증을 다시 수행하고 원 Git manifest/template 해시와 현재 Shell tuple을 검사한 뒤에만 `fa92` trace를 새 대상 trace와 비교한다. manifest/template literal은 정규화하지 않는다. 임의 역사 URI·사용자 입력 예외·검사 우회는 없다.
+
+최초 Installing 기록에는 원 검증 baseline 공개 lock, 정확한 대상, Owner UID, 원형 구성 hash, source/history 증거를 별도 `ownerReferenceCheckpoint`에 CAS와 hash로 보존한다. 이는 서명이 아니다. 동일 대상의 명시적 복구는 원 lock과 source를 다시 정상 검증하며, 고정 참조에 대해서만 원 값/대상 값을 인정한다. Shell은 원형 전체 before 또는 target 상태만 허용하고 혼합 상태는 거부한다. Gitea가 실제 staged replica 0이면 원 UID와 정확한 target spec을 확인하여 관측에서 누락시키지 않고 최종 1로의 복원을 검사한다. 다른 Owner의 현재 관측과 서버 dry-run 비교, 기존 13항 checkpoint 및 일반 복구 경계는 유지한다.

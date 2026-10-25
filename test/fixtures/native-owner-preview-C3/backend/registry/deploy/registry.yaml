@@ -1,0 +1,154 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: opensphere-registry
+  namespace: opensphere-console
+  labels:
+    app.kubernetes.io/name: opensphere-registry
+    opensphere.io/cbss-core-service: "true"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: opensphere-registry
+rules:
+  - apiGroups: ["plugins.opensphere.io"]
+    resources: ["uipluginpackages", "uipluginregistrations"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["foundation.opensphere.io"]
+    resources: ["foundationmoduledescriptors"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: opensphere-registry
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: opensphere-registry
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-registry
+    namespace: opensphere-console
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: opensphere-registry-config
+  namespace: opensphere-console
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["opensphere-extension-trusted-keys", "opensphere-extension-navigation-v1", "opensphere-installation-lock"]
+    verbs: ["get", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: opensphere-registry-config
+  namespace: opensphere-console
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: opensphere-registry-config
+subjects:
+  - kind: ServiceAccount
+    name: opensphere-registry
+    namespace: opensphere-console
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: opensphere-registry
+  namespace: opensphere-console
+  labels:
+    app.kubernetes.io/name: opensphere-registry
+    app.kubernetes.io/part-of: opensphere-console
+    opensphere.io/cbss-core-service: "true"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opensphere-registry
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: opensphere-registry
+        app.kubernetes.io/part-of: opensphere-console
+        opensphere.io/cbss-core-service: "true"
+    spec:
+      serviceAccountName: opensphere-registry
+      imagePullSecrets:
+        - name: opensphere-ghcr-pull
+      automountServiceAccountToken: true
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: registry
+          image: ghcr.io/opensphere-platform/opensphere-registry@sha256:0000000000000000000000000000000000000000000000000000000000000000
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: IMAGE_DIGEST, value: "__OPENSPHERE_REGISTRY_IMAGE_DIGEST__" }
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: opensphere-registry
+  namespace: opensphere-console
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: opensphere-registry
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: opensphere-registry
+  namespace: opensphere-console
+  labels:
+    app.kubernetes.io/name: opensphere-registry
+    opensphere.io/cbss-core-service: "true"
+spec:
+  selector:
+    app.kubernetes.io/name: opensphere-registry
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: opensphere-registry
+  namespace: opensphere-console
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: opensphere-registry
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - { protocol: TCP, port: 8080 }

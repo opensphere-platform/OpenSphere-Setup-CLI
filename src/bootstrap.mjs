@@ -15,6 +15,10 @@ import { fileURLToPath } from 'node:url';
 import { kubectl, run } from './process.mjs';
 import { ensureInstallationIdentity } from './installation-identity.mjs';
 import {NATIVE_RUNTIME_RENDERER,NATIVE_RUNTIME_SOURCE_PATHS,needsNativeRuntimePreparation,isLegacyNativeCutover,prepareNativeRuntimePrerequisites,applyNativeRuntimePrerequisites,bootstrapNativeRegistryCredential} from './r2d2-native-prerequisites.mjs';
+import {bindNativeInstallerAuthEnvironment,renderNativeOwnerPreview,renderFoundationOwnerPreview,NATIVE_OWNER_SOURCE_PATHS} from './native-owner-preview.mjs';
+import {fetchLocalNativeOwnerReferenceSources} from './owner-release-references.mjs';
+import {verifyCapturedShellHistory} from './shell-release-history.mjs';
+import {readOwnerReferenceRecovery} from './owner-reference-checkpoint.mjs';
 import {captureControllerSource,controllerSourceData,CONTROLLER_SOURCE_KEY} from './controller-source.mjs';
 import { CLUSTER_SCOPED_MANAGED_CRDS, listManagedClusterResiduals, assertNoManagedClusterResiduals, assertManagedAdmissionParameters } from './installation-residuals.mjs';
 import {purgeBeszelHostState,purgeExternalConsoleRbac} from './uninstall-residuals.mjs';
@@ -1277,6 +1281,11 @@ async function materializeFoundationInstallers(
       optional404: optionalArtifacts.has(path),
       sourceArtifactCredential
     }))).filter(artifact => artifact.contents !== null);
+  if(target&&needsNativeRuntimePreparation(lock)){
+    const osaa=artifacts.find(artifact=>artifact.path===NATIVE_OWNER_SOURCE_PATHS[0]);
+    if(!osaa)throw Error('Native C_AI installer artifact is missing');
+    osaa.contents=bindNativeInstallerAuthEnvironment(osaa.contents,authEnvironment,lock.channel);
+  }
   for (const artifact of artifacts) await writeReleaseArtifact(root, artifact.path, artifact.contents);
   let knowledgeDirectory;
   if (target) {
@@ -1324,6 +1333,14 @@ async function materializeFoundationInstallers(
       target ? artifact.installerTemplate : artifact.rendered
     );
   }
+  let nativeOwnerPreview;
+  if(target&&needsNativeRuntimePreparation(lock)){
+    // Run the same immutable, data-only projector as the actual native installer.
+    // The directory already passed the admitted Knowledge OCI/hash contract.
+    const knowledgeProjection=JSON.parse(run('node',[join(root,'scripts','render-knowledge-package.mjs'),knowledgeDirectory],{capture:true}));
+    const kubernetesApiEgress=discoverRegistryKubernetesEgress(kubectl);
+    nativeOwnerPreview=renderNativeOwnerPreview(lock,{artifacts,knowledgeProjection,kubernetesApiEgress,consoleUrl,authEnvironment});
+  }
   return {
     root,
     target,
@@ -1332,6 +1349,7 @@ async function materializeFoundationInstallers(
     hissScope: prepareHiss ? hissScope : null,
     migration,
     controllerSource: manifestArtifacts.find(a=>a.controllerSource)?.controllerSource,
+    ...(nativeOwnerPreview?{ownerPreview:[...renderFoundationOwnerPreview(manifestArtifacts.map(({spec,rendered})=>({path:spec.path,yaml:rendered})),artifacts),...nativeOwnerPreview]}:{}),
     release: manifestArtifacts.map(({ spec, rendered }) => ({
       path: spec.path,
       yaml: rendered
@@ -2665,7 +2683,7 @@ function promotionBlocked(channel) {
   );
 }
 
-async function prepareRelease(
+export async function prepareRelease(
   lock,
   root,
   storageClass,
@@ -2687,7 +2705,14 @@ async function prepareRelease(
   if(needsNativeRuntimePreparation(lock)&&!options.rollbackEvidenceOnly)foundation.nativeRuntime=prepareNativeRuntimePrerequisites(lock,{
     inputPath:options.r2d2RuntimePolicyPath,input:options.r2d2RuntimePolicy,
     rendererPath:join(root,NATIVE_RUNTIME_RENDERER),manifest:foundation.migration?.manifest});
-  return { foundation, base, all: [...foundation.release, ...base] };
+  const all=[...foundation.release,...base];
+  const historicalShell=options.ownerReferenceBaseline?await verifyCapturedShellHistory(options.ownerReferenceBaseline,{
+    verificationOptions:{registryCredentials:options.registryCredentials,requiredPlatforms:options.requiredPlatforms}
+  }):undefined;
+  const ownerReferenceSources=options.ownerReferenceBaseline&&isLocalEdgeLock(lock)&&isLocalEdgeLock(options.ownerReferenceBaseline)&&needsNativeRuntimePreparation(lock)
+    ?await fetchLocalNativeOwnerReferenceSources(options.ownerReferenceBaseline,lock,(selected,path,{sourceRevision})=>fetchReleaseArtifact(selected,path,{sourceRevision,sourceArtifactCredential:options.sourceArtifactCredential}),{historicalShell})
+    :undefined;
+  return {foundation,base,all,...(foundation.ownerPreview?{ownerPreview:[...foundation.ownerPreview,...base]}:{}),...(ownerReferenceSources?{ownerReferenceSources}:{})};
 }
 
 export function componentMigrationSourceRevision(lock, changedComponents, includeMigrations = true) {
@@ -3322,6 +3347,11 @@ export async function upgrade(
     }
   }
   const owner = startRecord ? { uid: startRecord.metadata.uid, resourceVersion: startRecord.metadata.resourceVersion } : null;
+  const ownerReferenceRecovery=recovery&&isLocalEdgeLock(targetLock)?readOwnerReferenceRecovery(startRecord,targetLock):undefined;
+  const ownerReferenceBaseline=ownerReferenceRecovery?.previousLock??previousLock;
+  const verifiedOwnerReferenceBaseline=ownerReferenceRecovery?await operations.verifyReleaseLock(ownerReferenceBaseline,{
+    registryCredentials,requiredPlatforms,allowLegacyComponentSet:true,allowInstalledAgentIdentityCutover:true
+  }):undefined;
   const ownsRecord = () => {
     if (!owner) return true;
     const current = operations.readInstallationRecord();
@@ -3403,7 +3433,8 @@ export async function upgrade(
           config.storageClass,
           effectiveConsoleUrl,
           config.authEnvironment,
-          { sourceArtifactCredential, registryCredentials,verifiedBom:targetVerifiedBom,r2d2RuntimePolicyPath }
+          { sourceArtifactCredential, registryCredentials,verifiedBom:targetVerifiedBom,r2d2RuntimePolicyPath,requiredPlatforms,
+            ...(isLocalEdgeLock(targetLock)&&profiledAdoption?{ownerReferenceBaseline}:{}) }
         ),
         recovery||legacyNativeCutover||nativeMaintenanceUpdate ? Promise.resolve({ foundation: { root: rollbackWork, release: [], migration: null }, base: [], all: [] }) : operations.prepareRelease(
           previousLock,
@@ -3425,7 +3456,8 @@ export async function upgrade(
     if (profiledAdoption) {
       ownerComparison=comparePreparedOwners(previousLock, targetLock, target, {
         verifiedBom: targetVerifiedBom,
-        verifiedLocalLocks:isLocalEdgeLock(targetLock)?{previous:previousLock.releaseDigest===targetLock.releaseDigest?targetVerifiedLock:previousVerifiedLock,target:targetVerifiedLock}:undefined,
+        verifiedLocalLocks:isLocalEdgeLock(targetLock)?{previous:previousLock.releaseDigest===targetLock.releaseDigest?targetVerifiedLock:previousVerifiedLock,target:targetVerifiedLock,
+          ...(verifiedOwnerReferenceBaseline?{referenceBaseline:verifiedOwnerReferenceBaseline}:{})}:undefined,
         client: operations.ownerPreservationClient,nativeRecovery:recovery
       });
       // No namespace, pull-secret, installation record, installer, apply or
@@ -3555,6 +3587,7 @@ export async function upgrade(
       rollback: recovery||legacyNativeCutover||target.foundation?.nativeRuntime ? 'never' : boundary?.pending.length ? 'decided-after-failure' : 'available',
       ...(ownerComparison?.nativeCutoverCheckpoint?{nativeCutoverCheckpoint:ownerComparison.nativeCutoverCheckpoint}:{}),
       ...(ownerComparison?.nativeMaintenanceCheckpoint?{nativeMaintenanceCheckpoint:ownerComparison.nativeMaintenanceCheckpoint}:{}),
+      ...(ownerComparison?.ownerReferenceCheckpoint?{ownerReferenceCheckpoint:ownerComparison.ownerReferenceCheckpoint}:{}),
       ...(boundary ? { oneWay: transitionOneWay(boundary) } : {})
     };
     // Re-review N2: what this run has already done, for an exact account when it must stop.

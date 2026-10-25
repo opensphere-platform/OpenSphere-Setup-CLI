@@ -77,7 +77,7 @@ export function attachReadinessProfile(bom, name, sourceRevision, boundary) {
   return { ...bom, readinessProfile: readinessProfile(name, sourceRevision) };
 }
 
-function workloadsByIdentity(workloads) {
+function workloadsByIdentity(workloads,stagedRecoveryOwner) {
   assert.ok(Array.isArray(workloads), 'Owner observation must contain a workload array');
   const result = new Map();
   for (const workload of workloads) {
@@ -87,7 +87,9 @@ function workloadsByIdentity(workloads) {
     assert.equal(typeof workload.owner, 'string', 'An explicit Owner is required');
     const key = `${workload.kind}/${workload.namespace}/${workload.name}`;
     assert.ok(!result.has(key), 'Duplicate Owner workload');
-    assert.ok(Number.isSafeInteger(workload.replicas) && workload.replicas > 0, 'Active Owner replica count must be positive');
+    const staged=stagedRecoveryOwner&&key===stagedRecoveryOwner.identity&&workload.uid===stagedRecoveryOwner.uid
+      &&workload.resourceVersion===stagedRecoveryOwner.resourceVersion&&workload.replicas===0;
+    assert.ok(Number.isSafeInteger(workload.replicas) && (workload.replicas > 0||staged), 'Active Owner replica count must be positive');
     assert.ok(Array.isArray(workload.containers) && workload.containers.length > 0, 'Owner containers are missing');
     assert.match(workload.configurationDigest ?? '', digest, 'Owner configuration comparison is missing');
     assert.equal(new Set(workload.containers.map(c => c.name)).size, workload.containers.length, 'Duplicate container');
@@ -205,10 +207,11 @@ function assertNativeMaintenanceOwner(before,after,proof,state){
 // Only the explicit native profile and trusted Setup proof admit the one C_AI
 // replacement below; they cannot authorize another Owner or container removal.
 // Ready Pods do not prove functional acceptance; that remains a post-deploy gate.
-export function verifyOwnerPreservation({ profile, sourceRevision, installed, rendered, nativeCutover, nativeRecovery, nativeMaintenance, nativeMaintenanceRecovery, now = Date.now() }) {
+export function verifyOwnerPreservation({ profile, sourceRevision, installed, rendered, nativeCutover, nativeRecovery, nativeMaintenance, nativeMaintenanceRecovery, stagedRecoveryOwner, now = Date.now() }) {
   validateReadinessProfile(profile, sourceRevision);
   assert.equal(nativeMaintenance,undefined,'Native maintenance cannot substitute a formal readiness profile');
   assert.equal(nativeMaintenanceRecovery,undefined,'Native maintenance recovery cannot substitute a formal readiness profile');
+  assert.equal(stagedRecoveryOwner,undefined,'Staged Owner recovery cannot change formal preservation');
   const native = profile.name === NATIVE_R2D2_CUTOVER_PROFILE;
   if (!native) assert.equal(nativeCutover, undefined, 'Native cutover proof requires its explicit signed profile');
   if (!native) assert.equal(nativeRecovery, undefined, 'Native recovery proof requires its explicit signed profile');
@@ -218,13 +221,19 @@ export function verifyOwnerPreservation({ profile, sourceRevision, installed, re
 // Pure comparison only. Setup's closed local-edge adapter establishes the
 // existing local trust and actual image/installation checks before calling it.
 // This creates no signed readiness predicate or publication authority.
-export function verifyLocalNativeOwnerPreservation({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, nativeMaintenance, nativeMaintenanceRecovery, now = Date.now() }) {
+export function verifyLocalNativeOwnerPreservation({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, nativeMaintenance, nativeMaintenanceRecovery, stagedRecoveryOwner, now = Date.now() }) {
   assert.match(sourceRevision ?? '', revision, 'Local Owner comparison source is missing');
   assert.ok(nativeCutover || nativeRecovery || nativeMaintenance || nativeMaintenanceRecovery, 'Local native comparison requires its exact cutover, maintenance or recovery proof');
-  return compareOwnerObservations({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, nativeMaintenance, nativeMaintenanceRecovery, native: true, now });
+  if(stagedRecoveryOwner){
+    assert.ok(nativeRecovery||nativeMaintenanceRecovery,'Staged Gitea requires bound same-target recovery');
+    assert.deepEqual(Object.keys(stagedRecoveryOwner).sort(),['checkpointDigest','identity','resourceVersion','uid']);
+    assert.equal(stagedRecoveryOwner.identity,'Deployment/opensphere-console-change/opensphere-gitea');
+    assert.match(stagedRecoveryOwner.checkpointDigest??'',digest);assert.match(stagedRecoveryOwner.resourceVersion??'',/^[0-9]+$/);assert.ok(stagedRecoveryOwner.uid);
+  }
+  return compareOwnerObservations({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, nativeMaintenance, nativeMaintenanceRecovery, stagedRecoveryOwner, native: true, now });
 }
 
-function compareOwnerObservations({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, nativeMaintenance, nativeMaintenanceRecovery, native, now }) {
+function compareOwnerObservations({ sourceRevision, installed, rendered, nativeCutover, nativeRecovery, nativeMaintenance, nativeMaintenanceRecovery, stagedRecoveryOwner, native, now }) {
   assert.ok([nativeCutover,nativeRecovery,nativeMaintenance,nativeMaintenanceRecovery].filter(Boolean).length<=1, 'Native cutover, maintenance and recovery proofs are mutually exclusive');
   assert.match(installed?.releaseDigest ?? '', digest, 'Installed release digest is missing');
   assert.match(installed?.resourceVersion ?? '', /^[0-9]+$/u, 'Installation lock observation is missing');
@@ -234,7 +243,7 @@ function compareOwnerObservations({ sourceRevision, installed, rendered, nativeC
   assert.equal(rendered?.baseResourceVersion, installed.resourceVersion, 'Rendered plan is based on a different lock version');
   assert.equal(rendered?.sourceRevision, sourceRevision, 'Rendered plan and signed BOM source differ');
   assert.deepEqual(rendered?.deactivations, [], 'Readiness selection cannot deactivate installed Owners');
-  const live = workloadsByIdentity(installed.workloads), planned = workloadsByIdentity(rendered.workloads);
+  const live = workloadsByIdentity(installed.workloads,stagedRecoveryOwner), planned = workloadsByIdentity(rendered.workloads);
   assert.ok(live.size > 0, 'An empty observation cannot prove installed Owner preservation');
   // This explicit argument is supplied only by Setup's trusted comparison of
   // reviewed policy, immutable installation and exact admitted manifests. A
@@ -265,7 +274,8 @@ function compareOwnerObservations({ sourceRevision, installed, rendered, nativeC
     else assert.equal(after.owner, before.owner, `Owner writer would change: ${key}`);
     assert.equal(after.baseUid, before.uid, `Owner workload identity changed: ${key}`);
     assert.equal(after.baseResourceVersion, before.resourceVersion, `Owner observation changed: ${key}`);
-    if(maintenance)assert.equal(after.replicas,before.replicas,`Native maintenance cannot change Owner capacity: ${key}`);
+    if(stagedRecoveryOwner&&key===stagedRecoveryOwner.identity)assert.equal(after.replicas,1,'Staged Gitea recovery must restore its verified installer final replica');
+    else if(maintenance)assert.equal(after.replicas,before.replicas,`Native maintenance cannot change Owner capacity: ${key}`);
     else assert.ok(after.replicas >= before.replicas, `Active Owner would shrink: ${key}`);
     if (!cutoverOwner&&!maintenanceOwner) assert.equal(after.configurationDigest, before.configurationDigest, `Active Owner configuration would change: ${key}`);
     for (const container of before.containers) {

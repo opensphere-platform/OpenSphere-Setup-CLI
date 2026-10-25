@@ -9,8 +9,11 @@ import { calculateReleaseBomDigest, isLocalEdgeLock, validateLock, validateRelea
 import { verifyOwnerPreservation, verifyLocalNativeOwnerPreservation, validateReadinessProfile } from './release-readiness-profile.mjs';
 import artifactVersions from './artifact-version.cjs';
 import {captureNativeCutover,buildNativeRecoveryProof,captureNativeMaintenance,buildNativeMaintenanceRecoveryProof,nativeMaintenancePolicyBinding} from './native-r2d2-owner-cutover.mjs';
+import {bindLocalNativeOwnerReferenceViews} from './owner-release-references.mjs';
+import {readOwnerReferenceRecovery,captureOwnerReferenceCheckpoint,assertOwnerReferenceRecoveryBinding,isCheckpointedStagedGitea,stagedGiteaRecoveryObservation} from './owner-reference-checkpoint.mjs';
 const RAW_OWNERS=Symbol('private Owner bodies');
 const RAW_RECORD=Symbol('private installation record');
+const REFERENCE_RECOVERY=Symbol('private validated reference recovery');
 const readRuntimePolicy=client=>JSON.parse(client(['get','configmap','opensphere-r2d2-runtime-policy','-n','opensphere-console','-o','json'],{capture:true}));
 const maintenanceAccessKinds=new Set(['Namespace','ServiceAccount','Role','RoleBinding','ClusterRole','ClusterRoleBinding','NetworkPolicy','ResourceQuota','LimitRange','ValidatingAdmissionPolicy','ValidatingAdmissionPolicyBinding']);
 const accessKey=o=>`${o.kind}/${o.metadata.namespace??''}/${o.metadata.name}`;
@@ -146,10 +149,11 @@ export function isPersonalNativeOwnerWorkload(workload,installationId){
   &&/^ghcr\.io\/opensphere-platform\/opensphere-console-osaa-gateway@sha256:[a-f0-9]{64}$/.test(p.containers[1].image??'');
 }
 
-export function readOwnerObservation(previousLock, { client = kubectl, now = Date.now(),normalizeNativeImages=false,recoveryCheckpoint } = {}) {
+export function readOwnerObservation(previousLock, { client = kubectl, now = Date.now(),normalizeNativeImages=false,recoveryCheckpoint,referenceTarget } = {}) {
   const record = JSON.parse(client(['get', 'configmap', 'opensphere-installation-lock', '-n', 'opensphere-console', '-o', 'json'], { capture: true }));
   const current = JSON.parse(record.data?.['release.json'] ?? 'null');
   const config=JSON.parse(record.data?.['config.json']??'null');
+  const referenceRecovery=referenceTarget?readOwnerReferenceRecovery(record,referenceTarget):undefined;
   assert.equal(current?.releaseDigest, previousLock.releaseDigest, 'Installation changed before Owner comparison');
   const repositories = Object.fromEntries(Object.entries({ ...previousLock.components, ...previousLock.auxiliaryArtifacts })
     .map(([name, component]) => [`ghcr.io/opensphere-platform/${component.repository}`, name]));
@@ -158,12 +162,14 @@ export function readOwnerObservation(previousLock, { client = kubectl, now = Dat
   assert.ok(Array.isArray(raw.items), 'Owner discovery returned no Kubernetes list');
   const active = raw.items.filter(w => !isPersonalNativeOwnerWorkload(w,config?.installationId)
     && (w.spec?.template?.spec?.containers ?? []).some(c => repositories[c.image?.split('@')[0]])
-    && (w.kind === 'DaemonSet' ? w.status?.desiredNumberScheduled > 0 : (w.spec?.replicas ?? 1) > 0));
+    && (w.kind === 'DaemonSet' ? w.status?.desiredNumberScheduled > 0 : (w.spec?.replicas ?? 1) > 0
+      ||isCheckpointedStagedGitea(w,referenceRecovery,referenceTarget)));
   const result={ repositories, installed: { observedUtc: new Date(now).toISOString(),
     releaseDigest: previousLock.releaseDigest, recordUid: record.metadata.uid, resourceVersion: record.metadata.resourceVersion,
     workloads: active.map(w => projectOwnerObservation(w, repositories,undefined,normalizeNativeImages?previousLock:undefined)) } };
   Object.defineProperty(result,RAW_OWNERS,{value:new Map(active.map(w=>[key(w),w]))});
   Object.defineProperty(result,RAW_RECORD,{value:record});
+  Object.defineProperty(result,REFERENCE_RECOVERY,{value:referenceRecovery});
   return result;
 }
 
@@ -192,8 +198,16 @@ export function comparePreparedOwners(previousLock, targetLock, prepared, {
   }
   const normalizeNativeImages = local ? false : pointer.readinessProfile.name!=='native-r2d2-cutover';
   const recoveryRequested = nativeRecovery && (local || pointer.readinessProfile.name==='native-r2d2-cutover');
-  const observed = readOwnerObservation(previousLock, { client, now,normalizeNativeImages,recoveryCheckpoint:recoveryRequested });
+  const observationOptions={client,now,normalizeNativeImages,recoveryCheckpoint:recoveryRequested,...(local&&recoveryRequested?{referenceTarget:targetLock}:{})};
+  const observed = readOwnerObservation(previousLock, observationOptions);
   const transition=JSON.parse(observed[RAW_RECORD].data?.['state.json']??'null')?.transition;
+  const referenceRecovery=observed[REFERENCE_RECOVERY],referenceBaseline=referenceRecovery?.previousLock??previousLock;
+  if(referenceRecovery){
+    const {localVerifiedAt,...verified}=verifiedLocalLocks?.referenceBaseline??{}, {localVerifiedAt:oldVerification,...expected}=referenceBaseline;
+    const at=Date.parse(localVerifiedAt);assert.ok(Number.isFinite(at)&&at<=now,'Actual original Owner reference image verification is missing');
+    assert.deepEqual(verified,expected,'Verified original Owner reference lock changed');
+    for(const owner of referenceRecovery.owners)assert.ok(observed[RAW_OWNERS].has(owner.identity),'A checkpointed Owner reference workload is missing');
+  }
   const maintenance=local&&!!previousLock.components?.r2d2OpenClawGateway&&(!recoveryRequested||!!transition?.nativeMaintenanceCheckpoint);
   if(maintenance&&recoveryRequested)assert.equal(transition.nativeCutoverCheckpoint,undefined,'Native maintenance cannot reuse a Hermes cutover checkpoint');
   const runtimePolicy=maintenance?readRuntimePolicy(client):undefined;
@@ -217,7 +231,11 @@ export function comparePreparedOwners(previousLock, targetLock, prepared, {
     localIdentity = identity;
   };
   if (local) assertLocalIdentity();
-  const documents = prepared.all.flatMap(item => {
+  // Full native installation is applied later by its migration-aware installer.
+  // Its read-only preview participates in preservation without entering base apply.
+  const artifacts=prepared.ownerPreview===undefined?prepared.all:prepared.ownerPreview;
+  assert.ok(Array.isArray(artifacts),'Rendered Owner artifact set is missing');
+  const documents = artifacts.flatMap(item => {
     assert.equal(typeof item.yaml, 'string', 'Rendered artifact bytes are missing');
     return parseAllDocuments(item.yaml).map(doc => {
       if (doc.errors.length) throw new Error('Rendered Owner manifest is invalid YAML');
@@ -270,18 +288,45 @@ export function comparePreparedOwners(previousLock, targetLock, prepared, {
       .some(a => a.image === c.image), 'Rendered Owner contains an image outside the verified target lock');
     return { ...after, baseUid: after.uid, baseResourceVersion: after.resourceVersion };
   });
-  const fresh = readOwnerObservation(previousLock, { client, now,normalizeNativeImages,recoveryCheckpoint:recoveryRequested });
+  // Actual observations, freshness checks and native raw checkpoint hashes stay
+  // unchanged. Only these local-native equality views close verified references.
+  let comparisonInstalled=observed.installed,comparisonPlanned=planned;
+  const ownerReferenceEvidence=[];
+  if(local&&targetLock.components?.r2d2OpenClawGateway){
+    const installedViews=new Map(observed.installed.workloads.map(owner=>[`${owner.kind}/${owner.namespace}/${owner.name}`,{...owner}]));
+    comparisonPlanned=planned.map(owner=>({...owner}));
+    for(const [index,after]of plannedRaw.entries()){
+      const id=key(after),before=observed[RAW_OWNERS].get(id);
+      const recoveryShellAtTarget=referenceRecovery?assertOwnerReferenceRecoveryBinding(referenceRecovery,{
+        sources:prepared.ownerReferenceSources,plan:prepared.foundation.nativeRuntime,before,after}):false;
+      const bound=bindLocalNativeOwnerReferenceViews(before,after,{previousLock:referenceBaseline,targetLock,sources:prepared.ownerReferenceSources,
+        recovery:!!referenceRecovery,recoveryShellAtTarget});
+      if(!bound.evidence.length)continue;
+      const beforeView=projectOwnerObservation(bound.before,observed.repositories),afterView=projectOwnerObservation(bound.after,observed.repositories,installedViews.get(id));
+      ownerReferenceEvidence.push({identity:id,uid:before.metadata.uid,beforeConfigurationDigest:installedViews.get(id).configurationDigest,
+        afterConfigurationDigest:planned[index].configurationDigest,references:bound.evidence});
+      installedViews.get(id).configurationDigest=beforeView.configurationDigest;
+      comparisonPlanned[index].configurationDigest=afterView.configurationDigest;
+    }
+    comparisonInstalled={...observed.installed,workloads:[...installedViews.values()]};
+  }
+  const fresh = readOwnerObservation(previousLock, observationOptions);
   assert.deepEqual(fresh.installed, observed.installed, 'Installed Owner or lock changed during render comparison');
   if (local) assertLocalIdentity();
   if(maintenance)assert.deepEqual(readRuntimePolicy(client),runtimePolicy,'Native maintenance runtime policy changed during comparison');
   if(maintenance)for(const entry of maintenanceAccess)assert.deepEqual(nativeMaintenancePolicyBinding(readAccess(entry,client)),entry.binding,'Native maintenance permission object changed during comparison');
   const compare = local ? verifyLocalNativeOwnerPreservation : verifyOwnerPreservation;
   const result=compare({ ...(local ? {} : {profile: pointer.readinessProfile}), sourceRevision: targetLock.sourceRevision,
-    installed: observed.installed, rendered: { sourceRevision: targetLock.sourceRevision,
+    installed: comparisonInstalled, rendered: { sourceRevision: targetLock.sourceRevision,
       baseReleaseDigest: observed.installed.releaseDigest, baseResourceVersion: observed.installed.resourceVersion,
-      deactivations: [], workloads: planned }, now,nativeCutover,nativeRecovery:recoveryProof,
-    nativeMaintenance:maintenanceCheckpoint?.proof,nativeMaintenanceRecovery:maintenanceRecovery });
-  return {...result,...(checkpoint?{nativeCutoverCheckpoint:checkpoint}:{}),...(recoveryProof?{nativeCutoverCheckpoint:transition.nativeCutoverCheckpoint,nativeRecoveryState:recoveryProof.state}:{}),
+      deactivations: [], workloads: comparisonPlanned }, now,nativeCutover,nativeRecovery:recoveryProof,
+    nativeMaintenance:maintenanceCheckpoint?.proof,nativeMaintenanceRecovery:maintenanceRecovery,
+    ...(referenceRecovery?{stagedRecoveryOwner:stagedGiteaRecoveryObservation(referenceRecovery,observed.installed.workloads)}:{}) });
+  const referenceEvidence=ownerReferenceEvidence.length?{sourceEvidenceDigest:prepared.ownerReferenceSources.sourceEvidenceDigest,
+    ...(prepared.ownerReferenceSources.historyEvidenceDigest?{historyEvidenceDigest:prepared.ownerReferenceSources.historyEvidenceDigest}:{}),owners:ownerReferenceEvidence}:undefined;
+  const referenceCheckpoint=referenceRecovery??(referenceEvidence?captureOwnerReferenceCheckpoint({previousLock,targetLock,record:observed[RAW_RECORD],plan:prepared.foundation.nativeRuntime,evidence:referenceEvidence}):undefined);
+  return {...result,...(referenceEvidence?{ownerReferenceEvidence:referenceEvidence}:{}),...(referenceCheckpoint?{ownerReferenceCheckpoint:referenceCheckpoint}:{}),
+    ...(checkpoint?{nativeCutoverCheckpoint:checkpoint}:{}),...(recoveryProof?{nativeCutoverCheckpoint:transition.nativeCutoverCheckpoint,nativeRecoveryState:recoveryProof.state}:{}),
     ...(maintenance?{nativeMaintenancePolicyBinding:nativeMaintenancePolicyBinding(runtimePolicy),
       nativeMaintenanceIdentityBinding:prepared.foundation.nativeRuntime.identityBinding,
       nativeMaintenanceAccessBindings:maintenanceAccess,

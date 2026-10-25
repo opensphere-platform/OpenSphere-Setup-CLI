@@ -14,6 +14,15 @@ function one(list,name){const rows=(list??[]).filter(x=>x.name===name);assert.eq
 function exactKeys(value,keys){assert.deepEqual(Object.keys(value).sort(),[...keys].sort(),'Native cutover contains an unexpected field');}
 function envValue(env,name,value){const e=one(env,name);exactKeys(e,['name','value']);assert.equal(e.value,value,'Native cutover image or feature differs');}
 function ref(env,name,key){const e=one(env,name);exactKeys(e,['name','valueFrom']);exactKeys(e.valueFrom,['configMapKeyRef']);const r=e.valueFrom.configMapKeyRef;assert.ok(Object.keys(r).every(x=>['name','key','optional'].includes(x)));assert.equal(r.name,'opensphere-r2d2-runtime-policy');assert.equal(r.key,key);assert.notEqual(r.optional,true);}
+function unorderedUnexpandedEnvironment(env){
+ assert.ok(Array.isArray(env),'Native cutover environment is missing');
+ assert.equal(new Set(env.map(entry=>entry.name)).size,env.length,'Duplicate native cutover environment');
+ for(const entry of env){
+  assert.equal(typeof entry.name,'string');assert.ok(entry.name);
+  assert.ok(!(typeof entry.value==='string'&&entry.value.includes('$(')),'Ordered native cutover environment expansion is not supported');
+ }
+ return [...env].sort((a,b)=>a.name<b.name?-1:a.name>b.name?1:0);
+}
 
 export function buildNativeCutoverProof({previousLock,targetLock,plan,before,after}={}){
  assert.equal(identity(before),'Deployment/opensphere-console/opensphere-console-osaa-gateway');
@@ -51,6 +60,11 @@ export function buildNativeCutoverProof({previousLock,targetLock,plan,before,aft
   assert.ok(!(bp.volumes??[]).some(x=>x.name===name));assert.ok(!(bg.volumeMounts??[]).some(x=>x.name===name));
  }
  ag.env=ag.env.filter(x=>!oldEnvs.includes(x.name));bg.env=bg.env.filter(x=>!nativeEnvs.includes(x.name));
+ // Only the equality view after the thirteen reviewed removals is unordered.
+ // Raw configuration digests and persisted checkpoints retain original order.
+ if(isLocalEdgeLock(previousLock)&&isLocalEdgeLock(targetLock)){
+  ag.env=unorderedUnexpandedEnvironment(ag.env);bg.env=unorderedUnexpandedEnvironment(bg.env);
+ }
  ag.volumeMounts=ag.volumeMounts.filter(x=>x.name!=='r2d2-hermes-ipc');ap.volumes=ap.volumes.filter(x=>!['worker-tmp','r2d2-hermes-ipc'].includes(x.name));
  ap.containers=ap.containers.filter(x=>x.name!=='hermes-worker');
  delete a.replicas;delete b.replicas;delete ag.image;delete bg.image;

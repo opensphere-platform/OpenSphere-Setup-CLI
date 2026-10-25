@@ -1,0 +1,62 @@
+{
+  "schema": "opensphere.native-owner-preview-capture/v1",
+  "sourceRevision": "320e5031ad4ab1353daed82337a891dab5125fc4",
+  "scope": "Exact producer declaration/rendering contract; no operating acceptance",
+  "entries": [
+    {
+      "path": "apps/osaa-gateway/deploy.yaml",
+      "bytes": 24068,
+      "sha256": "78776454ab36ee55d9ba593e98c2d49557c2a1eb55647defe3fd9d8f4d51112c"
+    },
+    {
+      "path": "apps/osdst/deploy.yaml",
+      "bytes": 4327,
+      "sha256": "9003bbd04e7b855d137c9e533c6b19bc3d9ac6a1e84fd78a867cded7f5ccffd4"
+    },
+    {
+      "path": "apps/os-shell-control/deploy.yaml",
+      "bytes": 42123,
+      "sha256": "fde72adb6401b50c20ac4ec0d23e7e6b75cc356489f4385b5b69e98935ebf28b"
+    },
+    {
+      "path": "apps/os-shell-control/runtime-template.js",
+      "bytes": 5153,
+      "sha256": "2e0ba27f9544a111d9fefe3373398ba4f1f6e19159a548541c2bc43158722b00"
+    },
+    {
+      "path": "scripts/Install-ConsoleNativeRuntime.ps1",
+      "bytes": 33412,
+      "sha256": "ce69cfc389a4a2bb8af3838de40efab747d9d7a667ed2823541fc86b2eb9c1b4"
+    },
+    {
+      "path": "backend/gitea/bootstrap/gitea.yaml",
+      "bytes": 13556,
+      "sha256": "5d70b5c44d775cbd5a9834e6950d0fce115bd95d520b015273e0be971e519fd4"
+    },
+    {
+      "path": "backend/gitea/bootstrap/install.ps1",
+      "bytes": 6916,
+      "sha256": "3ea050a49fd4bafeb41eb85cfda949ecc21027188bf668445d14634aeddba0a8"
+    },
+    {
+      "path": "backend/supabase/target/deploy.yaml",
+      "bytes": 21667,
+      "sha256": "40da71c37d1ece24bdec56cf2a30e5c36891f09034020ac3eb0c0837559fd4e4"
+    },
+    {
+      "path": "deploy/opensphere-console.yaml",
+      "bytes": 3838,
+      "sha256": "d3d2f57f3d164d639b953da8db6098b23fc038104d578cae7e375ccf0b22ea46"
+    },
+    {
+      "path": "apps/extension-controller/deploy.yaml",
+      "bytes": 261274,
+      "sha256": "7a04b432f2c67c6d6ccb534502a4fd215a7c8e5938e6316d77ad539a5263aee8"
+    },
+    {
+      "path": "backend/registry/deploy/registry.yaml",
+      "bytes": 4309,
+      "sha256": "4209dc964b11a1ba51699786229ccc1c3eb0c0773c19fd93eb9f204257c0417c"
+    }
+  ]
+}
