@@ -445,6 +445,34 @@ for(const [label,change]of[
 ])test('native maintenance refuses '+label+' before any write',async()=>{
  const f=maintenanceFixture();change(f);await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}));zeroWrites(f);
 });
+function shellImagePinFixture(){
+ const f=maintenanceFixture();
+ f.controlAccess={apiVersion:'admissionregistration.k8s.io/v1',kind:'ValidatingAdmissionPolicy',
+  metadata:{name:'opensphere-shell-runtime-template-v1',uid:'shell-policy-uid',resourceVersion:'21'},
+  spec:{failurePolicy:'Fail',matchConstraints:{resourceRules:[{apiGroups:[''],apiVersions:['v1'],operations:['CREATE','UPDATE'],resources:['pods']}]},
+   validations:[{expression:"object.spec.containers.size() == 2 && object.spec.containers.all(c, c.image == '"+f.previous.auxiliaryArtifacts.osShellRuntime.image+"' && c.securityContext.allowPrivilegeEscalation == false)",message:'Only the verified runtime is allowed'}]}};
+ f.renderedAccess=structuredClone(f.controlAccess);
+ f.renderedAccess.spec.validations[0].expression=f.renderedAccess.spec.validations[0].expression.replace(f.previous.auxiliaryArtifacts.osShellRuntime.image,f.target.auxiliaryArtifacts.osShellRuntime.image);
+ maintenanceReplan(f);return f;
+}
+test('native maintenance rotates only the OS Shell image literal from the verified previous/target pair',async()=>{
+ const f=shellImagePinFixture(),result=await upgrade(f.previous,f.target,{runtime:f.runtime});
+ assert.equal(result.changed,true);assert.ok(f.calls.some(c=>c.args[0]==='apply'&&c.args.includes('--dry-run=server')));
+});
+for(const [label,change]of[
+ ['unverified target image',f=>{f.renderedAccess.spec.validations[0].expression=f.renderedAccess.spec.validations[0].expression.replace(f.target.auxiliaryArtifacts.osShellRuntime.image,image('opensphere-os-shell-runtime','9'));}],
+ ['unverified current image',f=>{f.controlAccess.spec.validations[0].expression=f.controlAccess.spec.validations[0].expression.replace(f.previous.auxiliaryArtifacts.osShellRuntime.image,image('opensphere-os-shell-runtime','9'));}],
+ ['weakened CEL',f=>{f.renderedAccess.spec.validations[0].expression+=' || true';}],
+ ['removed validation',f=>{f.renderedAccess.spec.validations=[];}],
+ ['different match scope',f=>{f.renderedAccess.spec.matchConstraints.resourceRules[0].operations=['CREATE'];}],
+ ['different validation message',f=>{f.renderedAccess.spec.validations[0].message='Changed';}],
+ ['foreign policy name',f=>{f.controlAccess.metadata.name=f.renderedAccess.metadata.name='another-policy';}],
+ ['duplicate previous pin',f=>{f.controlAccess.spec.validations[0].expression+=" && '"+f.previous.auxiliaryArtifacts.osShellRuntime.image+"' != ''";}],
+])test('native maintenance image-pin rotation rejects '+label+' before any write',async()=>{
+ const f=shellImagePinFixture();change(f);maintenanceReplan(f);
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}));zeroWrites(f);
+});
+
 test('native maintenance detects policy TOCTOU after dry-run before any prerequisite write',async()=>{
  const f=maintenanceFixture();f.dryRunHook=()=>{f.runtimePolicy.metadata.resourceVersion='99';};
  await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/policy changed during comparison/);zeroWrites(f);
