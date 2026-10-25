@@ -9,7 +9,7 @@ import {join} from 'node:path';
 import {comparePreparedOwners,requiresOwnerPreservation,projectOwnerObservation} from '../src/adoption-owner-preservation.mjs';
 import {COMPONENTS,AUXILIARY_ARTIFACTS,RELEASE_API_VERSION,SOURCE,LOCAL_EDGE_TRUST,
   RELEASE_TRUST,calculateReleaseDigest,validateReleaseTransition,verifyReleaseLock} from '../src/release.mjs';
-import {upgrade,installationStateDocument} from '../src/bootstrap.mjs';
+import {upgrade,installationStateDocument,releaseResourceInventory,pruneReleaseResources} from '../src/bootstrap.mjs';
 import {installationRecordDigest} from '../src/forward-repair.mjs';
 import {readinessProfile,verifyOwnerPreservation,verifyLocalNativeOwnerPreservation} from '../src/release-readiness-profile.mjs';
 import {fetchLocalNativeOwnerReferenceSources} from '../src/owner-release-references.mjs';
@@ -35,7 +35,8 @@ function replan(f){
   installedRecordUid:f.record.metadata.uid,installedRecordResourceVersion:f.record.metadata.resourceVersion,
   identityBinding:{uid:f.identity.metadata.uid,resourceVersion:f.identity.metadata.resourceVersion,contentSha256:sha(f.identity)},
   releaseDigest:f.target.releaseDigest,inputSha256:sha(f.reviewed),entries:[{object:{kind:'ConfigMap',metadata:{name:'opensphere-r2d2-runtime-policy'},data:{'preparation.json':JSON.stringify(f.reviewed)}}}]};
- plan.planDigest=sha(plan);f.prepared={all:[{yaml:JSON.stringify(f.after)},{yaml:JSON.stringify(f.otherAfter)}],foundation:{nativeRuntime:plan,migration:{manifest}}};
+ const all=[{path:'synthetic-gateway.json',yaml:JSON.stringify(f.after)},{path:'synthetic-core.json',yaml:JSON.stringify(f.otherAfter)}];
+ plan.planDigest=sha(plan);f.prepared={all,inventoryArtifacts:all,foundation:{nativeRuntime:plan,migration:{manifest}}};
 }
 function fixture(){
  const previous=lock('b'.repeat(40),'a',true),target=lock(source,'d',false);
@@ -99,6 +100,28 @@ function fixture(){
  return f;
 }
 async function verified(f){return {previous:await f.verify(f.previous,{allowLegacyComponentSet:true}),target:await f.verify(f.target)};}
+test('full upgrade inventories late declarations and normal prune removes only a genuinely retired resource',async()=>{
+ const f=fixture(),native={apiVersion:'v1',kind:'Service',metadata:{namespace:'opensphere-console',name:'synthetic-native-service'}},retired={apiVersion:'v1',kind:'ConfigMap',namespace:'opensphere-console',name:'synthetic-retired'};
+ const identity=o=>({apiVersion:o.apiVersion,kind:o.kind,namespace:o.metadata.namespace,name:o.metadata.name});
+ const late={path:'synthetic-late-native.json',yaml:JSON.stringify(native)},early=structuredClone(f.prepared.all),decoded=[],removed=[];
+ f.prepared.inventoryArtifacts=[...f.prepared.all,late];
+ f.runtime.readReleaseInventory=()=>[identity(f.before),identity(f.other),identity(native),retired];
+ f.runtime.releaseResourceInventory=artifacts=>{
+  decoded.push(artifacts);
+  return releaseResourceInventory(artifacts,(_args,{input})=>{const object=JSON.parse(input);return [object.apiVersion,object.kind,object.metadata.namespace,object.metadata.name].join('\t');});
+ };
+ f.runtime.pruneReleaseResources=(before,after)=>pruneReleaseResources(before,after,args=>{removed.push(args);return '';});
+ let recorded;f.runtime.recordReleaseInventory=(_lock,inventory)=>{recorded=inventory;};
+ await upgrade(f.previous,f.target,{runtime:f.runtime});
+ assert.equal(decoded.length,1);assert.equal(decoded[0],f.prepared.inventoryArtifacts);
+ assert.ok(recorded.some(item=>item.name===native.metadata.name));
+ assert.deepEqual(removed,[['-n','opensphere-console','delete','ConfigMap/synthetic-retired','--ignore-not-found','--wait=true']]);
+ assert.deepEqual(f.prepared.all,early);assert.equal(f.events.filter(value=>value==='install-target').length,1);
+});
+test('native upgrade cannot fall back to the early apply set when complete inventory is absent',async()=>{
+ const f=fixture();delete f.prepared.inventoryArtifacts;
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/Native preparation is missing its complete resource inventory/);zeroWrites(f);
+});
 async function compare(f,recovery=false,proofs){return comparePreparedOwners(f.previous,f.target,f.prepared,{verifiedLocalLocks:proofs??await verified(f),client:f.client,nativeRecovery:recovery});}
 async function interrupted(state='already-native'){
  const f=fixture();f.failAt=state;await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/native-runtime-forward-repair-required/);
@@ -327,7 +350,7 @@ function maintenanceReplan(f){
   data:{installationId,'policy.json':JSON.stringify(f.reviewed.policy),'preparation.json':JSON.stringify(f.reviewed)}};
  entry.before={uid:f.runtimePolicy.metadata.uid,resourceVersion:f.runtimePolicy.metadata.resourceVersion,contentSha256:sha(f.runtimePolicy)};
  if(f.accessObjects)plan.entries=[...f.desiredAccess.map((object,i)=>({object:structuredClone(object),before:{uid:f.accessObjects[i].metadata.uid,resourceVersion:f.accessObjects[i].metadata.resourceVersion,contentSha256:sha(f.accessObjects[i])}})),entry];
- if(f.renderedAccess)f.prepared.all.push({yaml:JSON.stringify(f.renderedAccess)});
+ if(f.renderedAccess)f.prepared.all.push({path:'synthetic-runtime-access.json',yaml:JSON.stringify(f.renderedAccess)});
  delete plan.planDigest;plan.planDigest=sha(plan);
 }
 function maintenanceFixture(){

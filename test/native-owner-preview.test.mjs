@@ -10,6 +10,8 @@ import vm from 'node:vm';
 import {bindNativeInstallerAuthEnvironment,renderNativeOwnerPreview,renderFoundationOwnerPreview,NATIVE_OWNER_SOURCE_PATHS} from '../src/native-owner-preview.mjs';
 import {registryKubernetesEgress,discoverRegistryKubernetesEgress} from '../src/registry-runtime-access.mjs';
 import {fetchFoundationInstallerArtifacts,FOUNDATION_ARTIFACT_PATHS} from '../src/bootstrap.mjs';
+import {buildPreparedInventoryArtifacts} from '../src/prepared-resource-inventory.mjs';
+import {NATIVE_RUNTIME_PREREQUISITE_IDENTITIES} from '../src/r2d2-native-prerequisites.mjs';
 
 const fixtureRoot=new URL('./fixtures/native-owner-preview-C3/',import.meta.url);
 const capture=JSON.parse(readFileSync(new URL('capture.json',fixtureRoot)));
@@ -117,18 +119,22 @@ test('missing sources, unknown images, unresolved slots and absent verified Know
   const changed=structuredClone(initial);changed.artifacts[1].contents+='\n__OPENSPHERE_UNKNOWN__';assert.throws(()=>renderNativeOwnerPreview(lock,changed),/unresolved/);
 });
 
-test('full preparation keeps its actual apply set unchanged and exposes the native preview only to preservation',async()=>{
+test('full preparation keeps its actual apply set unchanged and inventories actual late native declarations',async()=>{
   const source=readFileSync(new URL('../src/bootstrap.mjs',import.meta.url),'utf8');
   const begin=source.indexOf('export async function prepareRelease('),end=source.indexOf('\nexport function componentMigrationSourceRevision',begin);
   assert.ok(begin>=0&&end>begin);
-  const nativePreview=renderNativeOwnerPreview(lock,options()),release=[{path:'foundation.yaml',yaml:'foundation declaration'}],foundation={release,ownerPreview:[...release,...nativePreview]},base=[{path:'base.yaml',yaml:'base declaration'}];
+  const nativePreview=renderNativeOwnerPreview(lock,options()),release=[{path:'foundation.yaml',yaml:'foundation declaration'}],foundation={release,nativeInstallerRelease:nativePreview,ownerPreview:[...release,...nativePreview]},base=[{path:'base.yaml',yaml:'base declaration'}];
+  const content={schema:'opensphere.r2d2-runtime-preparation/v1',entries:NATIVE_RUNTIME_PREREQUISITE_IDENTITIES.map(identity=>{const [kind,namespace,name]=identity.split('/');return {object:{kind,metadata:{name,...(namespace?{namespace}:{})}}};})};
+  const plan={...content,planDigest:'sha256:'+createHash('sha256').update(JSON.stringify(content)).digest('hex')};
   const run=vm.runInNewContext('('+source.slice(begin,end).replace(/^export /,'')+')',{
-    materializeFoundationInstallers:async()=>foundation,materializeBaseRelease:async()=>base,needsNativeRuntimePreparation:()=>false,Promise,
+    materializeFoundationInstallers:async()=>foundation,materializeBaseRelease:async()=>base,needsNativeRuntimePreparation:()=>true,prepareNativeRuntimePrerequisites:()=>plan,buildPreparedInventoryArtifacts,Promise,join,NATIVE_RUNTIME_RENDERER:'unit-only-renderer.cjs',
   });
   const prepared=await run(lock,'unused','longhorn',origin,'production');
   assert.deepEqual(Array.from(prepared.all),[...foundation.release,...base]);assert.deepEqual(prepared.base,base);
   assert.deepEqual(Array.from(prepared.ownerPreview),[...foundation.release,...nativePreview,...base]);
   assert.equal(prepared.all.some(item=>NATIVE_OWNER_SOURCE_PATHS.includes(item.path)),false);
+  assert.deepEqual(prepared.inventoryArtifacts.slice(0,5),[...release,...base,...nativePreview]);
+  assert.equal(prepared.inventoryArtifacts.length,6);assert.equal(prepared.foundation.nativeRuntime,plan);
 });
 
 test('actual full materialization binds the persisted auth input and feeds the same projector inputs into its read-only preview',async()=>{
@@ -153,6 +159,7 @@ test('actual full materialization binds the persisted auth input and feeds the s
   const persisted=stored.get(NATIVE_OWNER_SOURCE_PATHS[0]);
   assert.equal(persisted,bindNativeInstallerAuthEnvironment(raw(NATIVE_OWNER_SOURCE_PATHS[0]),'production','candidate'));
   assert.equal(prepared.ownerPreview.length,3);assert.equal(calls.length,2);
+  assert.equal(prepared.nativeInstallerRelease.length,3);
   assert.equal(gatewayEnvironment(prepared.ownerPreview).find(item=>item.name==='OPENSPHERE_AUTH_ENVIRONMENT').value,'production');
 });
 

@@ -56,7 +56,8 @@ function replan(f){
  const plan={schema:f.reviewed.schema,clusterUid,installationId,installedReleaseDigest:f.reviewed.installedReleaseDigest,installedRecordUid:f.record.metadata.uid,installedRecordResourceVersion:f.record.metadata.resourceVersion,
   identityBinding:{uid:f.identity.metadata.uid,resourceVersion:f.identity.metadata.resourceVersion,contentSha256:sha(f.identity)},releaseDigest:f.target.releaseDigest,
   inputSha256:sha(f.reviewed),entries:[{object:{kind:'ConfigMap',metadata:{name:'opensphere-r2d2-runtime-policy'},data:{'preparation.json':JSON.stringify(f.reviewed)}}}]};
- plan.planDigest=sha(plan);f.prepared={all:[{yaml:JSON.stringify(f.after)},{yaml:JSON.stringify(f.otherAfter)}],foundation:{nativeRuntime:plan}};
+ const all=[{path:'synthetic-gateway.json',yaml:JSON.stringify(f.after)},{path:'synthetic-core.json',yaml:JSON.stringify(f.otherAfter)}];
+ plan.planDigest=sha(plan);f.prepared={all,inventoryArtifacts:all,foundation:{nativeRuntime:plan}};
 }
 function compare(f,nativeRecovery=false){return comparePreparedOwners(f.previous,f.target,f.prepared,{verifiedBom:{bom:f.bom,digest:f.target.releaseBom.digest},client:f.client,now,nativeRecovery});}
 function interrupted(state='already-native'){

@@ -6,6 +6,7 @@ import {mkdirSync,mkdtempSync,readFileSync,readdirSync,rmSync,unlinkSync,writeFi
 import {tmpdir} from 'node:os';
 import {dirname,join,resolve} from 'node:path';
 import vm from 'node:vm';
+import {buildPreparedInventoryArtifacts} from '../src/prepared-resource-inventory.mjs';
 import {fetchFoundationInstallerArtifacts,fetchReleaseArtifact,FOUNDATION_ARTIFACT_PATHS} from '../src/bootstrap.mjs';
 import {NATIVE_RUNTIME_RENDERER,NATIVE_RUNTIME_SOURCE_PATHS,NATIVE_JOURNAL,NATIVE_ACTION_INTENT,NATIVE_SESSION_FENCE,prepareNativeRuntimePrerequisites} from '../src/r2d2-native-prerequisites.mjs';
 import {INSTALLATION_IDENTITY_CONFIGMAP} from '../src/installation-identity.mjs';
@@ -93,10 +94,12 @@ test('component preparation downloads the same real closure at the exact C_AI re
       fetchReleaseArtifact:(selected,path,options)=>{assert.equal(selected,lock);assert.equal(options.sourceRevision,lock.components.osaaGateway.sourceRevision);return source.read(path,options);},
       writeReleaseArtifact:async(directory,path,contents)=>writeArtifact(directory,path,contents),
       readVerifiedMigrationManifest:async(selected,revision)=>{assert.equal(revision,capture.sourceRevision);return {manifest};},SUPABASE_MIGRATION_MANIFEST:'backend/supabase/migrations/manifest.json',
-      prepareNativeRuntimePrerequisites:(selected,options)=>prepareNativeRuntimePrerequisites(selected,{...options,kubectl:reader.kubectl}),join};
+      prepareNativeRuntimePrerequisites:(selected,options)=>prepareNativeRuntimePrerequisites(selected,{...options,kubectl:reader.kubectl}),buildPreparedInventoryArtifacts,join};
     const run=vm.runInNewContext(body+';prepareComponentRelease',context);
     const prepared=await run(lock,root,'unused','https://console.test','development',{changedComponents:['osaaGateway'],includeMigrations:false,r2d2RuntimePolicy:policyInput});
     assert.equal(prepared.foundation.nativeRuntime.entries.length,9);
+    assert.equal(prepared.inventoryArtifacts.length,prepared.all.length+1);
+    assert.equal(prepared.inventoryArtifacts.at(-1).path,'setup/r2d2-native-runtime-prerequisites#inventory');
     assert.deepEqual(source.calls.sort(),[...NATIVE_RUNTIME_SOURCE_PATHS].sort());assert.ok(reader.calls.every(args=>args.includes('get')));
   }finally{rmSync(root,{recursive:true,force:true});}
 });
