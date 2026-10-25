@@ -25,6 +25,9 @@ const foundation={target:true,root:'/verified-release',migration:{evidence:{
 function harness({failBeszel=false}={}) {
   const state={reader:false,api:false,native:false,legacy:false,calls:[],progress:[],nativeArgs:null};
   const context={join,currentKubeContext:()=> 'docker-desktop',
+    // The capability probe reads the materialized installer; its own unit test covers that read.
+    notificationDispatcherInstallerArguments:(current)=>current.components.notificationDispatcher
+      ?['-NotificationDispatcherImage',current.components.notificationDispatcher.image]:[],
     runLegacyFoundationInstallers:()=>{state.legacy=true;},
     run:(executable,args)=>{
       assert.equal(executable,'pwsh');
@@ -167,4 +170,13 @@ test('native installer receives the admitted personal Gateway image exactly once
   assert.equal(args[args.indexOf('-R2d2OpenClawGatewayImage')+1],nativeImage);
   assert.equal(args[args.indexOf('-OsaaGatewayImage')+1],current.components.osaaGateway.image);
   assert.equal(args.includes('-R2d2HermesWorkerImage'),false);
+});
+test('native installer receives the notification dispatcher image only from a lock that carries it',()=>{
+  const without=harness();
+  without.run(lock,foundation,'standard','https://localhost:1114',without.progress);
+  assert.equal(without.state.nativeArgs.includes('-NotificationDispatcherImage'),false);
+  const image=`ghcr.io/fixture/notificationDispatcher@sha256:${'9'.repeat(64)}`;
+  const h=harness();
+  h.run({...lock,components:{...lock.components,notificationDispatcher:{image}}},foundation,'standard','https://localhost:1114',h.progress);
+  assert.equal(h.state.nativeArgs[h.state.nativeArgs.indexOf('-NotificationDispatcherImage')+1],image);
 });

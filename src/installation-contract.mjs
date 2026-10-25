@@ -69,6 +69,8 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     'clusterrolebinding/opensphere-shell-runtime-token-reviewer',
     // OS Shell API admission of the Foundation system actor, bound to the same reviewer role (Console d429dfe9).
     'clusterrolebinding/opensphere-shell-api-token-reviewer',
+    // Alertmanager intake TokenReview for console-api (alert design A3, AL-P1; Console R2-C1).
+    'clusterrolebinding/opensphere-console-api-token-reviewer',
     'clusterrolebinding/opensphere-cluster-manager-runtime',
     'clusterrolebinding/opensphere-hiss-diagnostics',
     'clusterrolebinding/opensphere-extension-installation-profile-reader',
@@ -76,6 +78,7 @@ export const MANAGED_CLUSTER_SCOPED_RESOURCES = Object.freeze({
     'clusterrole/opensphere-registry',
     'clusterrole/opensphere-console-osaa-gateway-environment-reader',
     'clusterrole/opensphere-shell-runtime-token-reviewer',
+    'clusterrole/opensphere-console-api-token-reviewer',
     'clusterrole/opensphere-cluster-manager-runtime',
     'clusterrole/opensphere-hiss-diagnostics',
     'clusterrole/opensphere-extension-installation-profile-reader'
