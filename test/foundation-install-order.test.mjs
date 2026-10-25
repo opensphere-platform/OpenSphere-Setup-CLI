@@ -125,6 +125,12 @@ test('controller definitions and trust are ready before foundation readiness; Ma
   assert.equal(h.state.foundation,true);
   assert.deepEqual(h.state.applied,[crdPath,trustPath,'deploy/opensphere-console.yaml']);
 });
+test('native Owner comparison preview never enters early base apply or duplicates installer execution',async()=>{
+  const h=preparedHarness();
+  await h.run({...preparedFixture,ownerPreview:[{path:'apps/osaa-gateway/deploy.yaml',yaml:'comparison only'}]});
+  assert.deepEqual(h.state.applied,[crdPath,trustPath,'deploy/opensphere-console.yaml']);
+  assert.equal(h.state.foundation,true);
+});
 test('unestablished controller definitions stop before any foundation workload',async()=>{
   const h=preparedHarness({failEstablishment:true});
   await assert.rejects(h.run(),/CRD did not establish/);

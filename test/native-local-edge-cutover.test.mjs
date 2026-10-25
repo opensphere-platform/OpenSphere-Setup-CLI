@@ -6,12 +6,14 @@ import {createHash} from 'node:crypto';
 import {readFileSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {join} from 'node:path';
-import {comparePreparedOwners,requiresOwnerPreservation} from '../src/adoption-owner-preservation.mjs';
+import {comparePreparedOwners,requiresOwnerPreservation,projectOwnerObservation} from '../src/adoption-owner-preservation.mjs';
 import {COMPONENTS,AUXILIARY_ARTIFACTS,RELEASE_API_VERSION,SOURCE,LOCAL_EDGE_TRUST,
   RELEASE_TRUST,calculateReleaseDigest,validateReleaseTransition,verifyReleaseLock} from '../src/release.mjs';
 import {upgrade,installationStateDocument} from '../src/bootstrap.mjs';
 import {installationRecordDigest} from '../src/forward-repair.mjs';
 import {readinessProfile,verifyOwnerPreservation,verifyLocalNativeOwnerPreservation} from '../src/release-readiness-profile.mjs';
+import {fetchLocalNativeOwnerReferenceSources} from '../src/owner-release-references.mjs';
+import {buildNativeCutoverProof} from '../src/native-r2d2-owner-cutover.mjs';
 const sha=x=>'sha256:'+createHash('sha256').update(JSON.stringify(x)).digest('hex');
 const image=(name,c='a')=>`ghcr.io/opensphere-platform/${name}@sha256:${c.repeat(64)}`;
 const installationId='11111111-1111-4111-8111-111111111111',clusterUid='22222222-2222-4222-8222-222222222222';
@@ -103,12 +105,118 @@ async function interrupted(state='already-native'){
  f.previous=structuredClone(f.target);f.reviewed.installedReleaseDigest=f.target.releaseDigest;replan(f);f.failAt='';f.events=[];f.calls=[];return f;
 }
 function mutateState(f,change){const state=JSON.parse(f.record.data['state.json']);change(state);f.record.data['state.json']=JSON.stringify(state);}
+function editReferenceCheckpoint(f,change){mutateState(f,state=>{
+ const checkpoint=state.transition.ownerReferenceCheckpoint;change(checkpoint);delete checkpoint.checkpointDigest;
+ const stable=v=>Array.isArray(v)?v.map(stable):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(key=>[key,stable(v[key])])):v;
+ checkpoint.checkpointDigest=sha(stable(checkpoint));
+});}
 function zeroWrites(f){assert.ok(f.events.every(e=>!['namespaces','registry','install-target','prune','inventory'].includes(e)&&!e.startsWith('record:')));assert.ok(f.calls.every(c=>c.args[0]==='get'||c.args.includes('--dry-run=server')));}
+async function withReferenceOwner(f,{gitea=false,baseline=f.previous}={}){
+ if(gitea){
+  for(const [owner,release]of [[f.other,baseline],[f.otherAfter,f.target]]){
+   owner.metadata.name='opensphere-gitea';owner.metadata.namespace='opensphere-console-change';owner.spec.replicas=1;
+   owner.spec.template.spec.containers=[{name:'gitea',image:release.components.gitea.image,env:[]}];
+   owner.spec.template.spec.initContainers=['materialize-config','materialize-signing-key'].map(name=>({name,image:release.components.gitea.image,command:['same-reviewed-command']}));
+  }
+ }else for(const [owner,release]of [[f.other,baseline],[f.otherAfter,f.target]])owner.spec.template.spec.initContainers=[{name:'console-index-content',image:release.auxiliaryArtifacts.consoleIndexContent.image,command:['same-reviewed-command']}];
+ replan(f);
+ f.prepared.ownerReferenceSources=await fetchLocalNativeOwnerReferenceSources(baseline,f.target,async(_lock,path)=>readFileSync(new URL('./fixtures/native-owner-preview-C3/'+path,import.meta.url),'utf8'));
+ return f;
+}
+test('verified init references preserve raw Owner proofs and capture their original lock before any apply',async()=>{
+ const f=await withReferenceOwner(fixture()),raw=structuredClone(f.other),result=await compare(f);
+ assert.equal(result.status,'preserved');assert.equal(result.ownerReferenceCheckpoint.schema,'opensphere.local-native-owner-reference-checkpoint/v1');
+ assert.deepEqual(result.ownerReferenceCheckpoint.previousLock,f.previous);assert.equal(result.ownerReferenceCheckpoint.recordUid,f.record.metadata.uid);
+ assert.equal(result.ownerReferenceCheckpoint.owners.length,1);assert.equal(result.ownerReferenceCheckpoint.owners[0].beforeConfigurationDigest,projectOwnerObservation(raw,{}).configurationDigest);
+ assert.equal(result.nativeCutoverCheckpoint.proof.beforeConfigurationDigest,projectOwnerObservation(f.before,{}).configurationDigest);assert.equal(Object.keys(result.nativeCutoverCheckpoint.proof).length,13);
+ assert.deepEqual(f.other,raw);zeroWrites(f);
+});
+async function interruptedReferences(gitea=false){
+ const f=await withReferenceOwner(fixture(),{gitea}),baseline=structuredClone(f.previous);f.failAt='already-native';
+ await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime}),/native-runtime-forward-repair-required/);
+ const persisted=JSON.parse(f.record.data['state.json']).transition.ownerReferenceCheckpoint;assert.ok(persisted);
+ f.previous=structuredClone(f.target);f.reviewed.installedReleaseDigest=f.target.releaseDigest;await withReferenceOwner(f,{gitea,baseline});f.failAt='';f.events=[];f.calls=[];
+ if(gitea)f.workloads[1].spec.replicas=0;
+ else f.workloads[1].spec.template.spec.initContainers[0].image=baseline.auxiliaryArtifacts.consoleIndexContent.image;
+ return {f,baseline,persisted};
+}
+test('same-target recovery normally reverifies the original lock and retains exact old init references',async()=>{
+ const {f,baseline,persisted}=await interruptedReferences();
+ const prepare=f.runtime.prepareRelease;f.runtime.prepareRelease=async(...args)=>{assert.deepEqual(args[5].ownerReferenceBaseline,baseline);return prepare(...args);};
+ const apply=f.runtime.installPreparedRelease;f.runtime.installPreparedRelease=(...args)=>{assert.deepEqual(JSON.parse(f.record.data['state.json']).transition.ownerReferenceCheckpoint,persisted);return apply(...args);};
+ await upgrade(f.previous,f.target,{runtime:f.runtime,oneWayRecoveryRecordDigest:installationRecordDigest(f.record)});
+ assert.ok(f.inspected.some(image=>image===baseline.auxiliaryArtifacts.consoleIndexContent.image));
+ assert.equal(JSON.parse(f.record.data['state.json']).phase,'Ready');
+});
+test('source-verified target-staged Gitea at actual replicas0 is observed and restored to the actual final1',async()=>{
+ const {f,persisted}=await interruptedReferences(true);
+ const apply=f.runtime.installPreparedRelease;f.runtime.installPreparedRelease=(...args)=>{assert.deepEqual(JSON.parse(f.record.data['state.json']).transition.ownerReferenceCheckpoint,persisted);return apply(...args);};
+ await upgrade(f.previous,f.target,{runtime:f.runtime,oneWayRecoveryRecordDigest:installationRecordDigest(f.record)});
+ assert.equal(f.workloads[1].spec.replicas,1);assert.equal(JSON.parse(f.record.data['state.json']).phase,'Ready');
+});
+for(const [name,change]of [
+ ['unknown init artifact',f=>{f.workloads[1].spec.template.spec.initContainers[0].image=image('opensphere-console-index-content','e');}],
+ ['changed command',f=>{f.workloads[1].spec.template.spec.initContainers[0].command=['unapproved'];}],
+ ['replaced UID',f=>{f.workloads[1].metadata.uid='replacement';}],
+ ['source evidence with recomputed checksum',f=>editReferenceCheckpoint(f,checkpoint=>{checkpoint.sourceEvidenceDigest='sha256:'+'e'.repeat(64);})],
+ ['another original lock with recomputed checksum',f=>editReferenceCheckpoint(f,checkpoint=>{checkpoint.previousLock=f.target;})],
+ ['rebound UID with recomputed checksum',f=>editReferenceCheckpoint(f,checkpoint=>{checkpoint.owners[0].uid='replacement';})],
+ ['new checkpoint field with recomputed checksum',f=>editReferenceCheckpoint(f,checkpoint=>{checkpoint.unreviewed=true;})],
+])test('reference recovery refuses '+name+' before any write',async()=>{
+ const {f}=await interruptedReferences();change(f);await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime,oneWayRecoveryRecordDigest:installationRecordDigest(f.record)}));zeroWrites(f);
+});
+for(const [name,change]of [
+ ['replaced UID',f=>{f.workloads[1].metadata.uid='replacement';}],
+ ['changed target spec',f=>{f.workloads[1].spec.template.spec.containers[0].env.push({name:'DRIFT',value:'unexpected'});}],
+ ['old primary image',f=>{f.workloads[1].spec.template.spec.containers[0].image=image('opensphere-console-gitea','a');}],
+])test('staged Gitea recovery refuses '+name+' without fabricating an active Owner',async()=>{
+ const {f}=await interruptedReferences(true);change(f);await assert.rejects(upgrade(f.previous,f.target,{runtime:f.runtime,oneWayRecoveryRecordDigest:installationRecordDigest(f.record)}));zeroWrites(f);
+});
 test('local native cannot silently skip Owner preservation because it has no signed BOM',()=>{const f=fixture();assert.equal(requiresOwnerPreservation(f.target,f.previous),true);assert.equal(f.target.releaseBom,undefined);});
 test('actual local exact-image verification and original proof produce a non-signature checkpoint',async()=>{
  const f=fixture(),result=await compare(f),c=result.nativeCutoverCheckpoint;
  assert.equal(result.status,'preserved');assert.equal(Object.keys(c.proof).length,13);assert.equal(c.targetReleaseDigest,f.target.releaseDigest);assert.equal(c.targetTrustType,'localhost-edge/v1');assert.equal(c.targetBomDigest,undefined);
  assert.equal(c.schema,'opensphere.r2d2-local-edge-cutover-checkpoint/v1');assert.equal(c.recordUid,f.record.metadata.uid);assert.equal(f.inspected.length,46);assert.equal(f.target.releaseBom,undefined);zeroWrites(f);
+});
+test('full native Owner preview is checked without adding native workloads to the early apply set',async()=>{
+ const f=fixture();f.prepared.ownerPreview=f.prepared.all;f.prepared.all=[f.prepared.all[1]];
+ const before=structuredClone(f.prepared.all),result=await compare(f);
+ assert.equal(result.status,'preserved');assert.deepEqual(f.prepared.all,before);zeroWrites(f);
+});
+test('an explicit missing or invalid Owner preview cannot fall back to an otherwise complete apply set',async()=>{
+ for(const preview of [[],null]){
+  const f=fixture();f.prepared.ownerPreview=preview;
+  await assert.rejects(compare(f),preview===null?/artifact set is missing/:/Active Owner omitted/);zeroWrites(f);
+ }
+});
+test('extra Owner drift inside a full preview still fails the unchanged native preservation contract',async()=>{
+ const f=fixture();const changed=structuredClone(f.otherAfter);changed.spec.template.spec.serviceAccountName='unapproved-owner';
+ f.prepared.ownerPreview=[f.prepared.all[0],{yaml:JSON.stringify(changed)}];
+ await assert.rejects(compare(f));zeroWrites(f);
+});
+test('only equal unexpanded C_AI environment entries may change order outside the thirteen engine changes',async()=>{
+ const f=fixture();f.after.spec.template.spec.containers[0].env.unshift({name:'ORDER_ONLY',value:'same'});
+ f.before.spec.template.spec.containers[0].env.push({name:'ORDER_ONLY',value:'same'});replan(f);
+ const before=structuredClone(f.before),after=structuredClone(f.after),result=await compare(f);
+ assert.equal(result.status,'preserved');assert.equal(Object.keys(result.nativeCutoverCheckpoint.proof).length,13);
+ assert.equal(result.nativeCutoverCheckpoint.proof.beforeConfigurationDigest,projectOwnerObservation(before,{}).configurationDigest);
+ assert.equal(result.nativeCutoverCheckpoint.proof.afterConfigurationDigest,projectOwnerObservation(after,{}).configurationDigest);
+ assert.deepEqual(f.before,before);assert.deepEqual(f.after,after);zeroWrites(f);
+});
+test('formal native equality keeps its original environment order requirement',()=>{
+ const f=fixture();f.previous.trust=f.target.trust=RELEASE_TRUST;
+ f.before.spec.template.spec.containers[0].env.push({name:'ORDER_ONLY',value:'same'});
+ f.after.spec.template.spec.containers[0].env.unshift({name:'ORDER_ONLY',value:'same'});replan(f);
+ assert.throws(()=>buildNativeCutoverProof({previousLock:f.previous,targetLock:f.target,plan:f.prepared.foundation.nativeRuntime,before:f.before,after:f.after}),/more than the reviewed engine boundary/);
+});
+for(const [label,change]of[
+ ['changed value',f=>{f.after.spec.template.spec.containers[0].env[0].value='changed';}],
+ ['new environment name',f=>{f.after.spec.template.spec.containers[0].env.push({name:'UNREVIEWED',value:'added'});}],
+ ['duplicate environment name',f=>{f.after.spec.template.spec.containers[0].env.push({name:'UNCHANGED',value:'same'});}],
+ ['valueFrom instead of literal',f=>{f.after.spec.template.spec.containers[0].env[0]={name:'UNCHANGED',valueFrom:{secretKeyRef:{name:'unapproved',key:'secret'}}};}],
+ ['ordered expansion on both sides',f=>{for(const owner of[f.before,f.after])owner.spec.template.spec.containers[0].env.push({name:'ORDERED',value:'$(UNCHANGED)'});}],
+])test('C_AI order correction rejects '+label+' without writes',async()=>{
+ const f=fixture();change(f);replan(f);await assert.rejects(compare(f));zeroWrites(f);
 });
 for(const state of ['pending-legacy','already-native'])test('real local upgrade records proof before '+state+' failure and explicitly recovers exactly its target',async()=>{
  const f=await interrupted(state),checkpoint=structuredClone(f.checkpoint),record=installationRecordDigest(f.record);
