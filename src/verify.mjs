@@ -4,6 +4,7 @@ import net from 'node:net';
 import {verifyPublicConsoleEndpoint} from './console-endpoint-verification.mjs';
 import { kubectl } from './process.mjs';
 import { verifyOfficialSkills } from './official-skills-verification.mjs';
+import { verifyNativeOfficialSkills } from './native-official-skills-verification.mjs';
 import { verifyKnowledgeDelivery } from './knowledge-delivery.mjs';
 import knowledgeInstallation from './knowledge-installation.cjs';
 import {
@@ -982,7 +983,9 @@ export async function verifyInstallation(lock, {
   const beszel = await verifyBeszel(lock, config.installationState, recordedEvidence, historicalBootstrapVerified);
   const consoleApi = await verifyConsoleApi();
   const knowledgeDelivery = verifyKnowledgeDelivery(lock);
-  const officialSkills = await verifyOfficialSkills({ withService, expected: lock.components?.osaaGateway?.officialSkills });
+  const officialSkills = lock.components?.r2d2OpenClawGateway
+    ?await verifyNativeOfficialSkills(lock,{withService})
+    :await verifyOfficialSkills({ withService, expected: lock.components?.osaaGateway?.officialSkills });
   const evidence = {
     channel: lock.channel,
     releaseDigest: lock.releaseDigest,
