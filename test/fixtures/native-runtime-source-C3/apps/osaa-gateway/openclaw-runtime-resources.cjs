@@ -173,7 +173,7 @@ function managedConfiguration(config, target = false) {
     assert.ok(Array.isArray(provider.models) && provider.models.length > 0, 'Managed model inventory is missing');
     assert.deepEqual(config.memory.search, {provider:'none',fallback:'none',sources:['memory'],rememberAcrossConversations:false}, 'Managed memory privacy differs');
     assert.deepEqual(config.plugins, {allow:['opensphere-console-bridge','memory-core'],load:{paths:['/opt/opensphere-integration/opensphere-plugin']},entries:{'opensphere-console-bridge':{enabled:true},'memory-core':{enabled:true}}}, 'Managed plugin boundary differs');
-    assert.deepEqual(config.tools, {fs:{workspaceOnly:true},exec:{mode:'deny'},codeMode:false,elevated:{enabled:false},deny:['group:runtime','cron','sessions_spawn']}, 'Managed tool authority differs');
+    assert.deepEqual(config.tools, {allow:['group:fs','group:memory','get_os_shell_commands','execute_os_shell_command'],fs:{workspaceOnly:true},exec:{mode:'deny'},codeMode:false,elevated:{enabled:false},deny:['group:runtime','cron','sessions_spawn']}, 'Managed tool authority differs');
     assert.equal(config.cron.enabled, false, 'Native automation remains disabled');
   }
   return {paths, projection};

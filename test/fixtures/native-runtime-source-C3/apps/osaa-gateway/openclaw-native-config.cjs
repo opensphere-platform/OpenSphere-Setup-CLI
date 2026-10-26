@@ -13,7 +13,8 @@ function renderNativeOpenClawConfig(){
    entries:{'opensphere-console-bridge':{enabled:true},'memory-core':{enabled:true}}},
   // Native personal files and FTS memory remain available. Operating host
   // commands use OS Shell; direct runtime/process execution has no approval path.
-  tools:{fs:{workspaceOnly:true},exec:{mode:'deny'},codeMode:false,elevated:{enabled:false},deny:['group:runtime','cron','sessions_spawn']},
+  tools:{allow:['group:fs','group:memory','get_os_shell_commands','execute_os_shell_command'],
+   fs:{workspaceOnly:true},exec:{mode:'deny'},codeMode:false,elevated:{enabled:false},deny:['group:runtime','cron','sessions_spawn']},
   cron:{enabled:false},
  };
 }
