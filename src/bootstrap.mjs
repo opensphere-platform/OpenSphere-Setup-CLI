@@ -491,10 +491,18 @@ export const OS_SHELL_MANIFEST = Object.freeze({
   ]
 });
 
+// C_NOTIFY (alert design A3, Console R2-C1). The native runtime installer creates its database login and key Secret
+// on first activation; a component release afterwards only replaces the workload.
+export const NOTIFICATION_DISPATCHER_MANIFEST = Object.freeze({
+  path: 'apps/notification-dispatcher/deploy.yaml',
+  replacements: [['__OPENSPHERE_NOTIFICATION_DISPATCHER_IMAGE__', 'notificationDispatcher']]
+});
+
 const ACTIVATED_MODULE_MANIFESTS = Object.freeze([
   OSAA_GATEWAY_MANIFEST,
   { path: 'apps/osdst/deploy.yaml', replacements: [['__OPENSPHERE_OSDST_IMAGE__', 'osdst']] },
-  OS_SHELL_MANIFEST
+  OS_SHELL_MANIFEST,
+  NOTIFICATION_DISPATCHER_MANIFEST
 ]);
 
 const TARGET_FOUNDATION_MANIFESTS = Object.freeze([
@@ -534,6 +542,7 @@ export const FOUNDATION_ARTIFACT_PATHS = Object.freeze([
   'apps/osdst/deploy.yaml',
   'apps/os-shell-control/deploy.yaml',
   'apps/os-shell-control/runtime-template.js',
+  'apps/notification-dispatcher/deploy.yaml',
   'backend/gitea/bootstrap/install.ps1',
   'backend/gitea/bootstrap/configure-signing.ps1',
   'backend/gitea/bootstrap/control-plane-bootstrap.ps1',
@@ -752,9 +761,16 @@ export const COMPONENT_ROLLOUTS = Object.freeze({
   r2d2OpenClawGateway: [['opensphere-console', 'deployment/opensphere-console-osaa-gateway', '600s']],
   osdst: [['opensphere-console', 'deployment/opensphere-osdst', '600s']],
   osaaGovernedAdapter: [],
-  notificationDispatcher: [],
+  notificationDispatcher: [['opensphere-console', 'deployment/opensphere-notification-dispatcher', '600s']],
   recovery: []
 });
+
+export function notificationDispatcherInstallerArguments(lock, foundationRoot, { read = readFileSync } = {}) {
+  const image = lock.components?.notificationDispatcher?.image;
+  if (!image) return [];
+  const installer = read(join(foundationRoot, 'scripts', 'Install-ConsoleNativeRuntime.ps1'), 'utf8');
+  return /\[string\]\$NotificationDispatcherImage\b/u.test(installer) ? ['-NotificationDispatcherImage', image] : [];
+}
 
 function hex(bytes) {
   return randomBytes(bytes).toString('hex');
@@ -1458,6 +1474,8 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
     '-OsShellControlImage', lock.auxiliaryArtifacts.osShellControl.image,
     '-OsShellRuntimeImage', lock.auxiliaryArtifacts.osShellRuntime.image,
     '-OsCliImage', lock.auxiliaryArtifacts.cliArtifacts.image,
+    // C_NOTIFY only when the release carries it and its installer knows the parameter (rollback baselines do not).
+    ...notificationDispatcherInstallerArguments(lock, foundation.root),
     '-ConsoleUrl', consoleUrl,
     '-ReleaseChannel', lock.channel,
     '-ReleaseDigest', lock.releaseDigest,

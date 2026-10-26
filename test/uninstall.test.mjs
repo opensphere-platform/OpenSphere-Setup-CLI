@@ -60,6 +60,7 @@ test('managed cluster RBAC owns every cluster authority installed by Console boo
     'clusterrolebinding/opensphere-console-osaa-gateway-environment-reader',
     'clusterrolebinding/opensphere-shell-runtime-token-reviewer',
     'clusterrolebinding/opensphere-shell-api-token-reviewer',
+    'clusterrolebinding/opensphere-console-api-token-reviewer',
     'clusterrolebinding/opensphere-cluster-manager-runtime',
     'clusterrolebinding/opensphere-hiss-diagnostics',
     'clusterrolebinding/opensphere-extension-installation-profile-reader',
@@ -67,6 +68,7 @@ test('managed cluster RBAC owns every cluster authority installed by Console boo
     'clusterrole/opensphere-registry',
     'clusterrole/opensphere-console-osaa-gateway-environment-reader',
     'clusterrole/opensphere-shell-runtime-token-reviewer',
+    'clusterrole/opensphere-console-api-token-reviewer',
     'clusterrole/opensphere-cluster-manager-runtime',
     'clusterrole/opensphere-hiss-diagnostics',
     'clusterrole/opensphere-extension-installation-profile-reader'

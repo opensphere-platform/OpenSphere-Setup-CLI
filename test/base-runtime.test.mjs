@@ -168,6 +168,7 @@ test('Setup consumes the Console global migration manifest and materialized-rele
     'apps/osdst/deploy.yaml',
     'apps/os-shell-control/deploy.yaml',
     'apps/os-shell-control/runtime-template.js',
+    'apps/notification-dispatcher/deploy.yaml',
     'backend/gitea/bootstrap/install.ps1',
     'backend/gitea/bootstrap/configure-signing.ps1',
     'backend/gitea/bootstrap/control-plane-bootstrap.ps1',
