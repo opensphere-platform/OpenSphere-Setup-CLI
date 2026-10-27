@@ -6,8 +6,9 @@
 //     Tables larger than the size guard (1 GiB by default, measured on the source) are compared by row count only and
 //     listed as such; only supabase_vault's tables may be missing (user decision I1);
 //   - definitions: columns with types, defaults, identity and generation; indexes; constraints; views; functions
-//     (pg_get_functiondef); sequences with their last value. Objects that belong to an extension are compared through
-//     the extension line instead (the CNPG image ships a newer vector);
+//     (pg_get_functiondef); sequences with their last value; comments; large objects. Objects that belong to an
+//     extension are compared through the extension line instead (the CNPG image ships a newer vector). A CHECK or view
+//     whose text the restore re-rendered passes only when the source text, parsed on the target, renders the same;
 //   - the migration ledger: count, head and an md5 over every row;
 //   - roles: attributes, password hash, settings (authenticator loses session_preload_libraries; supabase_admin gets a
 //     new SCRAM hash for the same password from managed.roles; CNPG adds streaming_replica and cnpg_metrics_exporter);
@@ -106,9 +107,7 @@ export const FINGERPRINT_SQL = `${HEADER}SELECT line FROM (
   UNION ALL SELECT 'defacl|' || pg_get_userbyid(defaclrole) || '|' || coalesce(n.nspname, '*') || '|' || defaclobjtype::text || '|' || defaclacl::text
     FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
   UNION ALL SELECT 'publication|' || pubname || '|' || pg_get_userbyid(pubowner) || ' all=' || puballtables FROM pg_publication
-  -- n=: the definition without parentheses and spacing, and for views also without column aliases (see compareParity).
-  UNION ALL SELECT p || md5(d) || ' n=' || md5(regexp_replace(CASE WHEN p LIKE 'def|view|%'
-      THEN regexp_replace(d, '[[:space:]]+AS[[:space:]]+("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*)', '', 'g') ELSE d END, '[()[:space:]]', '', 'g')) FROM (
+  UNION ALL SELECT p || md5(d) FROM (
     SELECT 'def|columns|' || n.nspname || '.' || c.relname || ':' || c.relkind::text || '|' AS p, coalesce(string_agg(a.attname || ' ' || format_type(a.atttypid, a.atttypmod)
         || ' nn=' || a.attnotnull || ' id=' || a.attidentity::text || ' gen=' || a.attgenerated::text || ' coll=' || coalesce(co.collname, '')
         || ' def=' || coalesce(pg_get_expr(ad.adbin, ad.adrelid), ''), ',' ORDER BY a.attnum), '') AS d
@@ -135,11 +134,69 @@ export const FINGERPRINT_SQL = `${HEADER}SELECT line FROM (
   UNION ALL SELECT 'seq|' || schemaname || '.' || sequencename || '|' || coalesce(last_value::text, 'unset') || ' inc=' || increment_by
       || ' min=' || min_value || ' max=' || max_value || ' cycle=' || cycle
     FROM pg_sequences WHERE schemaname NOT IN ('pg_catalog','information_schema')
+  -- Comments on user objects (not on extensions or their members, not on objects initdb made), and large objects.
+  UNION ALL SELECT 'comment|objects|' || count(*)::text || ' ' || coalesce(md5(string_agg(pg_describe_object(d.classoid, d.objoid, d.objsubid) || '=' || d.description,
+      E'\\n' ORDER BY pg_describe_object(d.classoid, d.objoid, d.objsubid))), '')
+    FROM pg_description d WHERE d.objoid >= 16384 AND d.classoid <> 'pg_extension'::regclass
+      AND NOT EXISTS (SELECT 1 FROM pg_depend xd WHERE xd.classid = d.classoid AND xd.objid = d.objoid AND xd.deptype = 'e')
+  UNION ALL SELECT 'lo|metadata|' || count(*)::text || ' ' || coalesce(md5(string_agg(oid::text || ':' || pg_get_userbyid(lomowner) || ':' || coalesce(lomacl::text, ''), ',' ORDER BY oid)), '')
+    FROM pg_largeobject_metadata
+  UNION ALL SELECT 'lo|data|' || coalesce(md5(string_agg(loid::text || ':' || pageno::text || ':' || md5(data), ',' ORDER BY loid, pageno)), '') FROM pg_largeobject
 ) x ORDER BY 1;
 ROLLBACK;
 `;
 
-const KEYED = ['ledger', 'role', 'member', 'ext', 'db', 'rls', 'func', 'policy', 'trigger', 'evtrigger', 'defacl', 'publication', 'content', 'seq'];
+// The text of every CHECK constraint and view, kept from the source (finding 5 of the second review). A restore
+// re-renders these: it parses "((a AND b) AND c)" into one flat AND, and gives a view's UNION arms "AS text" aliases,
+// so their deparsed text changes although the definition does not (lab 2026-10-27: 7 CHECKs, 1 view). The parity
+// step parses the source text on the target, inside a transaction it rolls back, and compares what the target renders
+// with the target's own object (rerenderSql). Nothing is normalised by pattern.
+export const DEFINITIONS_SQL = `${HEADER}SELECT coalesce(json_agg(x ORDER BY x.key), '[]') FROM (
+  SELECT 'constraint|' || n.nspname || '.' || c.relname || '.' || con.conname AS key, 'constraint' AS kind, n.nspname AS schema, c.relname AS "table",
+      pg_get_constraintdef(con.oid) AS text
+    FROM pg_constraint con JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE con.contype = 'c' AND c.relkind IN ('r','p') AND ${USER_SCHEMA('n')} AND ${NOT_EXTENSION_MEMBER('pg_class', 'c.oid')}
+  UNION ALL SELECT 'view|' || n.nspname || '.' || c.relname, 'view', n.nspname, c.relname, pg_get_viewdef(c.oid)
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE c.relkind = 'v' AND ${USER_SCHEMA('n')} AND ${NOT_EXTENSION_MEMBER('pg_class', 'c.oid')}
+) x;
+ROLLBACK;
+`;
+export function parseDefinitions(output) {
+  const text = String(output);
+  const start = text.indexOf('['), end = text.lastIndexOf(']');
+  if (start < 0 || end < start) throw new Error('No definitions in the output');
+  return JSON.parse(text.slice(start, end + 1));
+}
+// One savepoint per item: an item the target cannot parse prints nothing and stays a difference.
+export function rerenderSql(items) {
+  const parts = ['\\set ON_ERROR_STOP off', 'BEGIN;', 'SET LOCAL search_path = pg_catalog;'];
+  items.forEach((item, i) => {
+    if (!['constraint', 'view'].includes(item.kind)) throw new Error(`No re-render for ${item.kind}`);
+    parts.push('SAVEPOINT rerender;');
+    if (item.kind === 'constraint') {
+      if (!/^CHECK \(/.test(item.text)) throw new Error(`Not a CHECK constraint: ${item.key}`);
+      parts.push(`CREATE TEMP TABLE _opensphere_rerender_${i} (LIKE ${ident(item.schema)}.${ident(item.table)});`,
+        `ALTER TABLE pg_temp._opensphere_rerender_${i} ADD CONSTRAINT _opensphere_rerender ${item.text};`,
+        `SELECT ${lit(`rerender|${item.key}|`)} || md5(con.contype::text || ' ' || pg_get_constraintdef(con.oid) || ' valid=' || con.convalidated || ' deferrable=' || con.condeferrable || '/' || con.condeferred)`
+        + ` FROM pg_constraint con WHERE con.conrelid = 'pg_temp._opensphere_rerender_${i}'::regclass AND con.conname = '_opensphere_rerender';`);
+    } else {
+      parts.push(`CREATE TEMP VIEW _opensphere_rerender_${i} AS ${item.text.trim().replace(/;$/, '')};`,
+        `SELECT ${lit(`rerender|${item.key}|`)} || md5(pg_get_viewdef('pg_temp._opensphere_rerender_${i}'::regclass));`);
+    }
+    parts.push('ROLLBACK TO SAVEPOINT rerender;');
+  });
+  parts.push('ROLLBACK;', '');
+  return parts.join('\n');
+}
+export function parseRerendered(output) {
+  return new Map(String(output).split(/\r?\n/).filter((l) => l.startsWith('rerender|')).map((l) => {
+    const i = l.lastIndexOf('|');
+    return [l.slice('rerender|'.length, i), l.slice(i + 1)];
+  }));
+}
+
+const KEYED = ['ledger', 'role', 'member', 'ext', 'db', 'rls', 'func', 'policy', 'trigger', 'evtrigger', 'defacl', 'publication', 'content', 'seq', 'comment', 'lo'];
 export function parseFingerprint(output) {
   const fp = { rows: new Map(), acl: new Map(), settings: new Map(), def: new Map() };
   for (const k of KEYED) fp[k] = new Map();
@@ -168,7 +225,8 @@ const versionAtLeast = (a, b) => {
   return true;
 };
 
-export function compareParity(source, target) {
+// rerendered: Map(def key -> md5 of the source text as the target renders it), from rerenderSql.
+export function compareParity(source, target, { rerendered = new Map() } = {}) {
   const differences = [], explained = [], unhashed = [];
   const differ = (what, s, t) => differences.push({ what, source: s ?? null, target: t ?? null });
   const explain = (what, reason) => explained.push({ what, reason });
@@ -258,7 +316,7 @@ export function compareParity(source, target) {
     differ(`acl|${key}`, `${s.owner} ${grants(s)}`, `${t.owner} ${grants(t)}`);
   }
   // Functions, policies, triggers, event triggers, default privileges, RLS, publications, definitions, sequences.
-  for (const kind of ['func', 'policy', 'trigger', 'evtrigger', 'defacl', 'rls', 'publication', 'def', 'seq']) {
+  for (const kind of ['func', 'policy', 'trigger', 'evtrigger', 'defacl', 'rls', 'publication', 'def', 'seq', 'comment', 'lo']) {
     for (const key of both(source[kind], target[kind])) {
       const s = source[kind].get(key), t = target[kind].get(key);
       if (s === t) continue;
@@ -267,13 +325,9 @@ export function compareParity(source, target) {
         explain('func|extensions', 'extension functions of the CNPG image (vector version)'); continue;
       }
       const object = kind === 'def' ? key.slice(key.indexOf('|') + 1) : key;
-      // A deparsed definition is not stable across dump and restore (lab 2026-10-27): the restore parses
-      // "((a AND b) AND c)" into one flat AND, so a CHECK loses parentheses, and a view's UNION arms gain "AS text"
-      // aliases. The same text without parentheses and spacing (views: and without column aliases; their column names
-      // and types are compared in def|columns) is explained, by name.
-      const normalized = (x) => String(x ?? '').split(' n=')[1];
-      if (kind === 'def' && s && t && normalized(s) && normalized(s) === normalized(t)) {
-        explain(`def|${key}`, 'the same definition; the restore deparses it with other parentheses or column aliases'); continue;
+      // A CHECK or view the restore re-rendered: the source text, parsed on the target, renders exactly as the target's.
+      if (kind === 'def' && s && t && /^(constraint|view)\|/.test(key) && rerendered.get(key) === t) {
+        explain(`def|${key}`, 're-rendered by the restore: the source definition parsed on the target renders exactly as the target object'); continue;
       }
       if ((kind === 'def' || kind === 'seq') && t === undefined && inExcludedSchema(object)) { explain(`${kind}|${key}`, 'supabase_vault is not imported (I1)'); continue; }
       differ(`${kind}|${key}`, s, t);

@@ -34,6 +34,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, appendFileSync, statfsSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
+import { Worker } from 'node:worker_threads';
 import { join, resolve } from 'node:path';
 import { run } from './process.mjs';
 import { observeInstalledHissTarget } from './prepare-installed-hiss.mjs';
@@ -44,7 +45,10 @@ import {
   LEGACY_PVC, LEGACY_SELECTOR, LEGACY_SOURCE_SERVICE, LEGACY_STATEFULSET, PRIMARY_SELECTOR, SUPABASE_SECRET,
   assertConsoleDbClusterHealthy, consoleDbSql, consoleDbTarget, observeConsoleDataLayout, renderConsoleDbCluster, renderLegacySourceService,
 } from './console-db-cnpg.mjs';
-import { CONTENT_HASH_LIMIT_BYTES, FINGERPRINT_SQL, TABLES_SQL, compareParity, contentPlan, parseFingerprint, parseTables, tableDataSql } from './console-db-parity.mjs';
+import {
+  CONTENT_HASH_LIMIT_BYTES, DEFINITIONS_SQL, FINGERPRINT_SQL, TABLES_SQL, compareParity, contentPlan, parseDefinitions, parseFingerprint, parseRerendered, parseTables,
+  rerenderSql, tableDataSql,
+} from './console-db-parity.mjs';
 import { buildRepairSql } from './console-db-role-repair.mjs';
 
 export const CUTOVER_STEPS = Object.freeze(['freeze', 'dump', 'fingerprint', 'create', 'repair', 'parity', 'switch', 'reopen', 'verify', 'finalize']);
@@ -91,17 +95,51 @@ SELECT line FROM (
     FROM pg_sequences
   UNION ALL SELECT 'db|' || datname || '|' || (tup_inserted + tup_updated + tup_deleted)::text
     FROM pg_stat_database WHERE datname IS NOT NULL AND datname NOT IN ('postgres', 'template0', 'template1')
+  -- A restart or a statistics reset zeroes the counters above: either one is reported as such (second review, item 6).
+  UNION ALL SELECT 'restart|' || pg_postmaster_start_time()::text
+  UNION ALL SELECT 'statsreset|' || coalesce((SELECT stats_reset::text FROM pg_stat_database WHERE datname = 'postgres'), 'never')
 ) x ORDER BY 1;
 ROLLBACK;
 `;
 export function parseWriteCounters(output) {
-  return String(output || '').split(/\r?\n/).filter((l) => /^(tables|relfiles|sequences|db)\|/.test(l)).join('\n');
+  return String(output || '').split(/\r?\n/).filter((l) => /^(tables|relfiles|sequences|db|restart|statsreset)\|/.test(l)).join('\n');
 }
 export function counterChanges(before, after) {
   const map = (text) => new Map(String(text || '').split('\n').filter(Boolean).map((l) => { const i = l.lastIndexOf('|'); return [l.slice(0, i), l.slice(i + 1)]; }));
   const a = map(before), b = map(after);
-  return [...new Set([...a.keys(), ...b.keys()])].filter((key) => a.get(key) !== b.get(key)).map((key) => `${key}: ${a.get(key) ?? '-'} -> ${b.get(key) ?? '-'}`);
+  const say = { restart: 'the source restarted', statsreset: 'the source statistics were reset' };
+  return [...new Set([...a.keys(), ...b.keys()])].filter((key) => a.get(key) !== b.get(key))
+    .map((key) => `${say[key] ? `${say[key]} (the counters no longer prove it unchanged), ` : ''}${key}: ${a.get(key) ?? '-'} -> ${b.get(key) ?? '-'}`);
 }
+// The catalog lines of a fingerprint (everything except table rows and contents), for the switch-time comparison.
+export function catalogLines(text) {
+  return String(text || '').split(/\r?\n/).filter((l) => /^[a-z]+\|/.test(l) && !/^(rows|content|table)\|/.test(l)).sort();
+}
+
+// Renews the run lock from a worker thread, so a long synchronous kubectl call (a rollout status, a dump copy, the
+// content hashes) cannot outlast the Lease (second review, item 4). It stops, and marks the lock lost, as soon as the
+// Lease names another holder. Shared flags: [0] 0 running, 1 stop, 2 lost; [1] the last renewal (epoch seconds).
+const LEASE_RENEWER = `
+const { workerData } = require('node:worker_threads');
+const { spawnSync } = require('node:child_process');
+const { context, namespace, name, holder, acquireTime, everyMs } = workerData;
+const flag = new Int32Array(workerData.flag);
+const kubectl = (args, input) => spawnSync('kubectl', ['--context', context, '-n', namespace, ...args], { encoding: 'utf8', input, windowsHide: true, timeout: 20000 });
+const micro = () => new Date().toISOString().replace(/\\.(\\d{3})Z$/, '.$1000Z');
+let timer = null;
+function renew() {
+  if (Atomics.load(flag, 0) !== 0) { clearInterval(timer); return; }
+  const got = kubectl(['get', 'lease', name, '-o', 'json']);
+  if (got.status !== 0) return;
+  const lease = JSON.parse(got.stdout);
+  if (lease.spec?.holderIdentity !== holder || lease.spec?.acquireTime !== acquireTime) { Atomics.store(flag, 0, 2); clearInterval(timer); return; }
+  lease.spec.renewTime = micro();
+  if (Atomics.load(flag, 0) !== 0) return;
+  const put = kubectl(['replace', '-f', '-', '-o', 'name'], JSON.stringify(lease));
+  if (put.status === 0) Atomics.store(flag, 1, Math.floor(Date.now() / 1000));
+}
+timer = setInterval(renew, everyMs);
+`;
 
 const fail = (code, message, evidence) => Object.assign(new Error(message), { code, ...(evidence ? { evidence } : {}) });
 const defaultSleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
@@ -156,7 +194,8 @@ export function parseExtraWriters(values = []) {
 export function createCutover({ context, clusterUid, evidenceDir, runner = run, sleep = defaultSleep, now = () => Date.now(),
   log = (line) => console.log(line), extraWriters = [], acceptedPrerequisites = [], copyOut = copyFromPod, timeouts = {},
   holder = `${hostname()}/${process.pid}/${randomBytes(4).toString('hex')}`, breakLock = null, lockSeconds = 1800,
-  privateDirectory = ensurePrivateEvidenceDirectory, freeBytes = localFreeBytes, contentHashLimitBytes = CONTENT_HASH_LIMIT_BYTES } = {}) {
+  privateDirectory = ensurePrivateEvidenceDirectory, freeBytes = localFreeBytes, contentHashLimitBytes = CONTENT_HASH_LIMIT_BYTES,
+  backgroundRenewal = runner === run } = {}) {
   const k = createConsoleDbClient(context, runner);
   const T = { connections: 180_000, import: 3_600_000, ready: 1_800_000, rollout: 900_000, connect: 600_000, hibernate: 180_000, endpoints: 120_000, ...timeouts };
   const get = (args) => {
@@ -186,15 +225,21 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
   // ---- run lock (review finding 8) -------------------------------------------------------------------------------
   // A Lease in the data namespace. Setup runs with the administrator kubeconfig, which may write Leases there; the
   // operator fence keeps the CNPG operator off this name.
-  let lease = null;
+  let lease = null, renewer = null, flags = null;
+  const renewEvery = Math.max(1000, Math.min(60_000, Math.floor(lockSeconds * 1000 / 3)));
   const leaseDoc = (spec, resourceVersion) => ({ apiVersion: 'coordination.k8s.io/v1', kind: 'Lease',
     metadata: { name: CUTOVER_LOCK, namespace: DATA_NAMESPACE, labels: { ...LABELS }, ...(resourceVersion ? { resourceVersion } : {}) }, spec });
   const writeLease = (verb, spec, resourceVersion) => {
     const out = json(k([verb, '-f', '-', '-o', 'json'], { input: `${JSON.stringify(leaseDoc(spec, resourceVersion))}\n` }));
     return out?.metadata?.resourceVersion;
   };
+  const readLease = () => get(ns(['get', 'lease', CUTOVER_LOCK]));
+  const ours = (live) => Boolean(lease && live && live.spec?.holderIdentity === holder && live.spec?.acquireTime === lease.spec.acquireTime
+    && now() <= (Date.parse(live.spec?.renewTime || '') || 0) + lockSeconds * 1000);
+  const lost = (what, live) => fail('CUTOVER_LOCK_LOST', `${what}: the run lock ${DATA_NAMESPACE}/${CUTOVER_LOCK} is no longer held by this run `
+    + `(holder ${live?.spec?.holderIdentity ?? 'none'}, renewed ${live?.spec?.renewTime ?? '-'}); nothing more is changed`);
   function acquireLock() {
-    const live = get(ns(['get', 'lease', CUTOVER_LOCK]));
+    const live = readLease();
     const at = now();
     const spec = { holderIdentity: holder, leaseDurationSeconds: lockSeconds, acquireTime: microTime(at), renewTime: microTime(at) };
     if (live) {
@@ -206,33 +251,57 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
           + `Wait for it to finish; if that process is gone, run again with --break-lock ${current}.`);
       }
       if (current && current !== holder) log(`  run lock taken over from ${current} (${expired ? 'expired' : '--break-lock'})`);
-      lease = { spec, resourceVersion: writeLease('replace', spec, live.metadata.resourceVersion), renewed: at };
+      writeLease('replace', spec, live.metadata.resourceVersion);
     } else {
-      lease = { spec, resourceVersion: writeLease('create', spec), renewed: at };
+      writeLease('create', spec);
+    }
+    lease = { spec, renewed: at };
+    if (backgroundRenewal) {
+      flags = new Int32Array(new SharedArrayBuffer(8));
+      renewer = new Worker(LEASE_RENEWER, { eval: true, workerData: { context, namespace: DATA_NAMESPACE, name: CUTOVER_LOCK, holder,
+        acquireTime: spec.acquireTime, everyMs: renewEvery, flag: flags.buffer } });
+      renewer.unref();
     }
   }
+  // Before every change to the cluster: the Lease still names this run (holder and acquire time) and has not expired.
+  function assertLockHeld(what) {
+    if (flags && Atomics.load(flags, 0) === 2) throw lost(what, readLease());
+    const live = readLease();
+    if (!ours(live)) { lease = null; throw lost(what, live); }
+  }
+  // Without the worker (tests), every wait renews in this thread.
   function renewLock(force = false) {
-    if (!lease) return;
+    if (!lease || renewer) return;
     const at = now();
-    if (!force && at - lease.renewed < 60_000) return;
-    const spec = { ...lease.spec, renewTime: microTime(at) };
-    try { lease.resourceVersion = writeLease('replace', spec, lease.resourceVersion); } catch (error) {
-      lease = null;
-      throw fail('CUTOVER_LOCK_LOST', `The run lock ${CUTOVER_LOCK} was changed by someone else (${String(error?.stderr || error?.message).split('\n')[0]}); this run stops`);
+    if (!force && at - lease.renewed < renewEvery) return;
+    for (let attempt = 1; ; attempt += 1) {
+      const live = readLease();
+      if (!ours(live)) { lease = null; throw lost('renewal', live); }
+      try { writeLease('replace', { ...live.spec, renewTime: microTime(at) }, live.metadata.resourceVersion); break; } catch (error) {
+        if (attempt >= 3) { lease = null; throw lost(`renewal (${String(error?.stderr || error?.message).split('\n')[0]})`, live); }
+      }
     }
-    lease.spec = spec;
     lease.renewed = at;
   }
   function releaseLock() {
+    if (renewer) { Atomics.store(flags, 0, 1); renewer.terminate(); renewer = null; }
     if (!lease) return;
-    try { writeLease('replace', { leaseDurationSeconds: lockSeconds }, lease.resourceVersion); } catch { /* expires on its own */ }
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        const live = readLease();
+        if (!ours(live)) break;
+        writeLease('replace', { leaseDurationSeconds: lockSeconds }, live.metadata.resourceVersion);
+        break;
+      } catch { /* the worker may have renewed in between; otherwise the Lease expires on its own */ }
+    }
     lease = null;
   }
   // The cluster identity is checked before the Lease is written, so a wrong context gets no write at all.
   const locked = (fn) => { assertIdentity(); acquireLock(); try { return fn(); } finally { releaseLock(); } };
   const lockedAsync = async (fn) => { assertIdentity(); acquireLock(); try { return await fn(); } finally { releaseLock(); } };
-  // Every wait renews the lock.
   const pause = (ms) => { sleep(ms); renewLock(); };
+  // Every write to the cluster goes through here (the checkpoint has its own resourceVersion check).
+  const mutate = (what, args, options) => { assertLockHeld(what); return k(args, options); };
 
   // ---- checkpoint -----------------------------------------------------------------------------------------------
   const readCheckpoint = () => {
@@ -275,7 +344,7 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
     const d = get(['-n', w.namespace, 'get', 'deployment', w.name]);
     return d ? { ...w, replicas: Number(d.spec?.replicas ?? 1), selector: d.spec?.selector?.matchLabels || {} } : { ...w, absent: true };
   });
-  const scale = (w, replicas) => k(['-n', w.namespace, 'scale', 'deployment', w.name, `--replicas=${replicas}`]);
+  const scale = (w, replicas) => mutate(`scale ${w.namespace}/${w.name}`, ['-n', w.namespace, 'scale', 'deployment', w.name, `--replicas=${replicas}`]);
   const waitPodsGone = (w) => {
     const selector = Object.entries(w.selector).map(([a, b]) => `${a}=${b}`).join(',');
     if (!selector) throw fail('PRECONDITION_FAILED', `Writer ${w.namespace}/${w.name} has no selector`);
@@ -306,12 +375,20 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
     }
     throw fail('SOURCE_BUSY', 'The source keeps changing after every writer stopped; something else writes to the Console DB. Stop it (--extra-writer <namespace>/<deployment>) or roll back.');
   };
-  // The source must be exactly as it was when the writers stopped: no client session, no counter moved.
-  const assertSourceQuiet = (where) => {
+  // The source must be exactly as it was when the writers stopped: no client session, no counter moved, and (from
+  // the switch on) the same catalog as the fingerprint: roles and passwords, memberships, role settings, grants,
+  // default privileges, comments, large objects (second review, item 2).
+  const assertSourceQuiet = (where, { catalog = false } = {}) => {
     const baseline = checkpoint.state.steps.freeze?.writeCounters;
     if (!baseline) throw fail('PRECONDITION_FAILED', `Attempt ${checkpoint.state.attemptId} recorded no write baseline at freeze; roll back and start a new attempt`);
     const sessions = sourceSessions();
     const moved = counterChanges(baseline, writeCounters());
+    if (catalog) {
+      const before = catalogLines(readFileSync(evidence('source-fingerprint.txt'), 'utf8'));
+      const after = catalogLines(sourceSql(FINGERPRINT_SQL));
+      const gone = before.filter((l) => !after.includes(l)), added = after.filter((l) => !before.includes(l));
+      if (gone.length || added.length) moved.push(`catalog changed since the fingerprint (${gone.length} line(s) gone, ${added.length} new; first: ${(added[0] || gone[0]).slice(0, 160)})`);
+    }
     if (sessions.length || moved.length) {
       throw fail('SOURCE_WRITTEN', `${where}: the source changed after the writers stopped (${[...sessions.map((x) => `session ${x}`), ...moved].join('; ')}). `
         + 'Something else writes to the Console DB; nothing was switched. Roll back (--rollback), find the writer, then start a new attempt with --extra-writer.');
@@ -372,7 +449,7 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
       const pv = get(['get', 'pv', checkpoint.state.source.pv]);
       if (!pv) throw fail('PRECONDITION_FAILED', 'The source PersistentVolume is missing');
       if (pv.spec.persistentVolumeReclaimPolicy !== 'Retain') {
-        k(['patch', 'pv', pv.metadata.name, '--type=json', '-p', JSON.stringify([{ op: 'test', path: '/metadata/uid', value: pv.metadata.uid },
+        mutate('freeze', ['patch', 'pv', pv.metadata.name, '--type=json', '-p', JSON.stringify([{ op: 'test', path: '/metadata/uid', value: pv.metadata.uid },
           { op: 'replace', path: '/spec/persistentVolumeReclaimPolicy', value: 'Retain' }])]);
       }
       const present = checkpoint.state.writers.filter((w) => !w.absent);
@@ -416,6 +493,7 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
       const fp = fingerprint(sourceSql, null);
       writeEvidence('source-fingerprint.txt', fp.text);
       writeEvidence('source-tables.json', `${JSON.stringify(fp.tables, null, 1)}\n`);
+      writeEvidence('source-definitions.json', `${JSON.stringify(parseDefinitions(sourceSql(DEFINITIONS_SQL)), null, 1)}\n`);
       const roles = k(ns(['exec', source.pod, '-c', 'postgres', '--', 'sh', '-ec', 'PGPASSWORD="$POSTGRES_PASSWORD" exec pg_dumpall -h 127.0.0.1 -U supabase_admin --roles-only --no-role-passwords']));
       writeEvidence('source-roles.sql', `${roles}\n`);
       const parsed = parseFingerprint(fp.text);
@@ -430,7 +508,7 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
         { apiVersion: 'v1', kind: 'Secret', type: 'kubernetes.io/basic-auth', metadata: { name: ADMIN_SECRET, namespace: DATA_NAMESPACE, labels: { ...LABELS } }, data: { username, password: encoded } },
         { apiVersion: 'v1', kind: 'Secret', type: 'Opaque', metadata: { name: IMPORT_SOURCE_SECRET, namespace: DATA_NAMESPACE, labels: { ...LABELS } }, data: { password: encoded } },
       ];
-      const apply = (doc) => k(['apply', '--server-side', `--field-manager=${FIELD_MANAGER}`, '-f', '-', '-o', 'name'], { input: `${JSON.stringify(doc)}\n` });
+      const apply = (doc) => mutate('create', ['apply', '--server-side', `--field-manager=${FIELD_MANAGER}`, '-f', '-', '-o', 'name'], { input: `${JSON.stringify(doc)}\n` });
       for (const s of secrets) apply(s);
       apply(renderLegacySourceService());
       const cluster = renderConsoleDbCluster({ storageClass: checkpoint.state.storageClass });
@@ -491,7 +569,18 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
       const plan = JSON.parse(readFileSync(evidence('source-tables.json'), 'utf8'));
       const fp = fingerprint((sql) => targetSuperSql(sql), plan);
       writeEvidence('target-fingerprint.txt', fp.text);
-      const result = compareParity(parseFingerprint(readFileSync(evidence('source-fingerprint.txt'), 'utf8')), parseFingerprint(fp.text));
+      const source = parseFingerprint(readFileSync(evidence('source-fingerprint.txt'), 'utf8'));
+      const targetFp = parseFingerprint(fp.text);
+      let result = compareParity(source, targetFp);
+      // CHECKs and views whose text differs: parse the source text on the target (rolled back) and compare renders.
+      const differing = new Set(result.differences.map((d) => d.what.replace(/^def\|/, '')).filter((key) => /^(constraint|view)\|/.test(key)));
+      if (differing.size) {
+        const items = JSON.parse(readFileSync(evidence('source-definitions.json'), 'utf8')).filter((d) => differing.has(d.key));
+        const rerendered = items.length ? parseRerendered(targetSuperSql(rerenderSql(items))) : new Map();
+        writeEvidence('rerender.json', `${JSON.stringify([...differing].map((key) => ({ key, sourceText: items.some((d) => d.key === key),
+          rerendered: rerendered.get(key) ?? null, target: targetFp.def.get(key) ?? null, same: rerendered.get(key) === targetFp.def.get(key) })), null, 1)}\n`);
+        result = compareParity(source, targetFp, { rerendered });
+      }
       writeEvidence('parity.json', `${JSON.stringify(result, null, 1)}\n`);
       if (!result.ok) throw fail('PARITY_FAILED', `Parity failed on ${result.differences.length} item(s); nothing was switched. See ${evidence('parity.json')}`);
       return { ...result.compared, unhashed: result.compared.unhashed.length, explained: result.explained.length };
@@ -501,10 +590,10 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
       if (!sameMap(svc.spec.selector, PRIMARY_SELECTOR)) {
         if (!sameMap(svc.spec.selector, LEGACY_SELECTOR)) throw fail('PRECONDITION_FAILED', `Service ${CONSOLE_DB_SERVICE} has an unexpected selector`);
         // Finding 2: nothing may have written to the source since freeze, or it would be lost.
-        assertSourceQuiet('switch');
+        assertSourceQuiet('switch', { catalog: true });
         // Finding 6: what rollback restores, exactly.
         if (!checkpoint.state.service) save((s) => { s.service = { uid: svc.metadata.uid, selector: svc.spec.selector, ports: svc.spec.ports }; });
-        k(ns(['patch', 'service', CONSOLE_DB_SERVICE, '--type=json', '-p', JSON.stringify([
+        mutate('switch', ns(['patch', 'service', CONSOLE_DB_SERVICE, '--type=json', '-p', JSON.stringify([
           { op: 'test', path: '/metadata/uid', value: svc.metadata.uid },
           { op: 'test', path: '/spec/selector', value: svc.spec.selector },
           { op: 'replace', path: '/spec/selector', value: { ...PRIMARY_SELECTOR } },
@@ -516,8 +605,8 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
       const ip = podIp(primary);
       waitOnlyEndpoint(ip, T.endpoints, 'SWITCH_INCOMPLETE');
       // Writes that reached the source directly (its Pod IP, the temporary Service) before it stops.
-      if (get(ns(['get', 'pod', `${LEGACY_STATEFULSET}-0`]))) assertSourceQuiet('switch (after the Service moved)');
-      k(ns(['scale', 'statefulset', LEGACY_STATEFULSET, '--replicas=0']));
+      if (get(ns(['get', 'pod', `${LEGACY_STATEFULSET}-0`]))) assertSourceQuiet('switch (after the Service moved)', { catalog: true });
+      mutate('switch', ns(['scale', 'statefulset', LEGACY_STATEFULSET, '--replicas=0']));
       const gone = now() + T.rollout;
       while (get(ns(['get', 'pod', `${LEGACY_STATEFULSET}-0`]))) { if (now() > gone) throw fail('TIMEOUT', 'The StatefulSet Pod did not stop'); pause(1000); }
       save((s) => { s.state = 'Switched'; });
@@ -537,6 +626,7 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
       const primary = primaryPod();
       if (!waitOnlyEndpoint(podIp(primary), T.endpoints, null)) throw fail('REOPEN_REFUSED', `The Service's only ready endpoint is not the primary ${primary}; the writers stay stopped`);
       // Point of no return: from here, writes land only on CNPG and rollback is a new dump.
+      assertLockHeld('reopen');
       save((s) => { s.state = 'Reopened'; });
       const started = restartWriters(checkpoint.state.writers);
       return { primary, started: started.map((w) => `${w.namespace}/${w.name}=${w.replicas}`) };
@@ -562,8 +652,8 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
     },
     finalize() {
       // The import is over: its source Service and Secret go (lab: the Cluster stays healthy without them).
-      k(ns(['delete', 'service', LEGACY_SOURCE_SERVICE, '--ignore-not-found']));
-      k(ns(['delete', 'secret', IMPORT_SOURCE_SECRET, '--ignore-not-found']));
+      mutate('finalize', ns(['delete', 'service', LEGACY_SOURCE_SERVICE, '--ignore-not-found']));
+      mutate('finalize', ns(['delete', 'secret', IMPORT_SOURCE_SECRET, '--ignore-not-found']));
       save((s) => { s.state = 'Completed'; });
       return { removed: [`Service/${LEGACY_SOURCE_SERVICE}`, `Secret/${IMPORT_SOURCE_SECRET}`],
         kept: [`StatefulSet/${LEGACY_STATEFULSET} (0)`, `PVC/${LEGACY_PVC}`, `PV/${checkpoint.state.source.pv} (Retain)`] };
@@ -640,7 +730,7 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
     // 1. The CNPG instances stop serving: they carry the Service's app label.
     const cluster = get(ns(['get', 'clusters.postgresql.cnpg.io', CLUSTER_NAME]));
     if (cluster && cluster.metadata?.annotations?.['cnpg.io/hibernation'] !== 'on') {
-      k(ns(['annotate', 'clusters.postgresql.cnpg.io', CLUSTER_NAME, 'cnpg.io/hibernation=on', '--overwrite']));
+      mutate('rollback', ns(['annotate', 'clusters.postgresql.cnpg.io', CLUSTER_NAME, 'cnpg.io/hibernation=on', '--overwrite']));
       act('requested hibernation of the Cluster');
     }
     // 2. The old path at once (finding 6): the recorded selector and ports, the StatefulSet. The writers stay stopped
@@ -651,13 +741,13 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
       if (!original?.ports || !sameMap(original.selector, LEGACY_SELECTOR)) {
         throw fail('ROLLBACK_INCOMPLETE', `Service ${CONSOLE_DB_SERVICE} was changed but attempt ${s.attemptId} recorded no original selector and ports; restore it by hand, then run --rollback again`);
       }
-      k(ns(['patch', 'service', CONSOLE_DB_SERVICE, '--type=json', '-p', JSON.stringify([
+      mutate('rollback', ns(['patch', 'service', CONSOLE_DB_SERVICE, '--type=json', '-p', JSON.stringify([
         { op: 'test', path: '/metadata/uid', value: svc.metadata.uid },
         { op: 'replace', path: '/spec/selector', value: original.selector },
         { op: 'replace', path: '/spec/ports', value: original.ports }])]));
       act('restored the recorded Service selector and ports');
     }
-    k(ns(['scale', 'statefulset', LEGACY_STATEFULSET, '--replicas=1']));
+    mutate('rollback', ns(['scale', 'statefulset', LEGACY_STATEFULSET, '--replicas=1']));
     renewLock(true);
     k(ns(['rollout', 'status', `statefulset/${LEGACY_STATEFULSET}`, `--timeout=${Math.round(T.rollout / 1000)}s`]));
     act('started the StatefulSet');
@@ -671,14 +761,15 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
     // Pods are deleted; hibernation stays requested, so the operator does not recreate them.
     const ip = podIp(`${LEGACY_STATEFULSET}-0`);
     if (!waitOnlyEndpoint(ip, T.hibernate, null)) {
-      k(ns(['delete', 'pods', '-l', `cnpg.io/cluster=${CLUSTER_NAME},cnpg.io/podRole=instance`, '--wait=false', '--ignore-not-found']));
-      act('hibernation did not stop the CNPG instances in time; deleted their Pods');
+      // Every Pod of the Cluster, instance or Job (an import or join Pod carries the Service's label too).
+      mutate('rollback', ns(['delete', 'pods', '-l', `cnpg.io/cluster=${CLUSTER_NAME}`, '--wait=false', '--ignore-not-found']));
+      act('hibernation did not stop the CNPG Pods in time; deleted every Pod of the Cluster');
       waitOnlyEndpoint(ip, T.hibernate, 'ROLLBACK_INCOMPLETE');
     }
     act(`the Service's only ready endpoint is the StatefulSet Pod ${ip}`);
     restartWriters(s.writers);
     act('started the writers');
-    k(ns(['delete', 'service', LEGACY_SOURCE_SERVICE, '--ignore-not-found']));
+    mutate('rollback', ns(['delete', 'service', LEGACY_SOURCE_SERVICE, '--ignore-not-found']));
     save((x) => { x.state = 'RolledBack'; x.rollback.at = new Date(now()).toISOString(); x.rollback.ms = now() - started; });
     if (existsSync(evidenceDir)) timeline({ step: 'rollback', event: 'done', ms: now() - started });
     return { state: checkpoint.state, ms: now() - started, actions: checkpoint.state.rollback.actions.map((a) => a.what) };
@@ -702,8 +793,8 @@ export function createCutover({ context, clusterUid, evidenceDir, runner = run, 
         if (attemptId !== checkpoint.state.attemptId) throw fail('PRECONDITION_FAILED', `--discard-attempt must name ${checkpoint.state.attemptId}`);
         assertIdentity();
         // The hibernated Cluster holds only the imported copy; CNPG removes its PVCs and Secrets with it.
-        k(ns(['delete', 'clusters.postgresql.cnpg.io', CLUSTER_NAME, '--ignore-not-found', '--wait=true']));
-        k(ns(['delete', 'secret', ADMIN_SECRET, IMPORT_SOURCE_SECRET, '--ignore-not-found']));
+        mutate('discard', ns(['delete', 'clusters.postgresql.cnpg.io', CLUSTER_NAME, '--ignore-not-found', '--wait=true']));
+        mutate('discard', ns(['delete', 'secret', ADMIN_SECRET, IMPORT_SOURCE_SECRET, '--ignore-not-found']));
         save((x) => { x.state = 'Discarded'; x.discardedAt = new Date(now()).toISOString(); });
         return { state: checkpoint.state };
       });

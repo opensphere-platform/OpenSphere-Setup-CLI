@@ -2956,6 +2956,9 @@ async function installPreparedRelease(lock, prepared, storageClass, consoleUrl, 
     const context = currentKubeContext();
     // preserve: an upgrade keeps the operator fence in the mode it is in (deny, or warn during an emergency).
     const plan = await prepareConsoleDb({ context, apply: false, fenceMode: 'preserve' });
+    // Second review, item 7: a fence left in warn is said out loud on every upgrade.
+    for (const warning of plan.warnings || []) { progress?.item('경고', warning); console.warn(`[경고] ${warning}`); }
+    if (plan.state === 'Blocked') throw new Error(`CloudNativePG operator: ${plan.message}`);
     if (plan.state !== 'Present') {
       progress?.item('설치', `CloudNativePG operator ${plan.state} -> 적용 (울타리 ${plan.fenceMode})`);
       await prepareConsoleDb({ context, apply: true, fenceMode: plan.fenceMode });

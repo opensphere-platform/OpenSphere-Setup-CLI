@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { aclReplayStatements, buildRepairSql, effectiveGrants, parseAcl, roleRepairStatements } from '../src/console-db-role-repair.mjs';
-import { FINGERPRINT_SQL, TABLES_SQL, compareParity, contentPlan, parseFingerprint, parseTables, rowCountSql, tableDataSql } from '../src/console-db-parity.mjs';
+import {
+  DEFINITIONS_SQL, FINGERPRINT_SQL, TABLES_SQL, compareParity, contentPlan, parseDefinitions, parseFingerprint, parseRerendered, parseTables, rerenderSql, rowCountSql, tableDataSql,
+} from '../src/console-db-parity.mjs';
 import { CONSOLE_DB_WRITERS, CUTOVER_STEPS, classifyImportErrors, parseExtraWriters } from '../src/console-db-cutover.mjs';
 
 // R2-C2 scope 3: post-import repair (lab breaks X2, X3), the parity gate, and the resumable cutover with rollback.
@@ -148,15 +150,47 @@ test('parity: a lost row, membership, setting, owner or grant, or an event trigg
   }
 });
 
-test('parity: a definition that differs only in deparsed parentheses is explained; any other change is not', () => {
-  const s = FP().replace('def|constraint|console_operation.x.x_pkey|p k1 valid=true deferrable=false/false', 'def|constraint|console_operation.x.x_pkey|raw1 n=norm1');
-  const flat = compareParity(parseFingerprint(s), parseFingerprint(TARGET().replace('def|constraint|console_operation.x.x_pkey|p k1 valid=true deferrable=false/false', 'def|constraint|console_operation.x.x_pkey|raw2 n=norm1')));
-  assert.equal(flat.ok, true, JSON.stringify(flat.differences));
-  assert.ok(flat.explained.some((e) => e.what === 'def|constraint|console_operation.x.x_pkey' && /parentheses or column aliases/.test(e.reason)));
-  const changed = compareParity(parseFingerprint(s), parseFingerprint(TARGET().replace('def|constraint|console_operation.x.x_pkey|p k1 valid=true deferrable=false/false', 'def|constraint|console_operation.x.x_pkey|raw2 n=norm2')));
-  assert.ok(changed.differences.some((d) => d.what === 'def|constraint|console_operation.x.x_pkey'));
-  assert.ok(FINGERPRINT_SQL.includes("ELSE d END, '[()[:space:]]', '', 'g'))"));
-  assert.ok(FINGERPRINT_SQL.includes(`regexp_replace(d, '[[:space:]]+AS[[:space:]]+("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*)', '', 'g')`), 'view column aliases');
+test('parity (second review, item 1): a CHECK or view passes only when the source text re-renders on the target exactly', () => {
+  const key = 'constraint|console_operation.x.x_pkey';
+  const swap = (text, value) => text.replace('def|constraint|console_operation.x.x_pkey|p k1 valid=true deferrable=false/false', `def|${key}|${value}`);
+  const source = parseFingerprint(swap(FP(), 'src-hash'));
+  const target = parseFingerprint(swap(TARGET(), 'tgt-hash'));
+  // Different text, no re-render: a difference (the counter-examples: "(a OR b) AND c" vs "a OR (b AND c)", a changed
+  // partial-index predicate, DEFAULT 'pending review' vs 'pendingreview', CAST(x AS integer) all differ in text).
+  assert.ok(compareParity(source, target).differences.some((d) => d.what === `def|${key}`));
+  // The source text parsed on the target renders as the target object: explained, by name.
+  const ok = compareParity(source, target, { rerendered: new Map([[key, 'tgt-hash']]) });
+  assert.equal(ok.ok, true, JSON.stringify(ok.differences));
+  assert.ok(ok.explained.some((e) => e.what === `def|${key}` && /re-rendered by the restore/.test(e.reason)));
+  // It renders differently: still a difference.
+  assert.ok(compareParity(source, target, { rerendered: new Map([[key, 'other']]) }).differences.some((d) => d.what === `def|${key}`));
+  // A re-render is never accepted for an index, columns (defaults) or a function.
+  for (const [kind, name] of [['index', 'console_operation.x_pkey'], ['columns', 'console_operation.x:r'], ['function', 'console_operation.f()']]) {
+    const s2 = parseFingerprint(FP().replace(new RegExp(`def\\|${kind}\\|${name.replace(/[.()]/g, '\\$&')}\\|[^\\n]*`), `def|${kind}|${name}|a`));
+    const t2 = parseFingerprint(TARGET().replace(new RegExp(`def\\|${kind}\\|${name.replace(/[.()]/g, '\\$&')}\\|[^\\n]*`), `def|${kind}|${name}|b`));
+    const r = compareParity(s2, t2, { rerendered: new Map([[`${kind}|${name}`, 'b']]) });
+    assert.ok(r.differences.some((d) => d.what === `def|${kind}|${name}`), kind);
+  }
+  assert.doesNotMatch(FINGERPRINT_SQL, /regexp_replace/, 'no pattern normalisation');
+  for (const line of ["'comment|objects|'", "'lo|metadata|'", "'lo|data|'"]) assert.ok(FINGERPRINT_SQL.includes(line), line);
+});
+
+test('parity: the re-render SQL parses each source CHECK and view in its own savepoint and rolls everything back', () => {
+  const items = parseDefinitions('BEGIN\n[{"key":"constraint|we\\"ird.t.c","kind":"constraint","schema":"we\\"ird","table":"t","text":"CHECK ((a > 1))"}, \n {"key":"view|s.v","kind":"view","schema":"s","table":"v","text":" SELECT 1 AS x;"}]\nROLLBACK');
+  assert.equal(items.length, 2);
+  const sql = rerenderSql(items);
+  assert.ok(sql.startsWith('\\set ON_ERROR_STOP off\nBEGIN;\n'));
+  assert.ok(sql.endsWith('ROLLBACK;\n'));
+  assert.equal(sql.split('\n').filter((l) => l === 'SAVEPOINT rerender;').length, 2);
+  assert.equal(sql.split('ROLLBACK TO SAVEPOINT rerender;').length - 1, 2);
+  assert.ok(sql.includes('CREATE TEMP TABLE _opensphere_rerender_0 (LIKE "we""ird"."t");'));
+  assert.ok(sql.includes('ADD CONSTRAINT _opensphere_rerender CHECK ((a > 1));'));
+  assert.ok(sql.includes('CREATE TEMP VIEW _opensphere_rerender_1 AS SELECT 1 AS x;'));
+  assert.ok(sql.includes(`'rerender|constraint|we"ird.t.c|'`));
+  assert.throws(() => rerenderSql([{ key: 'constraint|s.t.u', kind: 'constraint', schema: 's', table: 't', text: 'UNIQUE (a)' }]), /Not a CHECK/);
+  assert.throws(() => rerenderSql([{ key: 'index|s.i', kind: 'index', text: 'x' }]), /No re-render/);
+  assert.deepEqual([...parseRerendered('NOTICE x\nrerender|view|s.v|abc\nrerender|constraint|a.b.c|def\n')], [['view|s.v', 'abc'], ['constraint|a.b.c', 'def']]);
+  assert.ok(DEFINITIONS_SQL.includes("con.contype = 'c'") && DEFINITIONS_SQL.includes("c.relkind = 'v'"));
 });
 
 test('parity SQL: read-only, no XML function, quoted identifiers, content hashes within the size guard', () => {

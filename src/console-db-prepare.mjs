@@ -13,7 +13,7 @@ import { observeInstalledHissTarget } from './prepare-installed-hiss.mjs';
 import { run } from './process.mjs';
 import {
   CLUSTER_NAME, DATA_NAMESPACE, FENCE_NAME, FIELD_MANAGER, LEGACY_PVC, OPERATOR_NAMESPACE, OPERATOR_SERVICE_ACCOUNT, OPERATOR_USER,
-  kubernetesApiPeers, renderConsoleDbCluster, renderOperatorObjects,
+  clusterReferenceViolations, instanceRoleViolations, kubernetesApiPeers, renderConsoleDbCluster, renderOperatorObjects,
 } from './console-db-cnpg.mjs';
 
 const fail = (code, message, evidence) => Object.assign(new Error(message), { code, ...(evidence ? { evidence } : {}) });
@@ -102,12 +102,42 @@ export async function prepareConsoleDb({ context, apply = false, fenceMode = 'de
   const phases = [['fence', rendered.fence], ['crds', rendered.crds], ['network', rendered.network], ['operator', rendered.operator]];
   const all = phases.flatMap(([, docs]) => docs);
   const before = observe(k, all);
+  // Second review, item 3: what the fence would refuse the operator. The instance Role was measured for the pinned
+  // operator; a Cluster that references a Secret outside its names, or a new operator image, can change it.
+  const getJson = (args) => {
+    try { const out = String(k([...args, '--ignore-not-found', '-o', 'json', '--request-timeout=10s']) || '').trim(); return out ? JSON.parse(out) : null; } catch { return null; }
+  };
+  const liveCluster = getJson(['-n', DATA_NAMESPACE, 'get', 'clusters.postgresql.cnpg.io', CLUSTER_NAME]);
+  const liveRole = getJson(['-n', DATA_NAMESPACE, 'get', 'role', CLUSTER_NAME]);
+  const deploymentDoc = rendered.operator.find((d) => d.kind === 'Deployment');
+  const liveImage = before.live.get(identity(deploymentDoc))?.spec?.template?.spec?.containers?.[0]?.image ?? null;
+  const fenceChecks = {
+    clusterReferences: liveCluster ? clusterReferenceViolations(liveCluster.spec) : [],
+    instanceRole: liveRole ? instanceRoleViolations(liveRole.rules) : [],
+    operatorImageChange: liveImage && liveImage !== rendered.images.operator ? { from: liveImage, to: rendered.images.operator } : null,
+  };
+  const warnings = [];
+  if (fenceMode === 'warn') {
+    warnings.push(`The CloudNativePG operator fence is in warn mode: what it would refuse is only logged (Warn, Audit). Return to deny with prepare-console-db --apply once the reason for warn is gone.`);
+  }
+  if (fenceMode === 'warn' && fenceChecks.instanceRole.length) warnings.push(`The instance Role the operator wrote differs from the measured table (${fenceChecks.instanceRole.join('; ')}); deny would refuse it. Re-measure the table in a Setup release before returning to deny.`);
+  let blocked = null;
+  if (fenceChecks.clusterReferences.length) {
+    blocked = { reason: 'ClusterReferencesOutsideFence', message: `The Console DB Cluster references objects outside opensphere-console-db-* (${fenceChecks.clusterReferences.join('; ')}); the operator fence would stall the operator. Rename them opensphere-console-db-<purpose>.` };
+  } else if (fenceMode === 'deny' && fenceChecks.operatorImageChange) {
+    blocked = { reason: 'OperatorRemeasureRequired', message: `The CloudNativePG operator image changes (${liveImage} -> ${rendered.images.operator}). The fence's instance Role table was measured for the pinned image only: `
+      + 'run prepare-console-db --apply --operator-fence warn, check that its instanceRole result is empty, then prepare-console-db --apply (deny).' };
+  } else if (fenceMode === 'deny' && fenceChecks.instanceRole.length) {
+    blocked = { reason: 'InstanceRoleOutsideFence', message: `The instance Role the operator wrote differs from the measured table (${fenceChecks.instanceRole.join('; ')}); deny would stall the operator. Stay in warn until a Setup release re-measures the table.` };
+  }
   const summary = { target: { clusterUid: target.clusterUid, installationUid: target.installationUid }, images: rendered.images, fenceMode, cilium,
-    apiServerSources: api.sources, droppedChartObjects: rendered.dropped, resourceCount: all.length };
+    apiServerSources: api.sources, droppedChartObjects: rendered.dropped, resourceCount: all.length, fenceChecks, warnings };
   if (!apply) {
+    if (blocked) return { ...summary, state: 'Blocked', ...blocked, applied: false };
     return { ...summary, state: before.missing ? 'NeedsPreparation' : before.differs ? 'NeedsUpdate' : 'Present', applied: false,
       missing: before.missing, differs: before.differs, objects: before.objects.filter((o) => o.status !== 'Matching') };
   }
+  if (blocked) throw fail(blocked.reason === 'ClusterReferencesOutsideFence' ? 'UNTRUSTED_PROFILE' : 'OPERATOR_REMEASURE_REQUIRED', blocked.message);
   const ssa = (docs) => k(['apply', '--server-side', `--field-manager=${FIELD_MANAGER}`, '-f', '-', '--request-timeout=60s'], { input: list(docs) });
   const readBack = (docs, phase) => {
     const after = observe(k, docs);
@@ -149,7 +179,19 @@ export async function prepareConsoleDb({ context, apply = false, fenceMode = 'de
     }
   }
   if (webhook !== 'answered') throw fail('PREPARATION_INCOMPLETE', 'The CloudNativePG webhook did not answer a dry-run of the Console DB Cluster');
-  return { ...summary, state: 'Applied', applied: true, created: before.missing, updated: before.differs, proofs: { ...proofs, webhook } };
+  // In warn mode (an operator upgrade): once the operator has reconciled the Cluster, measure the Role it wrote.
+  let instanceRole = null;
+  if (fenceMode === 'warn' && liveCluster) {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      const c = getJson(['-n', DATA_NAMESPACE, 'get', 'clusters.postgresql.cnpg.io', CLUSTER_NAME]);
+      if (c?.status?.phase === 'Cluster in healthy state') break;
+      sleep(1000);
+    }
+    const role = getJson(['-n', DATA_NAMESPACE, 'get', 'role', CLUSTER_NAME]);
+    instanceRole = role ? instanceRoleViolations(role.rules) : ['no instance Role'];
+    if (instanceRole.length) warnings.push(`The instance Role the operator wrote differs from the measured table (${instanceRole.join('; ')}); stay in warn until a Setup release re-measures it.`);
+  }
+  return { ...summary, warnings, state: 'Applied', applied: true, created: before.missing, updated: before.differs, proofs: { ...proofs, webhook }, ...(instanceRole ? { instanceRole } : {}) };
 }
 
 // The fence on the live API servers. RBAC lets the operator do both requests below; only the fence can refuse them.

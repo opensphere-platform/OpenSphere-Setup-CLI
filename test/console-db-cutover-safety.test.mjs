@@ -5,13 +5,14 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  CUTOVER_STEPS, WRITE_COUNTERS_SQL, counterChanges, createCutover, ensurePrivateEvidenceDirectory, parseWriteCounters,
+  CUTOVER_STEPS, WRITE_COUNTERS_SQL, catalogLines, counterChanges, createCutover, ensurePrivateEvidenceDirectory, parseWriteCounters,
 } from '../src/console-db-cutover.mjs';
 import {
   CLUSTER_NAME, CONSOLE_DB_SERVICE, CUTOVER_CONFIGMAP, CUTOVER_LOCK, DATA_NAMESPACE, LEGACY_SELECTOR, PRIMARY_SELECTOR,
   classifyConsoleDataLayout, renderConsoleDbCluster,
 } from '../src/console-db-cnpg.mjs';
 import { liveFenceMode } from '../src/console-db-prepare.mjs';
+import { FINGERPRINT_SQL } from '../src/console-db-parity.mjs';
 
 // Review findings 1-3 and 6-9 of Setup PR #64 (2026-10-27), against a small stateful model of the cluster: the
 // Service and the endpoints it really selects, the StatefulSet and CNPG Pods, hibernation that can stall, the writer
@@ -21,7 +22,8 @@ import { liveFenceMode } from '../src/console-db-prepare.mjs';
 const UID = '11111111-2222-3333-4444-555555555555';
 const NS = DATA_NAMESPACE;
 const LEGACY_POD = 'opensphere-supabase-postgres-0';
-const COUNTERS = 'relfiles|aaa\nsequences|bbb\ntables|12 tables, 100 tuples written';
+const COUNTERS = 'relfiles|aaa\nrestart|2026-10-27 01:00:00+00\nsequences|bbb\nstatsreset|never\ntables|12 tables, 100 tuples written';
+const CATALOG = 'member|anon>authenticator|admin=false\nrole|authenticator|super=false,pw=aaaa\nsetting|*|authenticator|statement_timeout=8s';
 const ORIGINAL_PORTS = [{ name: 'postgres', port: 5432, protocol: 'TCP', targetPort: 'postgres' }];
 const WRITER = { namespace: 'opensphere-console', name: 'opensphere-console-api', role: 'opensphere_console_api_runtime', replicas: 2, selector: { app: 'opensphere-console-api' } };
 const labelsOf = (selector) => Object.fromEntries(selector.split(',').map((x) => x.split('=')));
@@ -34,7 +36,7 @@ function world(over = {}) {
     sts: 1, cnpg: [`${CLUSTER_NAME}-1`, `${CLUSTER_NAME}-2`, `${CLUSTER_NAME}-3`], primary: `${CLUSTER_NAME}-1`,
     cluster: { exists: true, hibernation: false, readyInstances: 3 }, stallHibernation: false,
     deployments: { 'opensphere-console/opensphere-console-api': 0 }, importPods: [], importLog: '',
-    counters: COUNTERS, sessions: [], ledger: '137|0151 sha256:781b', podFreeKb: 50 * 1024 * 1024, dbBytes: 450 * 1024 ** 2,
+    counters: COUNTERS, catalog: CATALOG, sessions: [], onCall: null, ledger: '137|0151 sha256:781b', podFreeKb: 50 * 1024 * 1024, dbBytes: 450 * 1024 ** 2,
     dumpBody: 'DUMP-BYTES', dumpSha: null, rolloutStsFails: false, calls: [], onSql: null, onSleep: null, ...over,
   };
   w.dumpSha ??= createHash('sha256').update(w.dumpBody).digest('hex');
@@ -57,6 +59,7 @@ function world(over = {}) {
   };
   const sql = (input) => {
     w.onSql?.(w, input);
+    if (input === FINGERPRINT_SQL) return `BEGIN\n${w.catalog}\nROLLBACK`;
     if (input === WRITE_COUNTERS_SQL) return `BEGIN\n${typeof w.counters === 'function' ? w.counters() : w.counters}\nROLLBACK`;
     if (/pg_stat_activity WHERE backend_type = 'client backend' AND pid <> pg_backend_pid/.test(input)) return w.sessions.join('\n');
     if (/applied_sequence DESC LIMIT 1\) FROM console_migration/.test(input)) return w.ledger;
@@ -68,6 +71,7 @@ function world(over = {}) {
     assert.deepEqual(args.slice(0, 2), ['--context', 'lab']);
     let a = args.slice(2);
     w.calls.push(a.join(' '));
+    w.onCall?.(w, a);
     let namespace = null;
     if (a[0] === '-n') { namespace = a[1]; a = a.slice(2); }
     const [verb, kind, name] = a;
@@ -108,7 +112,7 @@ function world(over = {}) {
     if (verb === 'rollout' && name.startsWith('statefulset/')) { if (w.rolloutStsFails) throw new Error('rollout timed out'); return ''; }
     if (verb === 'rollout') return '';
     if (verb === 'annotate') { w.cluster.hibernation = true; if (!w.stallHibernation) { w.cnpg = []; w.cluster.readyInstances = 0; } return ''; }
-    if (verb === 'delete' && kind === 'pods') { w.cnpg = []; return ''; }
+    if (verb === 'delete' && kind === 'pods') { assert.equal(a[a.indexOf('-l') + 1], `cnpg.io/cluster=${CLUSTER_NAME}`, 'every Pod of the Cluster'); w.cnpg = []; w.importPods = []; return ''; }
     if (verb === 'delete') return '';
     if (verb === 'apply' || (verb === 'patch' && kind === 'pv')) return '';
     if (verb === 'logs') return w.importLog;
@@ -195,7 +199,7 @@ test('finding 6: rollback restores the old path at once and, if hibernation stal
   const started = w.now;
   const result = cutover(w, dir).rollback();
   assert.equal(result.state.state, 'RolledBack');
-  assert.ok(result.actions.some((a) => /deleted their Pods/.test(a)), result.actions.join('; '));
+  assert.ok(result.actions.some((a) => /deleted every Pod of the Cluster/.test(a)), result.actions.join('; '));
   const patched = w.calls.findIndex((c) => c.includes('patch service'));
   const deleted = w.calls.findIndex((c) => c.includes('delete pods'));
   const writer = w.calls.findIndex((c) => c.includes('scale deployment opensphere-console-api'));
@@ -210,13 +214,22 @@ test('finding 6: rollback restores the old path at once and, if hibernation stal
 }));
 
 test('finding 2: switch refuses when a session or any write counter moved since freeze, before and after the Service moves', async () => withDir(async (dir) => {
+  writeFileSync(join(dir, 'source-fingerprint.txt'), `rows|x.t|1\ncontent|x.t|1:2\n${CATALOG}\n`);
   const before = (over) => { const w = world(over); checkpoint(w, { steps: steps('parity') }); return w; };
-  for (const [what, over] of [['a row written', { counters: COUNTERS.replace('100 tuples', '101 tuples') }],
+  for (const [what, over, message] of [['a row written', { counters: COUNTERS.replace('100 tuples', '101 tuples') }],
     ['a TRUNCATE or DDL', { counters: COUNTERS.replace('relfiles|aaa', 'relfiles|aab') }],
     ['a sequence advanced', { counters: COUNTERS.replace('sequences|bbb', 'sequences|bbc') }],
-    ['a client session', { sessions: ['opensphere_osdst_runtime osdst 10.42.1.9'] }]]) {
+    ['a client session', { sessions: ['opensphere_osdst_runtime osdst 10.42.1.9'] }],
+    // Second review, item 2: writes only the catalog sees.
+    ['a password change', { catalog: CATALOG.replace('pw=aaaa', 'pw=bbbb') }],
+    ['a GRANT of a role', { catalog: `${CATALOG}\nmember|service_role>authenticator|admin=false` }],
+    ['an ALTER ROLE ... SET', { catalog: CATALOG.replace('statement_timeout=8s', 'statement_timeout=0') }],
+    ['a COMMENT', { catalog: `${CATALOG}\ncomment|objects|1 abc` }],
+    // Item 6: a restart or a statistics reset is named as such.
+    ['a restart', { counters: COUNTERS.replace('01:00:00', '01:30:00') }, /the source restarted/],
+    ['a statistics reset', { counters: COUNTERS.replace('statsreset|never', 'statsreset|2026-10-27 02:00:00+00') }, /statistics were reset/]]) {
     const w = before(over);
-    await assert.rejects(cutover(w, dir).apply({ until: 'switch' }), { code: 'SOURCE_WRITTEN' }, what);
+    await assert.rejects(cutover(w, dir).apply({ until: 'switch' }), (e) => e.code === 'SOURCE_WRITTEN' && (!message || message.test(e.message)), what);
     assert.deepEqual(w.service.selector, LEGACY_SELECTOR, `${what}: nothing was switched`);
     assert.equal(w.sts, 1);
   }
@@ -341,6 +354,21 @@ test('finding 8: one run at a time; a live lock refuses, an expired or explicitl
   assert.throws(() => cutover(stolen, dir).rollback(), { code: 'CUTOVER_LOCK_LOST' });
   assert.equal(stateOf(stolen).state, 'RollingBack');
   assert.equal(stolen.deployments['opensphere-console/opensphere-console-api'], 0);
+}));
+
+test('second review, item 4: every change checks the Lease first; a takeover before reopen leaves the writers stopped', async () => withDir(async (dir) => {
+  const w = switched();
+  w.onCall = (x, a) => {
+    if (a.includes('endpointslices') && x.lease?.spec.holderIdentity === 'me/1') {
+      x.rv += 1;
+      x.lease = { ...x.lease, metadata: { ...x.lease.metadata, resourceVersion: String(x.rv) }, spec: { ...x.lease.spec, holderIdentity: 'other/2', acquireTime: 'later' } };
+    }
+  };
+  await assert.rejects(cutover(w, dir).apply({ until: 'reopen' }), { code: 'CUTOVER_LOCK_LOST' });
+  assert.equal(stateOf(w).state, 'Switched', 'the point of no return was not recorded');
+  assert.equal(w.deployments['opensphere-console/opensphere-console-api'], 0);
+  assert.equal(w.lease.spec.holderIdentity, 'other/2', 'the other run keeps its lock');
+  assert.deepEqual(catalogLines(`rows|a|1\ncontent|a|x\ntable|a|b|1\nrole|r|x\nBEGIN\nledger|count|1`), ['ledger|count|1', 'role|r|x']);
 }));
 
 test('finding 9: --extra-writer on a resume joins before freeze and is refused after it', async () => withDir(async (dir) => {

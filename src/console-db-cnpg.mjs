@@ -257,6 +257,53 @@ const INSTANCE_ROLE_NAMED = Object.freeze(['/secrets', '/configmaps', 'coordinat
 // would make the token controller mint a token for any ServiceAccount in the namespace (finding 4b).
 export const OPERATOR_SECRET_TYPES = Object.freeze(['Opaque', 'kubernetes.io/tls', 'kubernetes.io/basic-auth']);
 
+// The same rule in JavaScript, for plans (second review, item 3): what in a Role the fence would refuse.
+const OWN_NAME_RE = new RegExp(OWN_NAME);
+const ownName = (n) => OWN_NAME_RE.test(n) && n !== CUTOVER_CONFIGMAP;
+export function instanceRoleViolations(rules = []) {
+  const out = [];
+  for (const [i, r] of (rules || []).entries()) {
+    if (r.nonResourceURLs || !r.apiGroups?.length || !r.resources?.length) { out.push(`rule ${i}: not a resource rule`); continue; }
+    for (const g of r.apiGroups) for (const x of r.resources) {
+      const key = `${g}/${x}`;
+      const verbs = INSTANCE_ROLE_RULES[key];
+      if (!verbs) { out.push(`rule ${i}: ${key} is not in the measured table`); continue; }
+      const extra = (r.verbs || []).filter((v) => !verbs.includes(v));
+      if (extra.length) out.push(`rule ${i}: ${key} verbs ${extra.join(',')} are not in the measured table`);
+      if (INSTANCE_ROLE_NAMED.includes(key)) {
+        const names = r.resourceNames || [];
+        if (!names.length) out.push(`rule ${i}: ${key} names no objects`);
+        const foreign = names.filter((n) => !ownName(n) && n !== 'cnpg-default-monitoring');
+        if (foreign.length) out.push(`rule ${i}: ${key} names ${foreign.join(',')}, outside opensphere-console-db-*`);
+      }
+    }
+  }
+  return out;
+}
+// Every Secret and ConfigMap a Cluster spec references. CloudNativePG puts each referenced Secret into the instance
+// Role, and the fence admits only the Cluster's own names there, so a reference outside opensphere-console-db-* would
+// stall the operator (a future backup credential, for example). Name such Secrets opensphere-console-db-<purpose>.
+export function clusterReferenceViolations(spec = {}) {
+  const out = [];
+  const walk = (v, path) => {
+    if (Array.isArray(v)) { v.forEach((x, i) => walk(x, `${path}[${i}]`)); return; }
+    if (!v || typeof v !== 'object') return;
+    const key = path.split('.').pop().replace(/\[\d+\]$/, '');
+    if (typeof v.name === 'string' && (/secret/i.test(key) || /configmap/i.test(key) || ('key' in v && !('value' in v)) || key === 'password')) {
+      const kind = /configmap/i.test(key) ? 'ConfigMap' : 'Secret';
+      const ok = kind === 'ConfigMap' ? ownName(v.name) || v.name === 'cnpg-default-monitoring' : ownName(v.name);
+      if (!ok) out.push(`${path}: ${kind} ${v.name} is outside opensphere-console-db-*`);
+    }
+    for (const [k, x] of Object.entries(v)) {
+      // certificates.serverTLSSecret and its siblings name a Secret by a plain string.
+      if (typeof x === 'string' && /Secret$/.test(k) && !ownName(x)) out.push(`${path ? `${path}.` : ''}${k}: Secret ${x} is outside opensphere-console-db-*`);
+      walk(x, path ? `${path}.${k}` : k);
+    }
+  };
+  walk(spec, '');
+  return out;
+}
+
 export function renderFence({ images: pinned = consoleDbImages(), mode = 'deny' } = {}) {
   if (!['deny', 'warn'].includes(mode)) throw fail('INVALID_INPUT', 'Operator fence mode is deny or warn');
   const allowedImages = [...imageForms(pinned.operator), ...imageForms(pinned.postgres)];
@@ -422,6 +469,12 @@ export function renderOperatorObjects({ api, cilium = false, fenceMode = 'deny',
 export function renderConsoleDbCluster({ storageClass, imageSource = images, instances = 3 } = {}) {
   if (typeof storageClass !== 'string' || !/^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$/.test(storageClass)) throw fail('INVALID_INPUT', 'Installation StorageClass is required');
   const pinned = consoleDbImages(imageSource);
+  const cluster = renderedCluster(storageClass, pinned, instances);
+  const outside = clusterReferenceViolations(cluster.spec);
+  if (outside.length) throw fail('UNTRUSTED_PROFILE', `The Console DB Cluster references objects the operator fence would refuse: ${outside.join('; ')}`);
+  return cluster;
+}
+function renderedCluster(storageClass, pinned, instances) {
   return relabel({
     apiVersion: 'postgresql.cnpg.io/v1', kind: 'Cluster',
     metadata: { name: CLUSTER_NAME, namespace: DATA_NAMESPACE },

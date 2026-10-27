@@ -41,7 +41,12 @@ CNPG operator는 HISS 기능이 아니다. Console Backbone의 전제다. Setup�
   - Console DB Cluster의 서버 측 dry-run이 operator webhook을 지난다(M1 아래에서 API 서버가 9443에 닿는다).
 - Console DB가 CNPG에 있으면 Setup `upgrade`가 operator 객체를 계획하고, 다르면 다시 적용한다.
   - 울타리는 지금 모드 그대로 둔다. 비상으로 warn에 둔 울타리를 upgrade가 deny로 되돌리지 않는다(`fenceMode: 'preserve'`).
+  - 대신 warn이면 upgrade마다 경고를 낸다. 계획 출력의 `warnings`에도 들어간다.
   - 전환(`migrate-console-db`)은 deny일 때만 시작한다.
+- 계획이 `Blocked`이면 apply와 upgrade는 아무것도 쓰지 않고 멈춘다. 이유는 셋이다.
+  - `ClusterReferencesOutsideFence`: Cluster가 `opensphere-console-db-…` 밖 이름의 Secret·ConfigMap을 참조한다. CNPG는 참조한 Secret을 인스턴스 Role에 적는데, 울타리는 그 이름만 받으므로 operator가 멈춘다. **Cluster가 참조하는 Secret은 모두 `opensphere-console-db-<용도>`로 짓는다**(예: 백업 자격 `opensphere-console-db-backup`). Setup의 Cluster 렌더도 같은 검사를 한다.
+  - `OperatorRemeasureRequired`(deny): operator 이미지가 바뀐다. 인스턴스 Role 규칙표는 고정한 이미지에서 잰 것이다. 순서: `prepare-console-db --apply --operator-fence warn` → 결과의 `instanceRole`이 비었는지 본다 → `prepare-console-db --apply`(deny).
+  - `InstanceRoleOutsideFence`(deny): operator가 이미 쓴 인스턴스 Role이 규칙표와 다르다. deny면 operator가 멈춘다. 규칙표를 다시 잰 Setup 릴리스가 나올 때까지 warn에 둔다.
 
 ## 3. 울타리 (ValidatingAdmissionPolicy `opensphere-console-db-operator-fence`)
 
@@ -89,7 +94,8 @@ opensphere-setup migrate-console-db ... [--break-lock <잡은 쪽>]   (죽은 �
 - `--apply`가 없으면 사전 점검만 한다(읽기).
 - 단계마다 체크포인트 ConfigMap `opensphere-console-data/opensphere-console-db-cutover`에 기록한다. 다시 실행하면 기록되지 않은 첫 단계부터 이어 간다. 기록된 단계는 다시 하지 않는다.
 - **한 번에 하나만 돈다.** `--apply`·`--rollback`·`--discard-attempt`는 같은 이름의 Lease(`coordination.k8s.io`)를 잡고 시작한다.
-  - 기다리는 동안 1분마다 갱신한다. 유효 기간은 30분이다.
+  - worker thread가 1분마다 갱신한다(유효 기간의 1/3을 넘지 않게). 그래서 긴 동기 호출(rollout status, 덤프 복사, 내용 해시)이 유효 기간 30분을 넘어도 잠금이 풀리지 않는다.
+  - 클러스터를 바꾸는 호출(쓰는 쪽·StatefulSet scale, Service patch, PV patch, Cluster 적용, hibernate, Pod 삭제, 정리)마다 바로 앞에서 Lease를 읽는다. 잡은 쪽 이름과 잡은 시각이 이 실행의 것이고 만료되지 않았어야 한다. 아니면 그 호출을 하지 않고 멈춘다. reopen은 되돌릴 수 없는 지점을 기록하기 전에도 본다.
   - 다른 실행이 잡고 있으면 거절한다(`CUTOVER_LOCKED`, 잡은 쪽 이름을 알려 준다).
   - 그 프로세스가 죽은 것을 확인했으면 `--break-lock <잡은 쪽>`으로 넘겨받는다. 30분이 지나면 저절로 풀린다.
   - 잡은 뒤 누가 Lease를 바꾸면 그 실행은 멈춘다(`CUTOVER_LOCK_LOST`).
@@ -100,13 +106,13 @@ opensphere-setup migrate-console-db ... [--break-lock <잡은 쪽>]   (죽은 �
 
 | 단계 | 하는 일 |
 |---|---|
-| freeze | 옛 PV를 `Retain`으로. 쓰는 쪽을 기록하고 0으로(Console 먼저, Supabase 나중). 원본에 클라이언트 세션이 남으면 멈춘다. 그다음 원본의 **쓰기 지표**를 기록한다: 사용자 표의 행 변경 수(`n_tup_ins/upd/del`), 관계 파일과 카탈로그 행 버전(TRUNCATE·DDL), 시퀀스 값, 다른 DB의 행 변경 수. 2초 간격 두 번이 같을 때만 기록한다 |
+| freeze | 옛 PV를 `Retain`으로. 쓰는 쪽을 기록하고 0으로(Console 먼저, Supabase 나중). 원본에 클라이언트 세션이 남으면 멈춘다. 그다음 원본의 **쓰기 지표**를 기록한다: 사용자 표의 행 변경 수(`n_tup_ins/upd/del`), 관계 파일과 카탈로그 행 버전(TRUNCATE·DDL), 시퀀스 값, 다른 DB의 행 변경 수, `pg_postmaster_start_time()`, 통계 초기화 시각. 2초 간격 두 번이 같을 때만 기록한다. 재시작이나 통계 초기화는 지표를 0으로 돌리므로 따로 이름을 붙여 알린다 |
 | dump | 먼저 남은 공간을 본다. 원본 볼륨과 이 기계 모두 DB 크기의 1.1배 + 256 MiB가 비어 있어야 한다(볼륨이 차면 PostgreSQL이 멈춘다). `pg_dump -Fc`, `pg_restore --list`로 확인, 증거 폴더로 복사, sha256 대조. 맞으면 원본 볼륨의 덤프는 지운다. 증거 폴더는 현재 사용자만 읽는다(Windows는 복구 키와 같은 ACL 도우미, 그 밖은 0700) |
 | fingerprint | 원본이 freeze 때 그대로인지 먼저 본다. 표마다 행 수와 **내용 해시**, **정의**(열·기본값·identity, 인덱스, 제약, 뷰, 함수, 시퀀스 값), 원장, 역할, 멤버십, 권한(읽기 전용, XML 함수 없음). 비밀번호 없는 역할 덤프 |
 | create | Setup Secret 둘(지금 비밀번호를 프로세스 안에서 옮김, 출력 없음), 임시 원본 Service, Cluster. 가져오기와 3인스턴스·동기 대기를 기다린다. 가져오기 로그를 보관하고 예상 밖 오류가 있으면 멈춘다. **로그를 읽지 못했으면 멈춘다**(아래) |
 | repair | 멤버십, 역할 설정, 속성, 스키마·DB 권한을 되살린다 |
 | parity | 관문. 설명된 차이 밖의 것이 하나라도 있으면 멈춘다(§5.1) |
-| switch | 원본이 freeze 때 그대로인지 다시 본다(세션 없음, 지표 그대로). 지금 Service의 selector와 ports를 체크포인트에 적는다. selector를 `{app, cnpg.io/instanceRole: primary}`, targetPort를 5432로. 끝점이 primary 하나인지 본다. 원본을 한 번 더 본 뒤 StatefulSet을 0으로 |
+| switch | 원본이 freeze 때 그대로인지 다시 본다(세션 없음, 지표 그대로, **카탈로그 지문이 fingerprint 때와 같음**: 역할·비밀번호 해시·멤버십·역할 설정·권한·기본 권한·주석·large object). 지금 Service의 selector와 ports를 체크포인트에 적는다. selector를 `{app, cnpg.io/instanceRole: primary}`, targetPort를 5432로. 끝점이 primary 하나인지 본다. 원본을 한 번 더 본 뒤 StatefulSet을 0으로 |
 | reopen | Service가 primary 하나만 고르는지, targetPort가 5432인지, Cluster가 hibernate되지 않고 건강한지, StatefulSet Pod가 없는지 본다. 하나라도 아니면 쓰는 쪽을 올리지 않는다. 그다음 되돌릴 수 없는 지점을 기록하고 쓰는 쪽을 원래 수로 |
 | verify | PostgREST schema reload, CNPG 경로로 원장 확인, 쓰는 쪽 역할이 모두 새 primary에 붙었는지, Cluster 상태 |
 | finalize | 임시 원본 Service와 import-source Secret을 지운다 |
@@ -119,7 +125,7 @@ opensphere-setup migrate-console-db ... [--break-lock <잡은 쪽>]   (죽은 �
   - 무엇이든 바꾸기 전에 `RollingBack`을 기록한다. 중간에 실패해도 그 상태로 남고, `--apply`는 거절한다. `--rollback`을 다시 실행하면 이어서 끝낸다.
   - Cluster hibernate를 요청한다. 인스턴스도 `app` 레이블을 가진다.
   - 곧바로 옛 길을 되살린다: switch 때 적어 둔 selector와 ports를 그대로, StatefulSet을 1로. 원장이 원본 지문과 같은지 본다. 중단된 dump가 남긴 파일도 지운다.
-  - 쓰는 쪽은 Service의 준비된 끝점이 StatefulSet Pod 하나뿐일 때만 되살린다. hibernate가 3분 안에 인스턴스를 멈추지 못하면(operator 정지 등) Setup이 인스턴스 Pod를 지운다. hibernate 요청이 남아 있어 operator가 다시 만들지 않는다. 그래도 3분 안에 안 되면 멈추고, 다시 실행한다.
+  - 쓰는 쪽은 Service의 준비된 끝점이 StatefulSet Pod 하나뿐일 때만 되살린다. hibernate가 3분 안에 인스턴스를 멈추지 못하면(operator 정지 등) Setup이 그 Cluster의 Pod를 모두(인스턴스, import·join Job Pod) 지운다. hibernate 요청이 남아 있어 operator가 다시 만들지 않는다. 그래도 3분 안에 안 되면 멈추고, 다시 실행한다.
   - hibernate된 Cluster는 남긴다. 다음 시도 전에 `--discard-attempt <id>`로 지운다(가져온 사본만 지운다).
 - reopen 뒤에는 되돌리기를 거절한다. 그때부터는 새 덤프로만 되돌린다(설계 §1.6).
 - 옛 StatefulSet·PVC·PV는 이 명령이 지우지 않는다. 릴리스 prune도 지우지 않는다. 7일 뒤 한 줄로 알리고 따로 지운다(계획 §4.3).
@@ -128,7 +134,10 @@ opensphere-setup migrate-console-db ... [--break-lock <잡은 쪽>]   (죽은 �
 
 - 표: 행 수와 내용 해시. 행마다 `md5(행::text)`를 구해 64비트 합 두 개로 접는다. 행 순서와 상관없고, 정렬하거나 큰 문자열을 만들지 않는다. 시간대·날짜 형식·float 자릿수·bytea 형식은 양쪽 같게 둔다.
   - 원본에서 1 GiB가 넘는 표는 행 수만 비교하고 `parity.json`의 `unhashed`에 적는다. 대상은 원본의 계획을 그대로 따른다.
-- 정의: 열(타입, NOT NULL, 기본값, identity, generated, collation), 인덱스, 제약, 뷰, 함수(`pg_get_functiondef`), 시퀀스 값. 확장에 속한 객체는 확장 줄(이름·버전·스키마)로 본다. CNPG 이미지의 vector가 더 새 판이기 때문이다.
+- 정의: 열(타입, NOT NULL, 기본값, identity, generated, collation), 인덱스, 제약, 뷰, 함수(`pg_get_functiondef`), 시퀀스 값, 주석, large object. 확장에 속한 객체는 확장 줄(이름·버전·스키마)로 본다. CNPG 이미지의 vector가 더 새 판이기 때문이다.
+  - 정의는 글자 그대로(md5) 비교한다. 패턴으로 다듬지 않는다.
+  - 예외는 복원이 다시 그리는 CHECK 제약과 뷰뿐이다. 복원은 `((a AND b) AND c)`를 평평한 AND 하나로 읽고, 뷰의 UNION 갈래에 `AS text` 별칭을 붙인다(실험실: CHECK 7개, 뷰 1개).
+  - 그 둘은 fingerprint 때 원본의 정의 글을 `source-definitions.json`에 남긴다. parity가 글이 다른 것만 대상에서 다시 읽는다: 롤백하는 트랜잭션 안에서 임시 표에 그 CHECK를 붙이거나 임시 뷰를 만들고, 대상 서버가 그린 글이 대상의 실제 객체와 같을 때만 설명된 차이로 본다(`rerender.json`). 대상이 못 읽거나 다르게 그리면 차이로 남는다.
 - 원장, 역할, 멤버십, 역할 설정, 권한, 소유자, RLS, 정책, 트리거, 이벤트 트리거, 기본 권한, DB locale, publication은 전과 같다.
 - `extensions` 스키마의 권한 차이는 소유자가 postgres로 바뀐 것만 설명된 차이로 본다. 두 소유자의 권한을 뺀 나머지 권한이 같아야 한다. 권한이 하나라도 더하거나 빠지면 멈춘다.
 
