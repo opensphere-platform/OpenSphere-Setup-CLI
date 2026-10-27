@@ -401,6 +401,8 @@ function installHarness(cluster, events) {
   };
   return vm.runInNewContext(`(${bootstrapSource.slice(installBegin, installEnd)})`, {
     kubectl,
+    // R2-C2: the Console DB layout these component releases run on (the StatefulSet).
+    observeConsoleDataLayout: () => ({ layout: 'statefulset' }),
     console: { log: (line) => events.push(`log:${line}`) },
     runComponentMigrations: () => events.push('migrations'),
     componentReleaseWorkloadManifests: (_lock, _prepared, changed) => changed.map((component) => ({
