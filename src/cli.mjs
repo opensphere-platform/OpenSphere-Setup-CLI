@@ -179,10 +179,11 @@ Usage:
   opensphere-setup prepare-ceph [--context <kube-context>] [--console-url <https-origin>] [--apply]
   opensphere-setup prepare-hiss [--context <kube-context>] [--apply] [--backup-fences deny|warn]
       (--backup-fences deny: after the first HISS backup writes on this cluster raised no admission warning)
-  opensphere-setup prepare-console-db --context <kube-context> [--apply] [--operator-fence deny|warn]
+  opensphere-setup prepare-console-db --context <kube-context> [--apply] [--operator-fence deny|warn|preserve]
       (R2-C2: the CloudNativePG operator, its admission fence and NetworkPolicies for the Console DB)
   opensphere-setup migrate-console-db --context <kube-context> --cluster-uid <kube-system-uid> --evidence-dir <dir>
       [--apply [--until <step>]] [--accept-prerequisite <id>]... [--extra-writer <ns>/<deployment>[=<db-role>]]...
+      [--break-lock <holder>]   take over the run lock of a migrate-console-db process that is gone
   opensphere-setup migrate-console-db --context <kube-context> --cluster-uid <uid> --evidence-dir <dir> --rollback | --status
   opensphere-setup migrate-console-db --context <kube-context> --cluster-uid <uid> --evidence-dir <dir> --discard-attempt <attempt-id>
       (steps: freeze dump fingerprint create repair parity switch reopen verify finalize; resumes from the checkpoint)
@@ -336,6 +337,7 @@ async function main() {
     if (!/^[0-9a-f-]{36}$/.test(clusterUid)) throw new Error('migrate-console-db requires --cluster-uid <kube-system namespace uid>');
     const cutover = createCutover({ context, clusterUid, evidenceDir: resolve(option('--evidence-dir', '')),
       acceptedPrerequisites: options('--accept-prerequisite'), extraWriters: options('--extra-writer'),
+      breakLock: hasOption('--break-lock') ? option('--break-lock', '') : null,
       log: (line) => console.error(`[Console DB 전환] ${line}`) });
     if (!hasOption('--evidence-dir')) throw new Error('migrate-console-db requires --evidence-dir (the off-cluster dump goes there)');
     let result;

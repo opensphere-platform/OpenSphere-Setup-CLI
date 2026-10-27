@@ -2954,10 +2954,11 @@ async function installPreparedRelease(lock, prepared, storageClass, consoleUrl, 
   if (prepared.foundation.dataLayout?.layout === 'cnpg') {
     // The CloudNativePG operator is a Setup base component once the Console DB runs on it: keep its objects current.
     const context = currentKubeContext();
-    const plan = await prepareConsoleDb({ context, apply: false });
+    // preserve: an upgrade keeps the operator fence in the mode it is in (deny, or warn during an emergency).
+    const plan = await prepareConsoleDb({ context, apply: false, fenceMode: 'preserve' });
     if (plan.state !== 'Present') {
-      progress?.item('설치', `CloudNativePG operator ${plan.state} -> 적용`);
-      await prepareConsoleDb({ context, apply: true });
+      progress?.item('설치', `CloudNativePG operator ${plan.state} -> 적용 (울타리 ${plan.fenceMode})`);
+      await prepareConsoleDb({ context, apply: true, fenceMode: plan.fenceMode });
     }
   }
   runFoundationInstallers(lock, prepared.foundation, storageClass, consoleUrl, progress);

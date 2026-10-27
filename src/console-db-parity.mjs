@@ -1,33 +1,69 @@
 // The parity gate of the Console DB cutover (R2-C2 scope 3). The Service moves to the CloudNativePG primary only when
 // source and target agree on every item below, except the differences the lab explained (R2-C2-CNPG-LAB-RESULTS
 // §2.4). Anything else stops the cutover before the switch, where rollback loses nothing.
-//   - exact row count of every table (only supabase_vault's tables may be missing: user decision I1);
+//   - every table: exact row count and a content hash (review 2026-10-27, finding 5): the md5 of every row's text
+//     form, folded into two 64-bit sums, so the order of rows does not matter and nothing is sorted or held in memory.
+//     Tables larger than the size guard (1 GiB by default, measured on the source) are compared by row count only and
+//     listed as such; only supabase_vault's tables may be missing (user decision I1);
+//   - definitions: columns with types, defaults, identity and generation; indexes; constraints; views; functions
+//     (pg_get_functiondef); sequences with their last value. Objects that belong to an extension are compared through
+//     the extension line instead (the CNPG image ships a newer vector);
 //   - the migration ledger: count, head and an md5 over every row;
 //   - roles: attributes, password hash, settings (authenticator loses session_preload_libraries; supabase_admin gets a
 //     new SCRAM hash for the same password from managed.roles; CNPG adds streaming_replica and cnpg_metrics_exporter);
 //   - memberships with their admin/inherit/set options (memberships of postgres are CNPG's own);
 //   - grants: database, schema, relation and function privileges, compared semantically (the owner's own rights are
-//     implicit); objects of the extensions schema belong to the extensions, whose owner moves to postgres;
+//     implicit). In the extensions schema only an owner change to postgres is explained, and only when the grants are
+//     otherwise the same;
 //   - object owners, function bodies, RLS flags, policies, triggers, event triggers and their superuser owner, default
 //     privileges, database locale, publications.
 // The SQL is read-only and uses no XML function (triage M3).
 import { effectiveGrants } from './console-db-role-repair.mjs';
 
 const HEADER = '\\pset pager off\n\\pset tuples_only on\n\\pset format unaligned\nBEGIN TRANSACTION READ ONLY;\nSET LOCAL search_path = pg_catalog;\n';
+// Row text depends on these session settings; both sides use the same values.
+const DATA_HEADER = `${HEADER}SET LOCAL TimeZone = 'UTC';\nSET LOCAL DateStyle = 'ISO, MDY';\nSET LOCAL IntervalStyle = 'postgres';\n`
+  + 'SET LOCAL extra_float_digits = 1;\nSET LOCAL bytea_output = \'hex\';\n';
 const lit = (s) => `'${String(s).replace(/'/g, "''")}'`;
 const ident = (s) => `"${String(s).replace(/"/g, '""')}"`;
+export const CONTENT_HASH_LIMIT_BYTES = 1024 ** 3;
+const USER_SCHEMA = (n) => `${n}.nspname NOT IN ('pg_catalog','information_schema') AND ${n}.nspname NOT LIKE 'pg\\_toast%' AND ${n}.nspname NOT LIKE 'pg\\_temp%'`;
+const NOT_EXTENSION_MEMBER = (catalog, oid) => `NOT EXISTS (SELECT 1 FROM pg_depend xd WHERE xd.classid = '${catalog}'::regclass AND xd.objid = ${oid} AND xd.deptype = 'e')`;
 
-export const TABLES_SQL = `${HEADER}SELECT 'table|' || n.nspname || '|' || c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+export const TABLES_SQL = `${HEADER}SELECT 'table|' || n.nspname || '|' || c.relname || '|' || pg_total_relation_size(c.oid)::text FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
  WHERE c.relkind IN ('r','p') AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg\\_toast%' ORDER BY 1;
 ROLLBACK;
 `;
 export function parseTables(output) {
-  return String(output).split(/\r?\n/).filter((l) => l.startsWith('table|')).map((l) => { const [, schema, name] = l.split('|'); return { schema, name }; });
+  return String(output).split(/\r?\n/).filter((l) => l.startsWith('table|')).map((l) => {
+    const [, schema, name, bytes] = l.split('|');
+    return { schema, name, bytes: bytes === undefined ? null : Number(bytes) };
+  });
 }
+// Which tables get a content hash. The source decides (its sizes); the target follows the source's plan, so both
+// sides hash the same tables. A table the source does not have is counted only (it is a difference anyway).
+export function contentPlan(tables, { limitBytes = CONTENT_HASH_LIMIT_BYTES, plan = null } = {}) {
+  const fromSource = plan ? new Map(plan.map((t) => [`${t.schema}.${t.name}`, t.hashed])) : null;
+  return tables.map((t) => ({ schema: t.schema, name: t.name, bytes: t.bytes,
+    hashed: fromSource ? fromSource.get(`${t.schema}.${t.name}`) === true : !(t.bytes > limitBytes) }));
+}
+// Row counts and content hashes: rows|<schema.table>|<count> and content|<schema.table>|<hash> or "unhashed".
+export function tableDataSql(plan) {
+  if (!plan.length) throw new Error('No tables to count');
+  const row = '_opensphere_parity_row';
+  const parts = plan.map(({ schema, name, hashed }) => {
+    const key = `${schema}.${name}`;
+    const from = `${ident(schema)}.${ident(name)}`;
+    if (!hashed) return `SELECT unnest(ARRAY[${lit(`rows|${key}|`)} || count(*)::text, ${lit(`content|${key}|unhashed`)}]) FROM ${from}`;
+    return `SELECT unnest(ARRAY[${lit(`rows|${key}|`)} || a.n::text, ${lit(`content|${key}|`)} || coalesce(a.h1::text || ':' || a.h2::text, 'empty')])`
+      + ` FROM (SELECT count(*) AS n, sum(('x' || substr(h, 1, 16))::bit(64)::bigint::numeric) AS h1, sum(('x' || substr(h, 17, 16))::bit(64)::bigint::numeric) AS h2`
+      + ` FROM (SELECT md5(${row}::text) AS h FROM ${from} ${row}) r) a`;
+  });
+  return `${DATA_HEADER}${parts.join('\nUNION ALL ')};\nROLLBACK;\n`;
+}
+// Kept for callers that only need the counts (the plan without hashes).
 export function rowCountSql(tables) {
-  if (!tables.length) throw new Error('No tables to count');
-  const parts = tables.map(({ schema, name }) => `SELECT ${lit(`rows|${schema}.${name}`)} || '|' || count(*)::text FROM ${ident(schema)}.${ident(name)}`);
-  return `${HEADER}${parts.join('\nUNION ALL ')};\nROLLBACK;\n`;
+  return tableDataSql(tables.map((t) => ({ ...t, hashed: false })));
 }
 
 const acl = (column) => `coalesce(${column}::text, 'NULL')`;
@@ -70,13 +106,42 @@ export const FINGERPRINT_SQL = `${HEADER}SELECT line FROM (
   UNION ALL SELECT 'defacl|' || pg_get_userbyid(defaclrole) || '|' || coalesce(n.nspname, '*') || '|' || defaclobjtype::text || '|' || defaclacl::text
     FROM pg_default_acl d LEFT JOIN pg_namespace n ON n.oid = d.defaclnamespace
   UNION ALL SELECT 'publication|' || pubname || '|' || pg_get_userbyid(pubowner) || ' all=' || puballtables FROM pg_publication
+  -- n=: the definition without parentheses and spacing, and for views also without column aliases (see compareParity).
+  UNION ALL SELECT p || md5(d) || ' n=' || md5(regexp_replace(CASE WHEN p LIKE 'def|view|%'
+      THEN regexp_replace(d, '[[:space:]]+AS[[:space:]]+("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*)', '', 'g') ELSE d END, '[()[:space:]]', '', 'g')) FROM (
+    SELECT 'def|columns|' || n.nspname || '.' || c.relname || ':' || c.relkind::text || '|' AS p, coalesce(string_agg(a.attname || ' ' || format_type(a.atttypid, a.atttypmod)
+        || ' nn=' || a.attnotnull || ' id=' || a.attidentity::text || ' gen=' || a.attgenerated::text || ' coll=' || coalesce(co.collname, '')
+        || ' def=' || coalesce(pg_get_expr(ad.adbin, ad.adrelid), ''), ',' ORDER BY a.attnum), '') AS d
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+      LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+      LEFT JOIN pg_collation co ON co.oid = a.attcollation
+      WHERE c.relkind IN ('r','p','v','m','f') AND ${USER_SCHEMA('n')} AND ${NOT_EXTENSION_MEMBER('pg_class', 'c.oid')}
+      GROUP BY n.nspname, c.relname, c.relkind
+    UNION ALL SELECT 'def|index|' || n.nspname || '.' || ic.relname || '|', pg_get_indexdef(i.indexrelid)
+      FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid JOIN pg_namespace n ON n.oid = ic.relnamespace
+      WHERE ${USER_SCHEMA('n')} AND ${NOT_EXTENSION_MEMBER('pg_class', 'i.indrelid')}
+    UNION ALL SELECT 'def|constraint|' || n.nspname || '.' || coalesce(c.relname, t.typname, '-') || '.' || con.conname || '|',
+        con.contype::text || ' ' || pg_get_constraintdef(con.oid) || ' valid=' || con.convalidated || ' deferrable=' || con.condeferrable || '/' || con.condeferred
+      FROM pg_constraint con JOIN pg_namespace n ON n.oid = con.connamespace LEFT JOIN pg_class c ON c.oid = con.conrelid LEFT JOIN pg_type t ON t.oid = con.contypid
+      WHERE ${USER_SCHEMA('n')} AND (c.oid IS NULL OR ${NOT_EXTENSION_MEMBER('pg_class', 'c.oid')}) AND (t.oid IS NULL OR ${NOT_EXTENSION_MEMBER('pg_type', 't.oid')})
+    UNION ALL SELECT 'def|view|' || n.nspname || '.' || c.relname || '|', pg_get_viewdef(c.oid)
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relkind IN ('v','m') AND ${USER_SCHEMA('n')} AND ${NOT_EXTENSION_MEMBER('pg_class', 'c.oid')}
+    UNION ALL SELECT 'def|function|' || n.nspname || '.' || p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')|', pg_get_functiondef(p.oid)
+      FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+      WHERE p.prokind <> 'a' AND ${USER_SCHEMA('n')} AND ${NOT_EXTENSION_MEMBER('pg_proc', 'p.oid')}
+  ) defs
+  UNION ALL SELECT 'seq|' || schemaname || '.' || sequencename || '|' || coalesce(last_value::text, 'unset') || ' inc=' || increment_by
+      || ' min=' || min_value || ' max=' || max_value || ' cycle=' || cycle
+    FROM pg_sequences WHERE schemaname NOT IN ('pg_catalog','information_schema')
 ) x ORDER BY 1;
 ROLLBACK;
 `;
 
-const KEYED = ['ledger', 'role', 'member', 'ext', 'db', 'rls', 'func', 'policy', 'trigger', 'evtrigger', 'defacl', 'publication'];
+const KEYED = ['ledger', 'role', 'member', 'ext', 'db', 'rls', 'func', 'policy', 'trigger', 'evtrigger', 'defacl', 'publication', 'content', 'seq'];
 export function parseFingerprint(output) {
-  const fp = { rows: new Map(), acl: new Map(), settings: new Map() };
+  const fp = { rows: new Map(), acl: new Map(), settings: new Map(), def: new Map() };
   for (const k of KEYED) fp[k] = new Map();
   for (const line of String(output).split(/\r?\n/)) {
     const parts = line.split('|');
@@ -84,6 +149,7 @@ export function parseFingerprint(output) {
     if (kind === 'rows') fp.rows.set(parts[1], parts[2]);
     else if (kind === 'acl') fp.acl.set(`${parts[1]}|${parts[2]}`, { owner: parts[3], acl: parts.slice(4).join('|') });
     else if (kind === 'setting') fp.settings.set(`${parts[1]}|${parts[2]}`, parts.slice(3).join('|'));
+    else if (kind === 'def' && parts.length >= 4) fp.def.set(`${parts[1]}|${parts[2]}`, parts.slice(3).join('|'));
     else if (KEYED.includes(kind) && parts.length >= 3) fp[kind].set(parts[1], parts.slice(2).join('|'));
   }
   return fp;
@@ -103,18 +169,26 @@ const versionAtLeast = (a, b) => {
 };
 
 export function compareParity(source, target) {
-  const differences = [], explained = [];
+  const differences = [], explained = [], unhashed = [];
   const differ = (what, s, t) => differences.push({ what, source: s ?? null, target: t ?? null });
   const explain = (what, reason) => explained.push({ what, reason });
   const both = (a, b) => new Set([...a.keys(), ...b.keys()]);
 
-  // Rows.
+  // Rows and contents.
   if (!source.rows.size) differ('rows', 'no source row counts', null);
   for (const key of both(source.rows, target.rows)) {
     const s = source.rows.get(key), t = target.rows.get(key);
     if (s === t) continue;
     if (t === undefined && inExcludedSchema(key)) { explain(`rows|${key}`, 'supabase_vault is not imported (I1)'); continue; }
     differ(`rows|${key}`, s, t);
+  }
+  if (source.rows.size && !source.content.size) differ('content', 'no source content hashes', null);
+  for (const key of both(source.content, target.content)) {
+    const s = source.content.get(key), t = target.content.get(key);
+    if (t === undefined && inExcludedSchema(key)) { explain(`content|${key}`, 'supabase_vault is not imported (I1)'); continue; }
+    if (s === 'unhashed' && t === 'unhashed') { unhashed.push(key); continue; }
+    if (s === t && s !== undefined) continue;
+    differ(`content|${key}`, s, t);
   }
   // Ledger.
   for (const key of ['count', 'head', 'md5']) if (source.ledger.get(key) !== target.ledger.get(key) || !source.ledger.get(key)) differ(`ledger|${key}`, source.ledger.get(key), target.ledger.get(key));
@@ -170,17 +244,21 @@ export function compareParity(source, target) {
     const qualified = kind === 'schema' ? `${name}.` : name;
     if (inExcludedSchema(qualified)) { if (!t) { explain(`acl|${key}`, 'supabase_vault schema is not imported'); continue; } }
     if (!s || !t) { differ(`acl|${key}`, s && `${s.owner} ${s.acl}`, t && `${t.owner} ${t.acl}`); continue; }
-    const grants = (x) => [...effectiveGrants({ database: 'database', func: 'function' }[kind] ?? kind, x.owner, x.acl)].sort().join(',');
+    const grantSet = (x) => [...effectiveGrants({ database: 'database', func: 'function' }[kind] ?? kind, x.owner, x.acl)];
+    const grants = (x) => grantSet(x).sort().join(',');
     const sameOwner = s.owner === t.owner, sameGrants = grants(s) === grants(t);
     if (sameOwner && sameGrants) continue;
-    if (kind !== 'schema' && kind !== 'database' && inExtensionsSchema(qualified)) {
-      explain(`acl|${key}`, 'object of an extension; the extension owner becomes postgres'); continue;
+    if (kind !== 'schema' && kind !== 'database' && inExtensionsSchema(qualified) && !sameOwner && t.owner === 'postgres') {
+      // The extension's objects change owner to postgres. Grants either owner held are implicit on one side and
+      // explicit on the other; every other grant must be the same.
+      const owners = new Set([s.owner, t.owner]);
+      const others = (x) => grantSet(x).filter((g) => !owners.has(g.split(':')[0])).sort().join(',');
+      if (others(s) === others(t)) { explain(`acl|${key}`, 'object of an extension; its owner becomes postgres, other grants unchanged'); continue; }
     }
-    if (kind === 'database' && sameGrants && s.owner !== t.owner) { differ(`acl|${key}`, s.owner, t.owner); continue; }
     differ(`acl|${key}`, `${s.owner} ${grants(s)}`, `${t.owner} ${grants(t)}`);
   }
-  // Functions, policies, triggers, event triggers, default privileges, RLS, publications.
-  for (const kind of ['func', 'policy', 'trigger', 'evtrigger', 'defacl', 'rls', 'publication']) {
+  // Functions, policies, triggers, event triggers, default privileges, RLS, publications, definitions, sequences.
+  for (const kind of ['func', 'policy', 'trigger', 'evtrigger', 'defacl', 'rls', 'publication', 'def', 'seq']) {
     for (const key of both(source[kind], target[kind])) {
       const s = source[kind].get(key), t = target[kind].get(key);
       if (s === t) continue;
@@ -188,12 +266,24 @@ export function compareParity(source, target) {
       if (kind === 'func' && key === 'extensions' && s && t && s.split(' src=')[0] === t.split(' src=')[0]) {
         explain('func|extensions', 'extension functions of the CNPG image (vector version)'); continue;
       }
+      const object = kind === 'def' ? key.slice(key.indexOf('|') + 1) : key;
+      // A deparsed definition is not stable across dump and restore (lab 2026-10-27): the restore parses
+      // "((a AND b) AND c)" into one flat AND, so a CHECK loses parentheses, and a view's UNION arms gain "AS text"
+      // aliases. The same text without parentheses and spacing (views: and without column aliases; their column names
+      // and types are compared in def|columns) is explained, by name.
+      const normalized = (x) => String(x ?? '').split(' n=')[1];
+      if (kind === 'def' && s && t && normalized(s) && normalized(s) === normalized(t)) {
+        explain(`def|${key}`, 'the same definition; the restore deparses it with other parentheses or column aliases'); continue;
+      }
+      if ((kind === 'def' || kind === 'seq') && t === undefined && inExcludedSchema(object)) { explain(`${kind}|${key}`, 'supabase_vault is not imported (I1)'); continue; }
       differ(`${kind}|${key}`, s, t);
     }
   }
+  if (!source.def.size) differ('def', 'no source definitions', null);
   for (const [name, value] of source.evtrigger) {
     if (!/ owner=supabase_admin /.test(value)) differ(`evtrigger|${name}`, value, 'event triggers must stay owned by supabase_admin');
   }
   return { ok: differences.length === 0, differences, explained,
-    compared: { tables: source.rows.size, roles: source.role.size, memberships: source.member.size, grants: source.acl.size, ledger: source.ledger.get('count') } };
+    compared: { tables: source.rows.size, contentHashed: source.content.size - unhashed.length, unhashed, definitions: source.def.size,
+      sequences: source.seq.size, roles: source.role.size, memberships: source.member.size, grants: source.acl.size, ledger: source.ledger.get('count') } };
 }

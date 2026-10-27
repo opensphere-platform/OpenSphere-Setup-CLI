@@ -32,6 +32,11 @@ export const SUPABASE_SECRET = 'opensphere-supabase-secrets';
 export const ADMIN_SECRET = `${CLUSTER_NAME}-supabase-admin`;
 export const IMPORT_SOURCE_SECRET = `${CLUSTER_NAME}-import-source`;
 export const CUTOVER_CONFIGMAP = `${CLUSTER_NAME}-cutover`;
+// The cutover's run lock (a coordination.k8s.io Lease of the same name as the checkpoint).
+export const CUTOVER_LOCK = CUTOVER_CONFIGMAP;
+// Objects Setup writes in the data namespace under names that match the Cluster's name pattern. The operator may
+// never write them (review 2026-10-27, finding 4a: the checkpoint ConfigMap and the lock matched the pattern).
+export const SETUP_OWNED_NAMES = Object.freeze([ADMIN_SECRET, IMPORT_SOURCE_SECRET, CUTOVER_CONFIGMAP]);
 export const FENCE_NAME = 'opensphere-console-db-operator-fence';
 export const FIELD_MANAGER = 'opensphere-setup-console-db';
 export const AUTHORITY = 'console-db-cnpg-v1';
@@ -219,11 +224,38 @@ export const FENCE_RESOURCES = Object.freeze([
   'databases', 'databases/status', 'publications', 'publications/status', 'subscriptions', 'subscriptions/status',
   'databaseroles', 'databaseroles/status', 'databaseroles/finalizers',
 ]);
-export const INSTANCE_ROLE_RESOURCES = Object.freeze([
-  'secrets', 'configmaps', 'events', 'leases', 'clusters', 'clusters/status', 'backups', 'backups/status', 'databases', 'databases/status',
-  'publications', 'publications/status', 'subscriptions', 'subscriptions/status', 'failoverquorums', 'failoverquorums/status',
-  'databaseroles', 'databaseroles/status',
-]);
+// The instance Role CloudNativePG 1.30.1 renders (pkg/specs/roles.go), as the operator wrote it in the kind lab
+// (review-fixes lab/10-instance-role.json, 18 rules): "<apiGroup>/<resource>" -> the verbs it grants. The fence admits a Role rule only when
+// every group/resource pair is in this table and every verb is one CNPG grants for it, so the operator cannot hand
+// the (unfenced) instance ServiceAccount more than CNPG itself does (finding 4c: e.g. delete on clusters).
+export const INSTANCE_ROLE_RULES = Object.freeze({
+  '/configmaps': ['get', 'watch'],
+  '/secrets': ['get', 'watch'],
+  '/events': ['create', 'patch'],
+  'coordination.k8s.io/leases': ['get', 'update'],
+  'postgresql.cnpg.io/clusters': ['get', 'list', 'watch'],
+  'postgresql.cnpg.io/clusters/status': ['get', 'patch', 'update', 'watch'],
+  'postgresql.cnpg.io/backups': ['list', 'get', 'delete'],
+  'postgresql.cnpg.io/backups/status': ['get', 'patch', 'update'],
+  'postgresql.cnpg.io/databases': ['get', 'update', 'list', 'watch'],
+  'postgresql.cnpg.io/databases/status': ['get', 'patch', 'update'],
+  'postgresql.cnpg.io/publications': ['get', 'update', 'list', 'watch'],
+  'postgresql.cnpg.io/publications/status': ['get', 'patch', 'update'],
+  'postgresql.cnpg.io/subscriptions': ['get', 'update', 'list', 'watch'],
+  'postgresql.cnpg.io/subscriptions/status': ['get', 'patch', 'update'],
+  'postgresql.cnpg.io/failoverquorums': ['get', 'list', 'watch'],
+  'postgresql.cnpg.io/failoverquorums/status': ['get', 'patch', 'update', 'watch'],
+  'postgresql.cnpg.io/databaseroles': ['get', 'update', 'list', 'watch'],
+  'postgresql.cnpg.io/databaseroles/status': ['get', 'patch', 'update'],
+});
+// Rules CNPG writes with resourceNames, and so must name their objects: only the Cluster's own names (never the
+// cutover checkpoint or lock) or cnpg-default-monitoring.
+const INSTANCE_ROLE_NAMED = Object.freeze(['/secrets', '/configmaps', 'coordination.k8s.io/leases', 'postgresql.cnpg.io/clusters',
+  'postgresql.cnpg.io/clusters/status', 'postgresql.cnpg.io/failoverquorums', 'postgresql.cnpg.io/failoverquorums/status']);
+// The Secret types CloudNativePG 1.30.1 writes: Opaque (the CA), kubernetes.io/tls (server and replication
+// certificates), kubernetes.io/basic-auth (the app and superuser credentials). Never service-account-token, which
+// would make the token controller mint a token for any ServiceAccount in the namespace (finding 4b).
+export const OPERATOR_SECRET_TYPES = Object.freeze(['Opaque', 'kubernetes.io/tls', 'kubernetes.io/basic-auth']);
 
 export function renderFence({ images: pinned = consoleDbImages(), mode = 'deny' } = {}) {
   if (!['deny', 'warn'].includes(mode)) throw fail('INVALID_INPUT', 'Operator fence mode is deny or warn');
@@ -238,7 +270,7 @@ export function renderFence({ images: pinned = consoleDbImages(), mode = 'deny' 
     + ` && (!has(c.envFrom) || c.envFrom.all(f, (!has(f.secretRef) || ${own('f.secretRef.name')}) && (!has(f.configMapRef) || ${own('f.configMapRef.name')})))`;
   const volume = `has(v.persistentVolumeClaim) ? ${own('v.persistentVolumeClaim.claimName')}`
     + ` : (has(v.emptyDir) || has(v.downwardAPI) || (has(v.secret) && ${own('v.secret.secretName')})`
-    + ` || (has(v.configMap) && (${own('v.configMap.name')} || v.configMap.name in ['cnpg-default-monitoring', 'kube-root-ca.crt']))`
+    + ` || (has(v.configMap) && ((${own('v.configMap.name')} && v.configMap.name != '${CUTOVER_CONFIGMAP}') || v.configMap.name in ['cnpg-default-monitoring', 'kube-root-ca.crt']))`
     + " || (has(v.projected) && v.projected.sources.all(p, has(p.serviceAccountToken) || has(p.downwardAPI) || (has(p.configMap) && p.configMap.name == 'kube-root-ca.crt'))))";
   const podSpec = `variables.spec.serviceAccountName == '${CLUSTER_NAME}'`
     + ' && !(has(variables.spec.hostNetwork) && variables.spec.hostNetwork) && !(has(variables.spec.hostPID) && variables.spec.hostPID)'
@@ -246,11 +278,15 @@ export function renderFence({ images: pinned = consoleDbImages(), mode = 'deny' 
     + ` && variables.containers.all(c, ${container})`
     + ` && (!has(variables.spec.volumes) || variables.spec.volumes.all(v, ${volume}))`
     + ` && has(variables.podLabels) && 'cnpg.io/cluster' in variables.podLabels && variables.podLabels['cnpg.io/cluster'] == '${CLUSTER_NAME}'`;
-  const roleRule = "!r.verbs.exists(v, v in ['*', 'escalate', 'bind', 'impersonate'])"
-    + " && r.apiGroups.all(g, g in ['', 'postgresql.cnpg.io', 'coordination.k8s.io']) && !has(r.nonResourceURLs)"
-    + ` && r.resources.all(x, x in ${quoted(INSTANCE_ROLE_RESOURCES)})`
-    + " && (!r.resources.exists(x, x in ['secrets', 'configmaps']) || (has(r.resourceNames) && size(r.resourceNames) > 0"
-    + ` && r.resourceNames.all(n, ${own('n')} || n == 'cnpg-default-monitoring')))`;
+  // Every (group, resource) of the rule is one CNPG renders and every verb one CNPG grants for it; Secrets,
+  // ConfigMaps and the Cluster are named, by the Cluster's own names (never the cutover checkpoint).
+  const roleRule = '!has(r.nonResourceURLs) && has(r.apiGroups) && has(r.resources) && size(r.apiGroups) > 0 && size(r.resources) > 0'
+    + " && r.apiGroups.all(g, r.resources.all(x, (g + '/' + x) in variables.instanceRole"
+    + " && r.verbs.all(v, v in variables.instanceRole[g + '/' + x])))"
+    + ` && (!r.apiGroups.exists(g, r.resources.exists(x, (g + '/' + x) in ${quoted(INSTANCE_ROLE_NAMED)}))`
+    + ' || (has(r.resourceNames) && size(r.resourceNames) > 0'
+    + ` && r.resourceNames.all(n, (${own('n')} && n != '${CUTOVER_CONFIGMAP}') || n == 'cnpg-default-monitoring')))`;
+  const roleTable = `{${Object.entries(INSTANCE_ROLE_RULES).map(([key, verbs]) => `'${key}': ${quoted(verbs)}`).join(', ')}}`;
   const webhookUnchanged = `size(object.webhooks) == size(oldObject.webhooks) && object.webhooks.all(w, oldObject.webhooks.exists(o, o.name == w.name && ${WEBHOOK_FIELDS.map(sameField).join(' && ')}))`;
   const writes = "request.operation in ['CREATE', 'UPDATE']";
   const policy = {
@@ -274,6 +310,7 @@ export function renderFence({ images: pinned = consoleDbImages(), mode = 'deny' 
         { name: 'spec', expression: "variables.res == 'pods' ? object.spec : object.spec.template.spec" },
         { name: 'podLabels', expression: "variables.res == 'pods' ? object.metadata.labels : object.spec.template.metadata.labels" },
         { name: 'containers', expression: 'variables.spec.containers + (has(variables.spec.initContainers) ? variables.spec.initContainers : [])' },
+        { name: 'instanceRole', expression: roleTable },
       ],
       validations: [
         { expression: `variables.ns != '' || (request.resource.group == 'admissionregistration.k8s.io' && variables.sub == ''`
@@ -286,8 +323,10 @@ export function renderFence({ images: pinned = consoleDbImages(), mode = 'deny' 
           message: 'The CloudNativePG operator may only exec into its own instance Pods' },
         { expression: `variables.ns == '' || variables.res == 'events' || (variables.res == 'configmaps' && variables.name == 'cnpg-default-monitoring') || ${own('variables.name')}`,
           message: `The CloudNativePG operator may write only the objects of Cluster ${CLUSTER_NAME}` },
-        { expression: `!(variables.res == 'secrets' && variables.name in ${quoted([ADMIN_SECRET, IMPORT_SOURCE_SECRET])})`,
-          message: 'The Setup-owned Console DB Secrets are read-only for the CloudNativePG operator' },
+        { expression: `variables.ns == '' || !(variables.name in ${quoted(SETUP_OWNED_NAMES)})`,
+          message: 'The Setup-owned Console DB objects (its two Secrets, the cutover checkpoint and lock) are read-only for the CloudNativePG operator' },
+        { expression: `!(${writes} && variables.res == 'secrets') || (has(object.type) ? object.type : 'Opaque') in ${quoted(OPERATOR_SECRET_TYPES)}`,
+          message: 'The CloudNativePG operator may write only Opaque, TLS and basic-auth Secrets' },
         { expression: `!(${writes} && variables.res in ['pods', 'jobs']) || (${podSpec})`,
           message: 'The CloudNativePG operator may run only the pinned images, as the instance ServiceAccount, without host access or privilege, mounting only its own volumes and Secrets' },
         { expression: `!(${writes} && variables.res == 'services') || ((!has(object.spec.type) || object.spec.type == 'ClusterIP')`
@@ -301,8 +340,8 @@ export function renderFence({ images: pinned = consoleDbImages(), mode = 'deny' 
           message: `The CloudNativePG operator may write only the instance identity ${CLUSTER_NAME}` },
         { expression: `!(${writes} && variables.res == 'serviceaccounts') || !has(object.imagePullSecrets) || object.imagePullSecrets.all(s, ${own('s.name')})`,
           message: 'The instance ServiceAccount may reference only its own pull Secrets' },
-        { expression: `!(${writes} && variables.res == 'roles') || object.rules.all(r, ${roleRule})`,
-          message: 'The instance Role may name only its own Secrets and ConfigMaps and the CloudNativePG resources' },
+        { expression: `!(${writes} && variables.res == 'roles') || (has(object.rules) && object.rules.all(r, ${roleRule}))`,
+          message: 'The instance Role may grant only what CloudNativePG 1.30.1 renders for it, and name only objects of its own Cluster' },
         { expression: `!(${writes} && variables.res == 'rolebindings') || (object.roleRef.kind == 'Role' && object.roleRef.name == '${CLUSTER_NAME}'`
             + ` && size(object.subjects) == 1 && object.subjects[0].kind == 'ServiceAccount' && object.subjects[0].name == '${CLUSTER_NAME}'`
             + ` && (!has(object.subjects[0].namespace) || object.subjects[0].namespace == '${DATA_NAMESPACE}'))`,
@@ -436,13 +475,15 @@ export function renderLegacySourceService() {
 //   cnpg:        the CloudNativePG primary (the Service selects it);
 //   cutover:     a cutover is between "writers stopped" and "writers back" -- nothing else may run SQL or apply.
 const sameMap = (a, b) => canonical(a || {}) === canonical(b || {});
+export const CUTOVER_ACTIVE_STATES = Object.freeze(['InProgress', 'Switched', 'RollingBack']);
 export function classifyConsoleDataLayout(service, cutoverConfigMap) {
   let cutover = null;
   if (cutoverConfigMap) {
     try { cutover = JSON.parse(cutoverConfigMap.data?.['state.json'] ?? 'null'); } catch { cutover = null; }
     if (!cutover?.state) throw fail('CONSOLE_DB_LAYOUT_UNKNOWN', `${CUTOVER_CONFIGMAP} is unreadable; inspect it before running Setup`);
   }
-  if (cutover && ['InProgress', 'Switched'].includes(cutover.state)) return { layout: 'cutover', cutover };
+  // RollingBack: a rollback started and has not finished; nothing may run SQL or apply until it does.
+  if (cutover && CUTOVER_ACTIVE_STATES.includes(cutover.state)) return { layout: 'cutover', cutover };
   if (!service) return { layout: 'statefulset', cutover, fresh: true };
   const selector = service.spec?.selector;
   const port = (service.spec?.ports || []).find((p) => p.port === 5432);

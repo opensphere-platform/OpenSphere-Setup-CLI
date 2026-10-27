@@ -78,8 +78,18 @@ function observe(k, documents) {
   return { objects, live, missing: objects.filter((o) => o.status === 'Missing').length, differs: objects.filter((o) => o.status === 'Differs').length };
 }
 
+// The mode the live fence binding is in: warn (Warn+Audit, the emergency switch) or deny (also when absent).
+export function liveFenceMode(k) {
+  const out = String(k(['get', 'validatingadmissionpolicybinding', FENCE_NAME, '--ignore-not-found', '-o', 'json', '--request-timeout=10s']) || '').trim();
+  const actions = out ? JSON.parse(out).spec?.validationActions || [] : [];
+  return actions.includes('Deny') || !actions.length ? 'deny' : 'warn';
+}
+
+// fenceMode: deny | warn | preserve. preserve (Setup upgrade) keeps the mode the binding is in, so an upgrade never
+// re-arms a fence an administrator switched to warn for an emergency (review finding 9).
 export async function prepareConsoleDb({ context, apply = false, fenceMode = 'deny', runner = run, sleep = defaultSleep, attempts = 120, consecutive = 5, onProgress = () => {} } = {}) {
   const k = createConsoleDbClient(context, runner);
+  if (fenceMode === 'preserve') fenceMode = liveFenceMode(k);
   const target = observeInstalledHissTarget(context, runner);
   const assertTarget = () => {
     if (JSON.stringify(observeInstalledHissTarget(context, runner)) !== JSON.stringify(target)) throw fail('PRECONDITION_FAILED', 'Installation or cluster changed; no further Console DB preparation writes');

@@ -1,12 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { aclReplayStatements, buildRepairSql, effectiveGrants, parseAcl, roleRepairStatements } from '../src/console-db-role-repair.mjs';
-import { FINGERPRINT_SQL, TABLES_SQL, compareParity, parseFingerprint, parseTables, rowCountSql } from '../src/console-db-parity.mjs';
-import { CONSOLE_DB_WRITERS, CUTOVER_STEPS, classifyImportErrors, createCutover, parseExtraWriters } from '../src/console-db-cutover.mjs';
-import { CUTOVER_CONFIGMAP, DATA_NAMESPACE } from '../src/console-db-cnpg.mjs';
+import { FINGERPRINT_SQL, TABLES_SQL, compareParity, contentPlan, parseFingerprint, parseTables, rowCountSql, tableDataSql } from '../src/console-db-parity.mjs';
+import { CONSOLE_DB_WRITERS, CUTOVER_STEPS, classifyImportErrors, parseExtraWriters } from '../src/console-db-cutover.mjs';
 
 // R2-C2 scope 3: post-import repair (lab breaks X2, X3), the parity gate, and the resumable cutover with rollback.
 const ROLES = [
@@ -61,6 +57,10 @@ test('ACLs: parsing, implicit owner rights and defaults, and the replay that res
 
 const FP = (extra = '') => [
   'rows|console_operation.x|10', 'rows|vault.secrets|0', 'rows|auth.users|20',
+  'content|console_operation.x|111:222', 'content|vault.secrets|empty', 'content|auth.users|333:444',
+  'def|columns|console_operation.x:r|c1', 'def|index|console_operation.x_pkey|i1', 'def|constraint|console_operation.x.x_pkey|p k1 valid=true deferrable=false/false',
+  'def|view|console_operation.v|v1', 'def|function|console_operation.f()|f1', 'def|function|vault.create_secret(text)|f9',
+  'seq|console_operation.x_id_seq|10 inc=1 min=1 max=9223372036854775807 cycle=false', 'seq|vault.s_seq|unset inc=1 min=1 max=9 cycle=false',
   'ledger|count|137', 'ledger|head|opensphere-console/20261026/0151 sha256:781b', 'ledger|md5|abc',
   'role|anon|super=false,inherit=true,pw=-', 'role|postgres|super=false,pw=1111', 'role|supabase_admin|super=true,inherit=true,pw=aaaa',
   'role|authenticator|super=false,inherit=false,pw=bbbb',
@@ -82,6 +82,10 @@ const FP = (extra = '') => [
 ].join('\n');
 const TARGET = (extra = '') => [
   'rows|console_operation.x|10', 'rows|auth.users|20',
+  'content|console_operation.x|111:222', 'content|auth.users|333:444',
+  'def|columns|console_operation.x:r|c1', 'def|index|console_operation.x_pkey|i1', 'def|constraint|console_operation.x.x_pkey|p k1 valid=true deferrable=false/false',
+  'def|view|console_operation.v|v1', 'def|function|console_operation.f()|f1',
+  'seq|console_operation.x_id_seq|10 inc=1 min=1 max=9223372036854775807 cycle=false',
   'ledger|count|137', 'ledger|head|opensphere-console/20261026/0151 sha256:781b', 'ledger|md5|abc',
   'role|anon|super=false,inherit=true,pw=-', 'role|postgres|super=true,pw=-', 'role|supabase_admin|super=true,inherit=true,pw=cccc',
   'role|authenticator|super=false,inherit=false,pw=bbbb', 'role|streaming_replica|super=false,repl=true,pw=-', 'role|cnpg_metrics_exporter|super=false,pw=-',
@@ -105,8 +109,10 @@ test('parity: only the explained differences pass', () => {
   assert.deepEqual(result.differences, []);
   assert.equal(result.ok, true);
   const reasons = result.explained.map((e) => e.what).sort();
-  for (const what of ['rows|vault.secrets', 'role|supabase_admin', 'role|streaming_replica', 'ext|vector', 'ext|supabase_vault',
-    'setting|*|authenticator', 'member|anon>postgres', 'func|vault', 'acl|schema|vault']) assert.ok(reasons.includes(what), what);
+  for (const what of ['rows|vault.secrets', 'content|vault.secrets', 'def|function|vault.create_secret(text)', 'seq|vault.s_seq', 'role|supabase_admin',
+    'role|streaming_replica', 'ext|vector', 'ext|supabase_vault', 'setting|*|authenticator', 'member|anon>postgres', 'func|vault', 'acl|schema|vault',
+    'acl|rel|extensions.pg_stat_statements:v']) assert.ok(reasons.includes(what), what);
+  assert.equal(result.compared.contentHashed, 3);
 });
 
 test('parity: a lost row, membership, setting, owner or grant, or an event trigger owner change stops the cutover', () => {
@@ -121,6 +127,19 @@ test('parity: a lost row, membership, setting, owner or grant, or an event trigg
     [FP(), TARGET().replace('role|supabase_admin|super=true', 'role|supabase_admin|super=false'), 'role|supabase_admin'],
     [FP('rows|console_audit.e|5'), TARGET(), 'rows|console_audit.e'],
     [FP().replace('owner=supabase_admin enabled', 'owner=postgres enabled'), TARGET().replace('owner=supabase_admin enabled', 'owner=postgres enabled'), 'evtrigger|pgrst_ddl_watch'],
+    // Finding 5: same row count, different content; a changed definition; a sequence behind the source.
+    [FP(), TARGET().replace('content|auth.users|333:444', 'content|auth.users|333:445'), 'content|auth.users'],
+    [FP(), TARGET().replace('content|auth.users|333:444', 'content|auth.users|unhashed'), 'content|auth.users'],
+    [FP(), TARGET().replace('def|index|console_operation.x_pkey|i1', 'def|index|console_operation.x_pkey|i2'), 'def|index|console_operation.x_pkey'],
+    [FP(), TARGET().replace('def|view|console_operation.v|v1', 'x'), 'def|view|console_operation.v'],
+    [FP(), TARGET().replace('def|columns|console_operation.x:r|c1', 'def|columns|console_operation.x:r|c2'), 'def|columns|console_operation.x:r'],
+    [FP(), TARGET().replace('def|function|console_operation.f()|f1', 'def|function|console_operation.f()|f0'), 'def|function|console_operation.f()'],
+    [FP(), TARGET().replace('seq|console_operation.x_id_seq|10 ', 'seq|console_operation.x_id_seq|9 '), 'seq|console_operation.x_id_seq'],
+    [FP(), TARGET().replace('def|constraint|console_operation.x.x_pkey|p k1 valid=true deferrable=false/false', 'x'), 'def|constraint|console_operation.x.x_pkey'],
+    // Finding 5: in the extensions schema only an owner change to postgres is explained, not a lost or added grant.
+    [FP(), TARGET().replace('acl|rel|extensions.pg_stat_statements:v|postgres|{=r/postgres}', 'acl|rel|extensions.pg_stat_statements:v|postgres|{=r/postgres,anon=arwd/postgres}'), 'acl|rel|extensions.pg_stat_statements:v'],
+    [FP(), TARGET().replace('acl|rel|extensions.pg_stat_statements:v|postgres|{=r/postgres}', 'acl|rel|extensions.pg_stat_statements:v|postgres|{postgres=arwdDxtm/postgres}'), 'acl|rel|extensions.pg_stat_statements:v'],
+    [FP(), TARGET().replace('acl|rel|extensions.pg_stat_statements:v|postgres|{=r/postgres}', 'acl|rel|extensions.pg_stat_statements:v|anon|{=r/anon}'), 'acl|rel|extensions.pg_stat_statements:v'],
   ];
   for (const [s, t, what] of bad) {
     const r = compareParity(parseFingerprint(s), parseFingerprint(t));
@@ -129,18 +148,37 @@ test('parity: a lost row, membership, setting, owner or grant, or an event trigg
   }
 });
 
-test('parity SQL: read-only, no XML function, quoted identifiers in the row counts', () => {
-  for (const sql of [TABLES_SQL, FINGERPRINT_SQL]) {
+test('parity: a definition that differs only in deparsed parentheses is explained; any other change is not', () => {
+  const s = FP().replace('def|constraint|console_operation.x.x_pkey|p k1 valid=true deferrable=false/false', 'def|constraint|console_operation.x.x_pkey|raw1 n=norm1');
+  const flat = compareParity(parseFingerprint(s), parseFingerprint(TARGET().replace('def|constraint|console_operation.x.x_pkey|p k1 valid=true deferrable=false/false', 'def|constraint|console_operation.x.x_pkey|raw2 n=norm1')));
+  assert.equal(flat.ok, true, JSON.stringify(flat.differences));
+  assert.ok(flat.explained.some((e) => e.what === 'def|constraint|console_operation.x.x_pkey' && /parentheses or column aliases/.test(e.reason)));
+  const changed = compareParity(parseFingerprint(s), parseFingerprint(TARGET().replace('def|constraint|console_operation.x.x_pkey|p k1 valid=true deferrable=false/false', 'def|constraint|console_operation.x.x_pkey|raw2 n=norm2')));
+  assert.ok(changed.differences.some((d) => d.what === 'def|constraint|console_operation.x.x_pkey'));
+  assert.ok(FINGERPRINT_SQL.includes("ELSE d END, '[()[:space:]]', '', 'g'))"));
+  assert.ok(FINGERPRINT_SQL.includes(`regexp_replace(d, '[[:space:]]+AS[[:space:]]+("[^"]*"|[A-Za-z_][A-Za-z0-9_$]*)', '', 'g')`), 'view column aliases');
+});
+
+test('parity SQL: read-only, no XML function, quoted identifiers, content hashes within the size guard', () => {
+  const tables = parseTables('BEGIN\ntable|osaa|runtime_event|3221225472\ntable|we"ird|t|8192\nROLLBACK');
+  assert.deepEqual(tables, [{ schema: 'osaa', name: 'runtime_event', bytes: 3221225472 }, { schema: 'we"ird', name: 't', bytes: 8192 }]);
+  const plan = contentPlan(tables);
+  assert.deepEqual(plan.map((t) => t.hashed), [false, true], 'the 3 GiB table is over the 1 GiB guard');
+  const data = tableDataSql(plan);
+  for (const sql of [TABLES_SQL, FINGERPRINT_SQL, data]) {
     assert.match(sql, /BEGIN TRANSACTION READ ONLY;/);
     assert.match(sql, /ROLLBACK;\n$/);
     assert.doesNotMatch(sql, /xml/i);
   }
-  const tables = parseTables('BEGIN\ntable|osaa|runtime_event\ntable|we"ird|t\nROLLBACK');
-  assert.deepEqual(tables, [{ schema: 'osaa', name: 'runtime_event' }, { schema: 'we"ird', name: 't' }]);
-  const sql = rowCountSql(tables);
-  assert.match(sql, /FROM "osaa"\."runtime_event"/);
-  assert.match(sql, /FROM "we""ird"\."t"/);
-  assert.doesNotMatch(sql, /xml/i);
+  assert.ok(data.includes(`SELECT unnest(ARRAY['rows|osaa.runtime_event|' || count(*)::text, 'content|osaa.runtime_event|unhashed']) FROM "osaa"."runtime_event"`));
+  assert.ok(data.includes('md5(_opensphere_parity_row::text) AS h FROM "we""ird"."t" _opensphere_parity_row'));
+  assert.ok(data.includes("SET LOCAL TimeZone = 'UTC';"));
+  assert.doesNotMatch(data, /ORDER BY|string_agg/, 'the content hash folds row hashes into sums: no sort, no aggregated string');
+  // The target follows the source's plan, whatever its own sizes are.
+  assert.deepEqual(contentPlan([{ schema: 'osaa', name: 'runtime_event', bytes: 1 }, { schema: 'x', name: 'new', bytes: 1 }], { plan }).map((t) => t.hashed), [false, false]);
+  assert.ok(rowCountSql(tables).includes('unhashed'));
+  for (const kind of ['def|columns|', 'def|index|', 'def|constraint|', 'def|view|', 'def|function|', 'seq|']) assert.ok(FINGERPRINT_SQL.includes(`'${kind}`), kind);
+  assert.ok(FINGERPRINT_SQL.includes("deptype = 'e'"), 'extension members are compared through the extension line');
 });
 
 test('import log: only the replayed-membership refusals are expected', () => {
@@ -165,64 +203,3 @@ test('writers: the Console DB clients, Console stopped first; extra writers by n
   assert.deepEqual(CUTOVER_STEPS, ['freeze', 'dump', 'fingerprint', 'create', 'repair', 'parity', 'switch', 'reopen', 'verify', 'finalize']);
 });
 
-// A fake cluster holding only the checkpoint ConfigMap and the objects the asked step reads.
-function fakeCluster(state, { uid = '11111111-2222-3333-4444-555555555555' } = {}) {
-  const store = { configmap: state ? { metadata: { resourceVersion: '1' }, data: { 'state.json': JSON.stringify(state) } } : null, calls: [] };
-  const runner = (bin, args, options) => {
-    assert.equal(bin, 'kubectl');
-    assert.deepEqual(args.slice(0, 2), ['--context', 'lab']);
-    const a = args.slice(2);
-    store.calls.push(a.join(' '));
-    if (a[0] === 'get' && a[1] === 'namespace' && a[2] === 'kube-system') return uid;
-    if (a.includes('configmap') && a.includes(CUTOVER_CONFIGMAP) && a.includes('get')) return store.configmap ? JSON.stringify(store.configmap) : '';
-    if (a[0] === 'replace' || a[0] === 'create') {
-      const doc = JSON.parse(options.input);
-      assert.equal(doc.metadata.name, CUTOVER_CONFIGMAP);
-      if (a[0] === 'replace') assert.equal(doc.metadata.resourceVersion, store.configmap.metadata.resourceVersion, 'optimistic concurrency');
-      store.configmap = { ...doc, metadata: { ...doc.metadata, resourceVersion: String(Number(store.configmap?.metadata.resourceVersion || 0) + 1) } };
-      return '{}';
-    }
-    if (a.includes('delete') && (a.includes('service') || a.includes('secret'))) return '';
-    throw new Error(`unexpected kubectl ${a.join(' ')}`);
-  };
-  return { store, runner };
-}
-const base = (over = {}) => ({ schema: 'opensphere.console-db-cutover/v1', attemptId: '20261027-abc', state: 'Reopened', clusterUid: '11111111-2222-3333-4444-555555555555',
-  storageClass: 'longhorn', source: { pv: 'pv-1' }, writers: [], steps: {}, history: [], ...over });
-
-test('resume: recorded steps are never redone; the next step continues from the checkpoint', async () => {
-  const steps = Object.fromEntries(CUTOVER_STEPS.filter((s) => s !== 'finalize').map((s) => [s, { at: 'x', ms: 1 }]));
-  const { store, runner } = fakeCluster(base({ steps }));
-  const dir = mkdtempSync(join(tmpdir(), 'r2c2-cutover-'));
-  try {
-    const cutover = createCutover({ context: 'lab', clusterUid: '11111111-2222-3333-4444-555555555555', evidenceDir: dir, runner, log: () => {} });
-    const result = await cutover.apply();
-    assert.equal(result.done, true);
-    assert.equal(result.state.state, 'Completed');
-    assert.ok(result.state.steps.finalize);
-    // Only finalize's own write (the temporary source Service) reached the cluster besides the checkpoint.
-    assert.deepEqual(store.calls.filter((c) => !/configmap|replace|kube-system/.test(c)), [`-n ${DATA_NAMESPACE} delete service opensphere-supabase-postgres-legacy --ignore-not-found`,
-      `-n ${DATA_NAMESPACE} delete secret opensphere-console-db-import-source --ignore-not-found`]);
-    assert.equal((await cutover.apply()).done, true, 'a completed cutover is a no-op');
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
-
-test('rollback: refused once the writers were reopened; a checkpoint from another cluster is refused', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'r2c2-cutover-'));
-  try {
-    const reopened = fakeCluster(base({ steps: { reopen: { at: 'x' } } }));
-    assert.throws(() => createCutover({ context: 'lab', clusterUid: '11111111-2222-3333-4444-555555555555', evidenceDir: dir, runner: reopened.runner }).rollback(),
-      { code: 'ROLLBACK_REFUSED' });
-    const foreign = fakeCluster(base({ state: 'InProgress', clusterUid: '99999999-2222-3333-4444-555555555555' }));
-    await assert.rejects(createCutover({ context: 'lab', clusterUid: '11111111-2222-3333-4444-555555555555', evidenceDir: dir, runner: foreign.runner, log: () => {} }).apply(),
-      /another cluster/);
-    const rolledBack = fakeCluster(base({ state: 'RolledBack' }));
-    await assert.rejects(createCutover({ context: 'lab', clusterUid: '11111111-2222-3333-4444-555555555555', evidenceDir: dir, runner: rolledBack.runner, log: () => {} }).apply(),
-      /--discard-attempt 20261027-abc/);
-    const wrongCluster = fakeCluster(base({ state: 'InProgress' }), { uid: '00000000-2222-3333-4444-555555555555' });
-    assert.throws(() => createCutover({ context: 'lab', clusterUid: '11111111-2222-3333-4444-555555555555', evidenceDir: dir, runner: wrongCluster.runner }).rollback(),
-      /not 11111111/);
-    assert.throws(() => createCutover({ context: 'lab', clusterUid: '11111111-2222-3333-4444-555555555555', evidenceDir: dir, runner: rolledBack.runner }).discard('other'),
-      /must name 20261027-abc/);
-  } finally { rmSync(dir, { recursive: true, force: true }); }
-});

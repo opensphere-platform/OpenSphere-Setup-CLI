@@ -40,6 +40,8 @@ CNPG operator는 HISS 기능이 아니다. Console Backbone의 전제다. Setup�
   - operator로서 옛 PVC 지우기(dry-run)를 울타리가 거절한다.
   - Console DB Cluster의 서버 측 dry-run이 operator webhook을 지난다(M1 아래에서 API 서버가 9443에 닿는다).
 - Console DB가 CNPG에 있으면 Setup `upgrade`가 operator 객체를 계획하고, 다르면 다시 적용한다.
+  - 울타리는 지금 모드 그대로 둔다. 비상으로 warn에 둔 울타리를 upgrade가 deny로 되돌리지 않는다(`fenceMode: 'preserve'`).
+  - 전환(`migrate-console-db`)은 deny일 때만 시작한다.
 
 ## 3. 울타리 (ValidatingAdmissionPolicy `opensphere-console-db-operator-fence`)
 
@@ -51,11 +53,13 @@ CNPG operator는 HISS 기능이 아니다. Console Backbone의 전제다. Setup�
 - 클러스터 범위: 자기 webhook 설정 두 개의 CA bundle만 바꿀 수 있다. 그 밖의 필드와 다른 객체는 거절한다.
 - `opensphere-console-data` 안:
   - 이름은 `opensphere-console-db` 또는 `opensphere-console-db-…`만(events, `cnpg-default-monitoring` ConfigMap 제외).
-  - Setup이 만든 Secret 두 개(`…-supabase-admin`, `…-import-source`)는 operator가 쓰지 못한다.
+  - 그 이름 규칙에 걸리는 Setup 객체 셋은 종류와 상관없이 operator가 쓰지 못한다: Secret 두 개(`…-supabase-admin`, `…-import-source`)와 전환 기록 `…-cutover`(ConfigMap, 같은 이름의 실행 잠금 Lease).
+  - Secret 종류는 CNPG가 실제로 쓰는 셋만: `Opaque`(CA), `kubernetes.io/tls`(서버·복제 인증서), `kubernetes.io/basic-auth`. `kubernetes.io/service-account-token`은 안 된다. 그런 Secret을 만들면 token controller가 namespace의 아무 ServiceAccount 토큰이나 채워 준다.
   - Pod·Job: 고정한 이미지 두 개만, 인스턴스 ServiceAccount만, host 접근·privileged·권한 상승·capabilities 추가·hostPort 없음. 볼륨과 env는 자기 이름의 Secret·ConfigMap·PVC만.
   - Service: ClusterIP만, externalIPs 없음, 자기 인스턴스만 고른다.
   - PDB: 자기 인스턴스만.
-  - ServiceAccount·Role·RoleBinding: 이름이 `opensphere-console-db`인 것만. Role 규칙은 자기 Secret·ConfigMap 이름과 CNPG 자원만. RoleBinding은 인스턴스 SA 하나에만.
+  - ServiceAccount·Role·RoleBinding: 이름이 `opensphere-console-db`인 것만. RoleBinding은 인스턴스 SA 하나에만.
+  - 인스턴스 Role: CNPG 1.30.1이 그리는 규칙표(`INSTANCE_ROLE_RULES`, 실험실 `review-fixes/lab/10-instance-role.json`)에 있는 자원과 동사만. 인스턴스 SA는 울타리 밖이라, operator가 Role로 더 많은 권한(예: Cluster 삭제)을 줄 수 없게 한다. Secret·ConfigMap·Cluster 규칙은 자기 이름만 적어야 하고, 전환 기록은 안 된다.
   - Cluster: 만들기·지우기·spec 바꾸기는 거절. status와 metadata는 된다.
   - exec(CONNECT)는 자기 인스턴스 Pod에만.
 - **막지 못하는 것:** 읽기. CNPG는 namespace의 Secret을 watch하므로 `opensphere-supabase-secrets`도 읽을 수 있다. VAP는 읽기를 막을 수 없다. 남는 위험으로 기록한다.
@@ -79,34 +83,56 @@ CNPG operator는 HISS 기능이 아니다. Console Backbone의 전제다. Setup�
 opensphere-setup migrate-console-db --context <ctx> --cluster-uid <kube-system uid> --evidence-dir <클러스터 밖 폴더>
     [--apply [--until <단계>]] [--accept-prerequisite <id>]... [--extra-writer <ns>/<deployment>[=<DB 역할>]]...
 opensphere-setup migrate-console-db ... --rollback | --status | --discard-attempt <attempt id>
+opensphere-setup migrate-console-db ... [--break-lock <잡은 쪽>]   (죽은 실행의 잠금을 넘겨받는다)
 ```
 
 - `--apply`가 없으면 사전 점검만 한다(읽기).
 - 단계마다 체크포인트 ConfigMap `opensphere-console-data/opensphere-console-db-cutover`에 기록한다. 다시 실행하면 기록되지 않은 첫 단계부터 이어 간다. 기록된 단계는 다시 하지 않는다.
-- 체크포인트는 resourceVersion으로 쓴다. 두 실행이 겹치면 늦은 쪽이 멈춘다.
-- 쓰는 동안(`InProgress`, `Switched`)에는 Setup의 bootstrap·upgrade·verify·마이그레이션이 모두 멈춘다.
+- **한 번에 하나만 돈다.** `--apply`·`--rollback`·`--discard-attempt`는 같은 이름의 Lease(`coordination.k8s.io`)를 잡고 시작한다.
+  - 기다리는 동안 1분마다 갱신한다. 유효 기간은 30분이다.
+  - 다른 실행이 잡고 있으면 거절한다(`CUTOVER_LOCKED`, 잡은 쪽 이름을 알려 준다).
+  - 그 프로세스가 죽은 것을 확인했으면 `--break-lock <잡은 쪽>`으로 넘겨받는다. 30분이 지나면 저절로 풀린다.
+  - 잡은 뒤 누가 Lease를 바꾸면 그 실행은 멈춘다(`CUTOVER_LOCK_LOST`).
+  - Lease 쓰기는 Setup의 관리자 kubeconfig로 한다. 새 권한은 없다.
+  - 클러스터 UID를 먼저 확인한 뒤 잠금을 쓴다. 다른 클러스터에는 아무것도 쓰지 않는다.
+- 체크포인트도 resourceVersion으로 쓴다.
+- 쓰는 동안(`InProgress`, `Switched`, `RollingBack`)에는 Setup의 bootstrap·upgrade·verify·마이그레이션이 모두 멈춘다.
 
 | 단계 | 하는 일 |
 |---|---|
-| freeze | 옛 PV를 `Retain`으로. 쓰는 쪽을 기록하고 0으로(Console 먼저, Supabase 나중). 원본에 클라이언트 세션이 남으면 멈춘다 |
-| dump | 원본 볼륨에 `pg_dump -Fc`, `pg_restore --list`로 확인, 증거 폴더로 복사, sha256 대조 |
-| fingerprint | 원본 행 수·원장·역할·멤버십·권한 지문(읽기 전용, XML 함수 없음). 비밀번호 없는 역할 덤프 |
-| create | Setup Secret 둘(지금 비밀번호를 프로세스 안에서 옮김, 출력 없음), 임시 원본 Service, Cluster. 가져오기와 3인스턴스·동기 대기를 기다린다. 가져오기 로그를 보관하고 예상 밖 오류가 있으면 멈춘다 |
+| freeze | 옛 PV를 `Retain`으로. 쓰는 쪽을 기록하고 0으로(Console 먼저, Supabase 나중). 원본에 클라이언트 세션이 남으면 멈춘다. 그다음 원본의 **쓰기 지표**를 기록한다: 사용자 표의 행 변경 수(`n_tup_ins/upd/del`), 관계 파일과 카탈로그 행 버전(TRUNCATE·DDL), 시퀀스 값, 다른 DB의 행 변경 수. 2초 간격 두 번이 같을 때만 기록한다 |
+| dump | 먼저 남은 공간을 본다. 원본 볼륨과 이 기계 모두 DB 크기의 1.1배 + 256 MiB가 비어 있어야 한다(볼륨이 차면 PostgreSQL이 멈춘다). `pg_dump -Fc`, `pg_restore --list`로 확인, 증거 폴더로 복사, sha256 대조. 맞으면 원본 볼륨의 덤프는 지운다. 증거 폴더는 현재 사용자만 읽는다(Windows는 복구 키와 같은 ACL 도우미, 그 밖은 0700) |
+| fingerprint | 원본이 freeze 때 그대로인지 먼저 본다. 표마다 행 수와 **내용 해시**, **정의**(열·기본값·identity, 인덱스, 제약, 뷰, 함수, 시퀀스 값), 원장, 역할, 멤버십, 권한(읽기 전용, XML 함수 없음). 비밀번호 없는 역할 덤프 |
+| create | Setup Secret 둘(지금 비밀번호를 프로세스 안에서 옮김, 출력 없음), 임시 원본 Service, Cluster. 가져오기와 3인스턴스·동기 대기를 기다린다. 가져오기 로그를 보관하고 예상 밖 오류가 있으면 멈춘다. **로그를 읽지 못했으면 멈춘다**(아래) |
 | repair | 멤버십, 역할 설정, 속성, 스키마·DB 권한을 되살린다 |
-| parity | 관문. 설명된 차이 밖의 것이 하나라도 있으면 멈춘다 |
-| switch | Service selector를 `{app, cnpg.io/instanceRole: primary}`, targetPort를 5432로. 끝점이 primary 하나인지 본다. StatefulSet을 0으로 |
-| reopen | 되돌릴 수 없는 지점을 먼저 기록하고 쓰는 쪽을 원래 수로 |
+| parity | 관문. 설명된 차이 밖의 것이 하나라도 있으면 멈춘다(§5.1) |
+| switch | 원본이 freeze 때 그대로인지 다시 본다(세션 없음, 지표 그대로). 지금 Service의 selector와 ports를 체크포인트에 적는다. selector를 `{app, cnpg.io/instanceRole: primary}`, targetPort를 5432로. 끝점이 primary 하나인지 본다. 원본을 한 번 더 본 뒤 StatefulSet을 0으로 |
+| reopen | Service가 primary 하나만 고르는지, targetPort가 5432인지, Cluster가 hibernate되지 않고 건강한지, StatefulSet Pod가 없는지 본다. 하나라도 아니면 쓰는 쪽을 올리지 않는다. 그다음 되돌릴 수 없는 지점을 기록하고 쓰는 쪽을 원래 수로 |
 | verify | PostgREST schema reload, CNPG 경로로 원장 확인, 쓰는 쪽 역할이 모두 새 primary에 붙었는지, Cluster 상태 |
 | finalize | 임시 원본 Service와 import-source Secret을 지운다 |
 
+- **원본 쓰기 확인:** 쓰는 쪽 목록에 없는 무엇이 freeze 뒤에 원본에 쓰면, fingerprint나 switch가 `SOURCE_WRITTEN`으로 멈춘다. 아무것도 옮기지 않은 상태다. 되돌린 뒤 그 쓰는 쪽을 찾아 `--extra-writer`로 새 시도를 한다.
+  - 원본을 읽기 전용으로 바꾸는 방법은 쓰지 않았다. `default_transaction_read_only`는 세션이 끌 수 있고, 되돌리기가 중간에 실패하면 원본이 읽기 전용으로 남아 그 자체가 장애가 된다.
+- **가져오기 로그:** CNPG가 import Job을 지운 뒤에 이어 하면, 같은 시도에서 먼저 받아 둔 로그(`import-capture.json`, 성공한 Pod, sha256 일치)가 있을 때만 이어 간다. 없으면 `IMPORT_LOG_MISSING`으로 멈춘다. 되돌리기 → `--discard-attempt` → 새 시도. 건너뛰는 옵션은 두지 않았다. 그 로그가 가져오기 오류를 보는 유일한 곳이기 때문이다.
+- **`--extra-writer`를 이어 하기에서:** freeze가 끝나기 전이면 체크포인트의 쓰는 쪽에 더해지고 freeze가 멈춘다. 끝난 뒤면 거절한다.
 - **되돌리기(`--rollback`)는 reopen 전에만 된다.**
-  - Cluster를 먼저 hibernate한다. 인스턴스도 `app` 레이블을 가지므로, 먼저 하지 않으면 옛 selector가 인스턴스까지 고른다.
-  - selector와 targetPort를 되돌리고 StatefulSet을 1로 올린다. 원장이 원본 지문과 같은지 본 뒤 쓰는 쪽을 되살린다.
+  - 무엇이든 바꾸기 전에 `RollingBack`을 기록한다. 중간에 실패해도 그 상태로 남고, `--apply`는 거절한다. `--rollback`을 다시 실행하면 이어서 끝낸다.
+  - Cluster hibernate를 요청한다. 인스턴스도 `app` 레이블을 가진다.
+  - 곧바로 옛 길을 되살린다: switch 때 적어 둔 selector와 ports를 그대로, StatefulSet을 1로. 원장이 원본 지문과 같은지 본다. 중단된 dump가 남긴 파일도 지운다.
+  - 쓰는 쪽은 Service의 준비된 끝점이 StatefulSet Pod 하나뿐일 때만 되살린다. hibernate가 3분 안에 인스턴스를 멈추지 못하면(operator 정지 등) Setup이 인스턴스 Pod를 지운다. hibernate 요청이 남아 있어 operator가 다시 만들지 않는다. 그래도 3분 안에 안 되면 멈추고, 다시 실행한다.
   - hibernate된 Cluster는 남긴다. 다음 시도 전에 `--discard-attempt <id>`로 지운다(가져온 사본만 지운다).
 - reopen 뒤에는 되돌리기를 거절한다. 그때부터는 새 덤프로만 되돌린다(설계 §1.6).
 - 옛 StatefulSet·PVC·PV는 이 명령이 지우지 않는다. 릴리스 prune도 지우지 않는다. 7일 뒤 한 줄로 알리고 따로 지운다(계획 §4.3).
 
-### 5.1 사전 조건 (Setup이 볼 수 없는 것은 이름으로 받는다)
+### 5.1 parity가 보는 것
+
+- 표: 행 수와 내용 해시. 행마다 `md5(행::text)`를 구해 64비트 합 두 개로 접는다. 행 순서와 상관없고, 정렬하거나 큰 문자열을 만들지 않는다. 시간대·날짜 형식·float 자릿수·bytea 형식은 양쪽 같게 둔다.
+  - 원본에서 1 GiB가 넘는 표는 행 수만 비교하고 `parity.json`의 `unhashed`에 적는다. 대상은 원본의 계획을 그대로 따른다.
+- 정의: 열(타입, NOT NULL, 기본값, identity, generated, collation), 인덱스, 제약, 뷰, 함수(`pg_get_functiondef`), 시퀀스 값. 확장에 속한 객체는 확장 줄(이름·버전·스키마)로 본다. CNPG 이미지의 vector가 더 새 판이기 때문이다.
+- 원장, 역할, 멤버십, 역할 설정, 권한, 소유자, RLS, 정책, 트리거, 이벤트 트리거, 기본 권한, DB locale, publication은 전과 같다.
+- `extensions` 스키마의 권한 차이는 소유자가 postgres로 바뀐 것만 설명된 차이로 본다. 두 소유자의 권한을 뺀 나머지 권한이 같아야 한다. 권한이 하나라도 더하거나 빠지면 멈춘다.
+
+### 5.2 사전 조건 (Setup이 볼 수 없는 것은 이름으로 받는다)
 
 | id | 내용 |
 |---|---|

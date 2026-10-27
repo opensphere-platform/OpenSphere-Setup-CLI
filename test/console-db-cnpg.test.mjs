@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import operatorArtifact from '../src/console-db-cnpg-operator-artifact.json' with { type: 'json' };
 import images from '../src/console-db-cnpg-images.json' with { type: 'json' };
 import {
-  CLUSTER_NAME, DATA_NAMESPACE, FENCE_NAME, OPERATOR_NAMESPACE, OPERATOR_USER, PRIMARY_SELECTOR,
+  CLUSTER_NAME, CUTOVER_CONFIGMAP, CUTOVER_LOCK, DATA_NAMESPACE, FENCE_NAME, INSTANCE_ROLE_RULES, OPERATOR_NAMESPACE, OPERATOR_SECRET_TYPES, OPERATOR_USER,
+  PRIMARY_SELECTOR, SETUP_OWNED_NAMES,
   assertConsoleDbClusterHealthy, assertReleaseFitsLayout, classifyConsoleDataLayout, consoleDbImages, consoleDbSql, consoleDbTarget,
   imageForms, installerSupportsCnpgLayout, isRetainedLegacyObject, kubernetesApiPeers, renderConsoleDbCluster, renderFence,
   renderNetworkPolicies, renderOperatorObjects, verifyOperatorArtifact, watchedNamespaceRules,
@@ -128,6 +129,30 @@ test('fence: bound to the operator account only, fail-closed, deny by default, c
   for (const v of policy.spec.validations) assert.ok(v.message && v.expression.length < 5000);
 });
 
+test('fence (review finding 4): Setup-owned names, Secret types and the instance Role are closed lists', () => {
+  const [policy] = renderFence();
+  const rule = (needle) => policy.spec.validations.find((v) => v.message.includes(needle))?.expression;
+  // (a) the checkpoint ConfigMap and the run lock match the Cluster's name pattern; they are refused by name, for
+  // every kind, together with the two Setup Secrets.
+  assert.deepEqual(SETUP_OWNED_NAMES, [`${CLUSTER_NAME}-supabase-admin`, `${CLUSTER_NAME}-import-source`, CUTOVER_CONFIGMAP]);
+  assert.equal(CUTOVER_LOCK, CUTOVER_CONFIGMAP);
+  assert.equal(rule('Setup-owned'), `variables.ns == '' || !(variables.name in ['${SETUP_OWNED_NAMES.join("', '")}'])`);
+  // (b) only the Secret types CNPG writes; never a service-account token.
+  assert.deepEqual(OPERATOR_SECRET_TYPES, ['Opaque', 'kubernetes.io/tls', 'kubernetes.io/basic-auth']);
+  assert.ok(rule('Opaque, TLS and basic-auth').includes("(has(object.type) ? object.type : 'Opaque') in ['Opaque', 'kubernetes.io/tls', 'kubernetes.io/basic-auth']"));
+  assert.ok(!JSON.stringify(policy.spec).includes('service-account-token'));
+  // (c) the instance Role: exactly the table of what CNPG 1.30.1 renders, no delete on clusters, named objects.
+  const table = policy.spec.variables.find((v) => v.name === 'instanceRole').expression;
+  for (const [key, verbs] of Object.entries(INSTANCE_ROLE_RULES)) assert.ok(table.includes(`'${key}': ['${verbs.join("', '")}']`), key);
+  assert.ok(!INSTANCE_ROLE_RULES['postgresql.cnpg.io/clusters'].includes('delete'));
+  assert.ok(Object.values(INSTANCE_ROLE_RULES).every((verbs) => !verbs.some((v) => ['*', 'escalate', 'bind', 'impersonate', 'deletecollection'].includes(v))));
+  const roles = rule('instance Role may grant');
+  assert.ok(roles.includes("(g + '/' + x) in variables.instanceRole && r.verbs.all(v, v in variables.instanceRole[g + '/' + x])"));
+  assert.ok(roles.includes(`n != '${CUTOVER_CONFIGMAP}'`));
+  // Pods may not mount the checkpoint either.
+  assert.ok(rule('only the pinned images').includes(`v.configMap.name != '${CUTOVER_CONFIGMAP}'`));
+});
+
 test('Console DB Cluster: 3 instances, sync any 1 preferred, required anti-affinity, ICU en-US, import as measured', () => {
   const c = renderConsoleDbCluster({ storageClass: 'longhorn' });
   assert.equal(c.metadata.namespace, DATA_NAMESPACE);
@@ -157,6 +182,9 @@ test('layout: StatefulSet, CloudNativePG, or a cutover in progress; anything els
   assert.equal(classifyConsoleDataLayout(svc({ ...PRIMARY_SELECTOR }, 5432), cm('Switched')).layout, 'cutover');
   assert.equal(classifyConsoleDataLayout(svc({ app: 'opensphere-supabase-postgres' }, 'postgres'), cm('InProgress')).layout, 'cutover');
   assert.equal(classifyConsoleDataLayout(svc({ app: 'opensphere-supabase-postgres' }, 'postgres'), cm('RolledBack')).layout, 'statefulset');
+  // Review finding 1: a rollback that has not finished blocks Setup like a cutover.
+  assert.equal(classifyConsoleDataLayout(svc({ app: 'opensphere-supabase-postgres' }, 'postgres'), cm('RollingBack')).layout, 'cutover');
+  assert.equal(classifyConsoleDataLayout(svc({ ...PRIMARY_SELECTOR }, 5432), cm('RollingBack')).layout, 'cutover');
   assert.throws(() => classifyConsoleDataLayout(svc({ ...PRIMARY_SELECTOR }, 'postgresql'), null), /neither/);
   assert.throws(() => classifyConsoleDataLayout(svc({ app: 'x' }, 5432), null), /neither/);
   assert.throws(() => classifyConsoleDataLayout(svc({ app: 'opensphere-supabase-postgres' }, 'postgres'), cm('Completed')), /StatefulSet/);
