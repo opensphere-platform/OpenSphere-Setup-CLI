@@ -73,6 +73,11 @@ import {prepareCephExecutionProfile} from './ceph-prerequisites.mjs';
 import {PLATFORM_CORE_ARTIFACT,verifyPlatformCoreProfile,preparePlatformCorePrerequisites,createPlatformCoreClient} from './platform-core-prerequisites.mjs';
 import {installTarget} from './install-target.mjs';
 import {
+  CLUSTER_NAME as CONSOLE_DB_CLUSTER, DATA_NAMESPACE as CONSOLE_DATA_NAMESPACE, assertConsoleDbClusterHealthy, assertReleaseFitsLayout,
+  consoleDbSql, consoleDbTarget, isRetainedLegacyObject, observeConsoleDataLayout
+} from './console-db-cnpg.mjs';
+import { prepareConsoleDb } from './console-db-prepare.mjs';
+import {
   CANONICAL_AGENT_NAMESPACE,
   hasLegacyInstalledAgentIdentity,
   installedNameForCanonicalComponent,
@@ -1314,6 +1319,10 @@ async function materializeFoundationInstallers(
   // nothing. The target is now wherever this install actually goes (install-target.mjs).
   const prepareHiss = target && lock.channel === 'edge';
   const hissScope = prepareHiss ? installTarget({context:currentKubeContext(),channel:lock.channel,consoleUrl}) : null;
+  // R2-C2: once the Console DB is on CloudNativePG, only a Console release whose installers declare the CNPG data
+  // layout may be installed (target or rollback baseline); an older one would restart the retired StatefulSet.
+  // Checked here, while preparing, so an unfit release stops before the first write.
+  const dataLayout = consoleReleaseDataLayout(lock, target, artifacts);
   if (prepareHiss) {
     verifyHissExecutionProfile(artifacts.find(a=>a.path===HISS_EXECUTION_PROFILE.consoleArtifactPath)?.contents,hissScope);
     verifyHissValidationArtifact(artifacts.find(a=>a.path===HISS_VALIDATION_ARTIFACT)?.contents);
@@ -1348,6 +1357,7 @@ async function materializeFoundationInstallers(
     knowledgeDirectory,
     installerArtifactPaths: artifacts.map(artifact => artifact.path),
     hissScope: prepareHiss ? hissScope : null,
+    dataLayout,
     migration,
     controllerSource: manifestArtifacts.find(a=>a.controllerSource)?.controllerSource,
     ...(nativeOwnerPreview?{nativeInstallerRelease:nativeOwnerPreview,ownerPreview:[...renderFoundationOwnerPreview(manifestArtifacts.map(({spec,rendered})=>({path:spec.path,yaml:rendered})),artifacts),...nativeOwnerPreview]}:{}),
@@ -1364,6 +1374,9 @@ function currentKubeContext() {
 }
 
 function runLegacyFoundationInstallers(lock, foundation, storageClass, consoleUrl, progress) {
+  if (assertInstallLayout(foundation) !== 'statefulset') {
+    throw new Error('A legacy Console release cannot be installed on the CloudNativePG Console DB layout');
+  }
   const context = process.env.OPENSPHERE_KUBE_CONTEXT || '';
   const supabaseArgs = [
     '-NoProfile', '-NonInteractive', '-File',
@@ -1396,6 +1409,9 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
     return;
   }
   const context = currentKubeContext();
+  const layout = assertInstallLayout(foundation);
+  const fit = foundation.dataLayout ?? { layoutArguments: [], nativeLayoutArguments: [] };
+  if (layout === 'cnpg' && !fit.layoutArguments.length) throw new Error('The prepared Console release has no CloudNativePG layout arguments');
 
   progress?.item('설치', 'Gitea Declarative Change Authority');
   run('pwsh', [
@@ -1440,7 +1456,8 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
     '-VerifiedMaterializedRelease',
     '-ExpectedMigrationManifestSha256', migration.sha256,
     '-ExpectedMigrationSetDigest', migration.setDigest,
-    '-ExpectedMigrationLatestGlobalId', migration.latestGlobalId
+    '-ExpectedMigrationLatestGlobalId', migration.latestGlobalId,
+    ...fit.layoutArguments
   ]);
   progress?.item('완료', 'fresh migration prefix 및 최소권한 C_API/C_EXT runtime');
 
@@ -1464,7 +1481,8 @@ function runFoundationInstallers(lock, foundation, storageClass, consoleUrl, pro
     '-ExpectedMigrationManifestSha256', migration.sha256,
     '-ExpectedMigrationSetDigest', migration.setDigest,
     '-ExpectedMigrationLatestGlobalId', migration.latestGlobalId,
-    '-KubeContext', context
+    '-KubeContext', context,
+    ...(fit.nativeLayoutArguments ?? [])
   ]);
   progress?.item('완료', 'native core runtime과 exact-release activation evidence');
 }
@@ -1491,26 +1509,63 @@ export function assertComponentMigrationPrefix(manifest, rows) {
   return rows.length;
 }
 
-function runComponentMigrationSql(pod, sql, { transaction = false } = {}) {
-  const command = [
-    'PGPASSWORD="$POSTGRES_PASSWORD" exec psql -X -h 127.0.0.1',
-    '-U supabase_admin -d postgres -v ON_ERROR_STOP=1',
-    transaction ? '--single-transaction' : '-tA'
-  ].join(' ');
-  return kubectl([
-    '-n', 'opensphere-console-data', 'exec', '-i', pod, '--', 'sh', '-ec', command
-  ], { capture: true, input: sql });
+// R2-C2: SQL as supabase_admin in whichever layout the Console DB is in. StatefulSet: TCP as supabase_admin with the
+// Pod's own password (unchanged). CloudNativePG: the primary's local socket as postgres and SET LOCAL ROLE
+// supabase_admin inside the transaction (console-db-cnpg.mjs consoleDbSql). Refused while a cutover runs.
+function runComponentMigrationSql(target, sql, { transaction = false } = {}) {
+  return consoleDbSql(kubectl, target, sql, { transaction });
 }
 
 function readySupabasePostgresPod(purpose) {
-  const pods = JSON.parse(kubectl([
-    '-n', 'opensphere-console-data', 'get', 'pods',
-    '-l', 'app=opensphere-supabase-postgres', '-o', 'json'
-  ], { capture: true }));
-  const ready = (pods.items ?? []).filter((pod) => pod.status?.phase === 'Running'
-    && (pod.status?.conditions ?? []).some((condition) => condition.type === 'Ready' && condition.status === 'True'));
-  if (ready.length !== 1) throw new Error(`${purpose} requires exactly one Ready Supabase PostgreSQL pod`);
-  return ready[0].metadata.name;
+  return consoleDbTarget(kubectl, purpose);
+}
+
+// The installer arguments of a Console release for the current Console DB layout (throws if it does not fit).
+export function consoleReleaseDataLayout(lock, target, artifacts, observe = () => observeConsoleDataLayout(kubectl)) {
+  const { layout } = observe();
+  if (!target) {
+    if (layout !== 'statefulset') {
+      throw Object.assign(new Error(`A legacy Console release cannot be installed on the ${layout} Console DB layout`), { code: 'CONSOLE_DB_LAYOUT_UNSUPPORTED' });
+    }
+    return { layout, layoutArguments: [], nativeLayoutArguments: [] };
+  }
+  const label = `Console release ${lock.sourceRevision}`;
+  const source = (path) => artifacts.find((a) => a.path === path)?.contents;
+  const api = assertReleaseFitsLayout(layout, { label, installerSource: source('scripts/Install-ConsoleApiRuntime.ps1') });
+  const native = assertReleaseFitsLayout(layout, { label, installerSource: source('scripts/Install-ConsoleNativeRuntime.ps1') });
+  return { layout, layoutArguments: api.layoutArguments, nativeLayoutArguments: native.layoutArguments };
+}
+
+function assertInstallLayout(foundation) {
+  const { layout } = observeConsoleDataLayout(kubectl);
+  if (layout === 'cutover') {
+    throw Object.assign(new Error('A Console DB cutover is in progress; finish or roll it back before any Setup apply'), { code: 'CONSOLE_DB_CUTOVER' });
+  }
+  if (foundation.dataLayout && foundation.dataLayout.layout !== layout) {
+    throw Object.assign(new Error(`The Console DB layout changed from ${foundation.dataLayout.layout} to ${layout} after the release was prepared`),
+      { code: 'CONSOLE_DB_LAYOUT_CHANGED' });
+  }
+  return layout;
+}
+
+// The Console DB Cluster in place of the StatefulSet rollout (CloudNativePG layout).
+function waitForConsoleDbCluster(progress, timeoutMs = 600_000) {
+  const label = `${CONSOLE_DATA_NAMESPACE}/cluster/${CONSOLE_DB_CLUSTER}`;
+  if (progress) progress.wait(`${label} ready`, `timeout=${timeoutMs / 1000}s`);
+  const config = readInstallationConfig();
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      const cluster = JSON.parse(kubectl(['-n', CONSOLE_DATA_NAMESPACE, 'get', 'clusters.postgresql.cnpg.io', CONSOLE_DB_CLUSTER, '-o', 'json'], { capture: true }));
+      const health = assertConsoleDbClusterHealthy(cluster, { storageClass: config?.storageClass });
+      if (progress) progress.item('준비', `${label} ${health.readyInstances}/${health.instances}, primary ${health.primary}`);
+      else console.log(`[준비] ${label} ${health.readyInstances}/${health.instances}, primary ${health.primary}`);
+      return health;
+    } catch (error) {
+      if (Date.now() >= deadline) throw error;
+    }
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
+  }
 }
 
 // The applied Console migrations, oldest first, as [globalId, semanticKey, ...] rows.
@@ -1545,7 +1600,7 @@ export async function readReleaseMigrationManifests(lock, { sourceArtifactCreden
   }));
 }
 
-function runComponentMigrations(foundation, progress) {
+export function runComponentMigrations(foundation, progress) {
   if (!foundation.migration || foundation.target) return;
   const manifest = foundation.migration.manifest;
   if (manifest.schemaVersion !== 1) {
@@ -1809,6 +1864,11 @@ function installPreparedComponentRelease(
     if(!prepared.foundation.nativePrerequisitesApplied)applyNativeRuntimePrerequisites(prepared.foundation.nativeRuntime);
     bootstrapNativeRegistryCredential(prepared.foundation.nativeRuntime);
   }
+  const { layout } = observeConsoleDataLayout(kubectl);
+  if (layout === 'cutover') throw new Error('A Console DB cutover is in progress; finish or roll it back before any Setup apply');
+  if (layout === 'cnpg' && changedComponents.includes('supabasePostgres')) {
+    throw new Error('The supabasePostgres component is dormant on the CloudNativePG Console DB layout; its image is not applied');
+  }
   if (applyMigrations) runComponentMigrations(prepared.foundation, progress);
   const release = componentReleaseWorkloadManifests(lock, prepared, changedComponents);
   // Before the first workload manifest: a new extension controller verifies the Foundation runtime RBAC on
@@ -1953,6 +2013,9 @@ export function pruneReleaseResources(fromInventory, targetInventory, kubectlFn 
   const retained = []; let knowledgeReferences;
   for (const resource of fromInventory ?? []) {
     if (target.has(inventoryKey(resource))) continue;
+    // R2-C2: the retired Console DB StatefulSet, its PVC and ServiceAccount are deleted only by a separate,
+    // announced step (plan §4.3), never by a release prune.
+    if (isRetainedLegacyObject(resource)) { retained.push(resource); continue; }
     if (resource.kind === 'ConfigMap' && resource.namespace === 'opensphere-console'
       && /^os-knowledge-[a-f0-9]{32}(?:-(?:[0-9]|[12][0-9]|3[01]))?$/.test(resource.name)) {
       if (!knowledgeReferences) {
@@ -2096,11 +2159,21 @@ export function coreRolloutsForLock(lock) {
   ));
 }
 
+export function coreRolloutsForLayout(rollouts, layout) {
+  if (layout === 'cutover') throw Object.assign(new Error('A Console DB cutover is in progress'), { code: 'CONSOLE_DB_CUTOVER' });
+  return layout === 'cnpg' ? rollouts.filter(([, resource]) => resource !== 'statefulset/opensphere-supabase-postgres') : rollouts;
+}
+
 function waitForCoreRollouts(lock, progress) {
-  waitForRollouts(coreRolloutsForLock(lock), progress);
+  const { layout } = observeConsoleDataLayout(kubectl);
+  if (layout === 'cnpg') waitForConsoleDbCluster(progress);
+  waitForRollouts(coreRolloutsForLayout(coreRolloutsForLock(lock), layout), progress);
 }
 
 export function waitForComponentRollouts(changedComponents, progress) {
+  if (changedComponents.includes('supabasePostgres') && observeConsoleDataLayout(kubectl).layout !== 'statefulset') {
+    throw new Error('The supabasePostgres component is dormant on the CloudNativePG Console DB layout');
+  }
   const unique = new Map();
   for (const component of changedComponents) {
     const rollouts = COMPONENT_ROLLOUTS[component] ?? LEGACY_INSTALLED_AGENT_ROLLOUTS[component];
@@ -2877,6 +2950,15 @@ async function installPreparedRelease(lock, prepared, storageClass, consoleUrl, 
       'crd/uipluginpackages.plugins.opensphere.io',
       'crd/uipluginregistrations.plugins.opensphere.io']);
     progress?.item('완료', 'Extension Controller CRD Established');
+  }
+  if (prepared.foundation.dataLayout?.layout === 'cnpg') {
+    // The CloudNativePG operator is a Setup base component once the Console DB runs on it: keep its objects current.
+    const context = currentKubeContext();
+    const plan = await prepareConsoleDb({ context, apply: false });
+    if (plan.state !== 'Present') {
+      progress?.item('설치', `CloudNativePG operator ${plan.state} -> 적용`);
+      await prepareConsoleDb({ context, apply: true });
+    }
   }
   runFoundationInstallers(lock, prepared.foundation, storageClass, consoleUrl, progress);
   if (prepared.foundation.hissScope) {

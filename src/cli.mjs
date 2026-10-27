@@ -3,6 +3,9 @@ import setupPackage from '../package.json' with { type: 'json' };
 import {runArgocdObserverPreparation} from './argocd-observer-preparation.mjs';
 import {observeInstalledHissTarget,prepareInstalledHiss} from './prepare-installed-hiss.mjs';
 import {readHissSecretInput,writeHissSecret} from './hiss-secret-input.mjs';
+import {prepareConsoleDb} from './console-db-prepare.mjs';
+import {createCutover} from './console-db-cutover.mjs';
+import {observeConsoleDataLayout} from './console-db-cnpg.mjs';
 import {prepareCephExecutionProfile} from './ceph-prerequisites.mjs';
 import {createPsssArgoRbacClient} from './psss-argocd-rbac-transition.mjs';
 import {planPsssArgoPreparation,applyPsssArgoPreparation} from './psss-argocd-preparation.mjs';
@@ -80,6 +83,18 @@ function option(names, fallback) {
 
 function hasOption(name) {
   return process.argv.includes(name);
+}
+
+// Every value of a repeatable option.
+function options(name) {
+  const values = [];
+  process.argv.forEach((arg, index) => {
+    if (arg !== name) return;
+    const value = process.argv[index + 1];
+    if (!value || value.startsWith('-')) throw new Error(`${name} requires a value`);
+    values.push(value);
+  });
+  return values;
 }
 
 async function registryCredentialsOption() {
@@ -164,6 +179,13 @@ Usage:
   opensphere-setup prepare-ceph [--context <kube-context>] [--console-url <https-origin>] [--apply]
   opensphere-setup prepare-hiss [--context <kube-context>] [--apply] [--backup-fences deny|warn]
       (--backup-fences deny: after the first HISS backup writes on this cluster raised no admission warning)
+  opensphere-setup prepare-console-db --context <kube-context> [--apply] [--operator-fence deny|warn]
+      (R2-C2: the CloudNativePG operator, its admission fence and NetworkPolicies for the Console DB)
+  opensphere-setup migrate-console-db --context <kube-context> --cluster-uid <kube-system-uid> --evidence-dir <dir>
+      [--apply [--until <step>]] [--accept-prerequisite <id>]... [--extra-writer <ns>/<deployment>[=<db-role>]]...
+  opensphere-setup migrate-console-db --context <kube-context> --cluster-uid <uid> --evidence-dir <dir> --rollback | --status
+  opensphere-setup migrate-console-db --context <kube-context> --cluster-uid <uid> --evidence-dir <dir> --discard-attempt <attempt-id>
+      (steps: freeze dump fingerprint create repair parity switch reopen verify finalize; resumes from the checkpoint)
   opensphere-setup prepare-hiss-secret alert-emergency|backup-store|etcd-s3 [--name <store>] [--expires-at <ISO>]
       [--context <kube-context>] < input.json        (values only on stdin, never as arguments)
   opensphere-setup prepare-hiss-secret <kind> [--name <store>] --clear --confirm <secret-name> [--context <kube-context>]
@@ -300,6 +322,30 @@ async function main() {
       onProgress:event=>console.error(`[HISS 준비] ${event.state}: ${event.identity}`)});
     console.log(JSON.stringify(result,null,2));return;
   }
+  if (command === 'prepare-console-db') {
+    assertKubectl();
+    if (!context) throw new Error('prepare-console-db requires --context');
+    const result = await prepareConsoleDb({ context, apply: hasOption('--apply'), fenceMode: option('--operator-fence', 'deny'),
+      onProgress: (event) => console.error(`[Console DB 준비] ${event.phase}: ${event.objects}개`) });
+    console.log(JSON.stringify(result, null, 2)); return;
+  }
+  if (command === 'migrate-console-db') {
+    assertKubectl();
+    if (!context) throw new Error('migrate-console-db requires --context');
+    const clusterUid = option('--cluster-uid', '');
+    if (!/^[0-9a-f-]{36}$/.test(clusterUid)) throw new Error('migrate-console-db requires --cluster-uid <kube-system namespace uid>');
+    const cutover = createCutover({ context, clusterUid, evidenceDir: resolve(option('--evidence-dir', '')),
+      acceptedPrerequisites: options('--accept-prerequisite'), extraWriters: options('--extra-writer'),
+      log: (line) => console.error(`[Console DB 전환] ${line}`) });
+    if (!hasOption('--evidence-dir')) throw new Error('migrate-console-db requires --evidence-dir (the off-cluster dump goes there)');
+    let result;
+    if (hasOption('--status')) result = cutover.status();
+    else if (hasOption('--rollback')) result = cutover.rollback();
+    else if (hasOption('--discard-attempt')) result = cutover.discard(option('--discard-attempt', ''));
+    else if (hasOption('--apply')) result = await cutover.apply({ until: option('--until', 'finalize') });
+    else result = cutover.preflight();
+    console.log(JSON.stringify(result, null, 2)); return;
+  }
   if (command === 'prepare-hiss-secret') {
     // RKE2 readiness R1 (plan 2026-10-24 §4.2): the protected input for the HISS credentials. The JSON object comes
     // only from stdin; the result names the Secret and its keys, never a value.
@@ -411,6 +457,8 @@ async function main() {
     if (context && context !== 'docker-desktop') {
       throw new Error('installation-lock recovery Kubernetes context is signed as docker-desktop');
     }
+    // It reconstructs a lock from the Supabase StatefulSet; the CloudNativePG Console DB layout is not covered.
+    if (observeConsoleDataLayout(kubectl).layout !== 'statefulset') throw new Error('installation-lock recovery does not cover the CloudNativePG Console DB layout');
     const result = await recoverInstallationLockFromPlan({
       planPath: option('--plan', ''),
       confirmation: option('--confirm', ''),

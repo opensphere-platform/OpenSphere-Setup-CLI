@@ -1,4 +1,5 @@
 import { kubectl } from './process.mjs';
+import { consoleDbSql, consoleDbTarget } from './console-db-cnpg.mjs';
 import { withServicePortForward } from './port-forward.mjs';
 
 export const INITIAL_ADMIN_RESET_CONFIRMATION = 'RESET-INITIAL-ADMIN';
@@ -58,11 +59,9 @@ async function deleteSupabaseOperator(email) {
     // Console projection first; its role/CLI rows cascade. If any durable
     // governed record still references the operator, PostgreSQL refuses this
     // development reset rather than silently orphaning evidence.
-    kubectl([
-      '-n', 'opensphere-console-data', 'exec', 'statefulset/opensphere-supabase-postgres', '--',
-      'sh', '-ec',
-      `PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d postgres -v ON_ERROR_STOP=1 -c "DELETE FROM console.operator WHERE user_id='${user.id}'"`
-    ], { capture: true });
+    // R2-C2: as supabase_admin in either Console DB layout.
+    consoleDbSql(kubectl, consoleDbTarget(kubectl, 'Initial administrator reset'),
+      `DELETE FROM console.operator WHERE user_id='${user.id}';`, { transaction: true });
     const deleted = await supabaseRequest(baseUrl, key, `/admin/users/${encodeURIComponent(user.id)}`, {
       method: 'DELETE'
     });

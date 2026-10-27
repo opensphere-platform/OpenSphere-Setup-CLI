@@ -28,6 +28,7 @@ function harness(discovered = rules, cilium=false) {
     Set, Promise, KUBERNETES_EGRESS_SLOT, KNOWLEDGE_LOCK_PATH, join, EXTENSION_CONTROLLER_MANIFEST,captureControllerSource,
     isTargetConsoleRelease: () => true,
     needsNativeRuntimePreparation: () => false,
+    consoleReleaseDataLayout: () => ({ layout: 'statefulset', layoutArguments: [], nativeLayoutArguments: [] }),
     foundationManifestSpecs: () => [{path:'apps/console-api/deploy.yaml'}],
     foundationArtifactPaths: () => [KNOWLEDGE_LOCK_PATH],
     fetchReleaseArtifact: async (_lock,path) => path===KNOWLEDGE_LOCK_PATH ? JSON.stringify(knowledge) : raw,

@@ -22,14 +22,15 @@ const lock={
 const foundation={target:true,root:'/verified-release',migration:{evidence:{
   sha256:'sha256:'+'b'.repeat(64),setDigest:'sha256:'+'c'.repeat(64),latestGlobalId:'opensphere-console/20260903/0028',
 }}};
-function harness({failBeszel=false}={}) {
+function harness({failBeszel=false,layout='statefulset'}={}) {
   const state={reader:false,api:false,native:false,legacy:false,calls:[],progress:[],nativeArgs:null};
-  const context={join,currentKubeContext:()=> 'docker-desktop',
+  const context={join,currentKubeContext:()=> 'docker-desktop',assertInstallLayout:()=> layout,
     runLegacyFoundationInstallers:()=>{state.legacy=true;},
     run:(executable,args)=>{
       assert.equal(executable,'pwsh');
       const script=args[args.indexOf('-File')+1].replaceAll('\\','/');
       state.calls.push(script);
+      (state.args||={})[script.split('/').pop()]=[...args];
       assert.equal(args.at(-1)==='docker-desktop' || args.includes('docker-desktop'),true);
       if(script.endsWith('/deploy/baseline-monitoring/install.ps1')) {
         if(failBeszel)throw Error('reader provision failed');
@@ -71,6 +72,25 @@ test('monitoring prerequisite failure stops before API deployment and does not r
   assert.equal(h.state.api,false);
   assert.equal(h.state.calls.some(path=>path.endsWith('Install-ConsoleApiRuntime.ps1')),false);
   assert.equal(h.state.progress.filter(([kind])=>kind==='완료').length,1);
+});
+// R2-C2: on the CloudNativePG layout both Console installers receive the declared layout argument; a prepared
+// release without it (an installer that predates the layout) never reaches an installer.
+test('CloudNativePG layout: both installers get -ConsoleDataLayout cnpg, and a release without it is refused',()=>{
+  const h=harness({layout:'cnpg'});
+  const fit={layout:'cnpg',layoutArguments:['-ConsoleDataLayout','cnpg'],nativeLayoutArguments:['-ConsoleDataLayout','cnpg']};
+  h.run(lock,{...foundation,dataLayout:fit},'standard','https://localhost:1114',h.progress);
+  for(const script of ['Install-ConsoleApiRuntime.ps1','Install-ConsoleNativeRuntime.ps1']){
+    const args=h.state.args[script];
+    assert.equal(args[args.indexOf('-ConsoleDataLayout')+1],'cnpg',script);
+  }
+  assert.equal(h.state.args['Install-ConsoleApiRuntime.ps1'].includes('-ConsoleDataLayout'),true);
+  const old=harness({layout:'cnpg'});
+  assert.throws(()=>old.run(lock,{...foundation,dataLayout:{layout:'cnpg',layoutArguments:[],nativeLayoutArguments:[]}},'standard','https://localhost:1114',old.progress),
+    /no CloudNativePG layout arguments/);
+  assert.equal(old.state.calls.length,0);
+  const plain=harness();
+  plain.run(lock,foundation,'standard','https://localhost:1114',plain.progress);
+  assert.equal(plain.state.args['Install-ConsoleApiRuntime.ps1'].includes('-ConsoleDataLayout'),false,'the StatefulSet layout passes nothing new');
 });
 test('legacy rollback keeps its existing foundation installer path',()=>{
   const h=harness();

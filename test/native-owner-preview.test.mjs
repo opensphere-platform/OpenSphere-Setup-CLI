@@ -145,6 +145,7 @@ test('actual full materialization binds the persisted auth input and feeds the s
   const realSources=new Map(sourceArtifacts().map(item=>[item.path,item.contents]));
   const context={join,Promise,Set,JSON,NATIVE_OWNER_SOURCE_PATHS,bindNativeInstallerAuthEnvironment,renderNativeOwnerPreview,renderFoundationOwnerPreview,
     isTargetConsoleRelease:()=>true,needsNativeRuntimePreparation:()=>true,foundationManifestSpecs:()=>[],fetchFoundationInstallerArtifacts,
+    consoleReleaseDataLayout:() => ({ layout: 'statefulset', layoutArguments: [], nativeLayoutArguments: [] }),
     KNOWLEDGE_LOCK_PATH:knowledgePath,
     fetchReleaseArtifact:async(_lock,path)=>{reads.push(path);return path===knowledgePath?JSON.stringify(knowledge):path==='scripts/Install-ConsoleApiRuntime.ps1'?'Prepare-FoundationPrerequisites.ps1':realSources.get(path)||'unexecuted external installer dependency';},
     writeReleaseArtifact:async(_root,path,contents)=>stored.set(path,contents),

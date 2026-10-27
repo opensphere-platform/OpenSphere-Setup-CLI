@@ -3,6 +3,10 @@ import { spawn } from 'node:child_process';
 import net from 'node:net';
 import {verifyPublicConsoleEndpoint} from './console-endpoint-verification.mjs';
 import { kubectl } from './process.mjs';
+import {
+  CLUSTER_NAME as CONSOLE_DB_CLUSTER, DATA_NAMESPACE as CONSOLE_DATA_NAMESPACE, assertConsoleDbClusterHealthy,
+  consoleDbSql, consoleDbTarget, observeConsoleDataLayout
+} from './console-db-cnpg.mjs';
 import { verifyOfficialSkills } from './official-skills-verification.mjs';
 import { verifyNativeOfficialSkills } from './native-official-skills-verification.mjs';
 import { verifyKnowledgeDelivery } from './knowledge-delivery.mjs';
@@ -353,7 +357,14 @@ function verifyRegistryPullPath(lock) {
 }
 
 function verifyPersistentStorage(expectedStorageClass) {
-  for (const [namespace, name] of REQUIRED_PVCS) {
+  const extra = [];
+  if (observeConsoleDataLayout(kubectl).layout === 'cnpg') {
+    // The CloudNativePG instances' volumes (the retired StatefulSet's PVC stays bound with PV Retain).
+    const claims = getJson(['-n', CONSOLE_DATA_NAMESPACE, 'get', 'pvc', '-l', `cnpg.io/cluster=${CONSOLE_DB_CLUSTER}`]).items ?? [];
+    if (claims.length < 3) throw new Error(`The Console DB Cluster has ${claims.length} PersistentVolumeClaims, expected 3`);
+    for (const claim of claims) extra.push([CONSOLE_DATA_NAMESPACE, claim.metadata.name]);
+  }
+  for (const [namespace, name] of [...REQUIRED_PVCS, ...extra]) {
     const claim = getJson(['-n', namespace, 'get', 'pvc', name]);
     if (claim.status?.phase !== 'Bound') {
       throw new Error(`PersistentVolumeClaim is not Bound: ${namespace}/${name} (${claim.status?.phase ?? 'Unknown'})`);
@@ -365,7 +376,7 @@ function verifyPersistentStorage(expectedStorageClass) {
       );
     }
   }
-  return REQUIRED_PVCS.length;
+  return REQUIRED_PVCS.length + extra.length;
 }
 
 export function verifyRequiredServiceEndpoints(
@@ -483,9 +494,20 @@ function verifyWorkloads(lock, {
   const expected = new Set();
   const resources = [];
   const selectedWorkloads = [];
+  const { layout: dataLayout } = observeConsoleDataLayout(kubectl);
+  if (dataLayout === 'cutover') throw new Error('A Console DB cutover is in progress; verification waits for it to finish or roll back');
   for (const spec of WORKLOADS) {
     if (spec.artifact && !lock.auxiliaryArtifacts?.[spec.artifact]) continue;
     if (spec.component && !lock.components?.[spec.component]) continue;
+    if (spec.component === 'supabasePostgres' && dataLayout === 'cnpg') {
+      // The release's Supabase PostgreSQL image is dormant: the StatefulSet stays at 0 for the rollback window and the
+      // Console DB is the CloudNativePG Cluster, whose image Setup pins (console-db-cnpg-images.json).
+      const cluster = getJson(['-n', CONSOLE_DATA_NAMESPACE, 'get', 'clusters.postgresql.cnpg.io', CONSOLE_DB_CLUSTER]);
+      const health = assertConsoleDbClusterHealthy(cluster); // its PVCs and StorageClass: verifyPersistentStorage
+      expected.add(lock.components.supabasePostgres.image);
+      resources.push(`${CONSOLE_DATA_NAMESPACE}/cluster/${CONSOLE_DB_CLUSTER}:${health.readyInstances}/${health.instances}`);
+      continue;
+    }
     const resource = spec.ephemeral
       ? getJsonOrNull(['-n', spec.namespace, 'get', spec.kind, spec.name])
       : getJson(['-n', spec.namespace, 'get', spec.kind, spec.name]);
@@ -594,12 +616,9 @@ function verifyWorkloads(lock, {
   return { podCount: pods.length, resources, images: [...expected] };
 }
 
+// R2-C2: as supabase_admin in either Console DB layout (the StatefulSet, or the CloudNativePG primary).
 function postgresScalar(sql) {
-  return kubectl([
-    '-n', 'opensphere-console-data', 'exec', 'statefulset/opensphere-supabase-postgres', '--',
-    'sh', '-ec',
-    `PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d postgres -At -v ON_ERROR_STOP=1 -c ${JSON.stringify(sql)}`
-  ], { capture: true }).trim();
+  return consoleDbSql(kubectl, consoleDbTarget(kubectl, 'Installation verification'), sql).trim();
 }
 
 function verifySupabaseDatabase(lock) {
