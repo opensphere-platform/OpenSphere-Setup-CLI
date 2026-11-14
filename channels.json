@@ -5,9 +5,9 @@
     "edge": {
       "status": "Active",
       "channel": "edge",
-      "bundleUrl": "https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.6.0-edge.13/backbone-installation-bundle.json",
-      "sha256": "sha256:4af10aad9cdac7c591ee2e3a62386a04bf645079c58e459546dc6788a349b2f5",
-      "sourceRevision": "6c282e9621c03d383c35a1314fef4197bd14b7a1"
+      "bundleUrl": "https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.6.0-edge.14/backbone-installation-bundle.json",
+      "sha256": "sha256:00f2b9a432803609559ef3d840f83232ff9ff3a172f73e418f128902eed67a34",
+      "sourceRevision": "db41a94beb16aa1645b07e6a9e057151e0400906"
     },
     "candidate": {
       "status": "HOLD",
