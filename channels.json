@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "kind": "backbone-product-channels",
+  "channels": {
+    "edge": {
+      "status": "Active",
+      "channel": "edge",
+      "bundleUrl": "https://github.com/opensphere-platform/OpenSphere-Setup-CLI/releases/download/setup-v0.6.0-edge.2/backbone-installation-bundle.json",
+      "sha256": "sha256:d69c701617b8cd8f3643364e077dce57310fdd0fd3c0c5f9369dff638651f0c9",
+      "sourceRevision": "c1e8fa88fb97cbe3419e7483bdecd74a1be0c4d8"
+    },
+    "candidate": {
+      "status": "HOLD",
+      "reason": "Whole-product acceptance and explicit channel admission not complete"
+    },
+    "stable": {
+      "status": "HOLD",
+      "reason": "Whole-product acceptance and explicit channel admission not complete"
+    }
+  }
+}
