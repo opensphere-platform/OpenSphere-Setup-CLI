@@ -1,0 +1,81 @@
+{
+  "release": {
+    "schemaVersion": 1,
+    "kind": "opensphere-os-cli-release",
+    "version": "0.9.0-edge.1",
+    "sourceRevision": "aa2a20f5fb01257652dffdac369361a2bbebdb0b",
+    "protocol": "backbone.cli/v1",
+    "assets": [
+      {
+        "file": "os-cli-darwin-arm64.tar.gz",
+        "bytes": 6374814,
+        "sha256": "ac5343ba0b6a7b66c95fdb4740f77fe73977bb38523526da4ff31fb1996976e8",
+        "metadata": {
+          "version": "0.9.0-edge.1",
+          "programVersion": "0.9.0",
+          "protocol": "backbone.cli/v1",
+          "scope": "initial-human-and-delegated-read-cli",
+          "platforms": [
+            "darwin-arm64",
+            "linux-amd64"
+          ],
+          "candidate": false,
+          "sourceRevision": "aa2a20f5fb01257652dffdac369361a2bbebdb0b",
+          "platform": "darwin-arm64",
+          "binarySha256": "f7de40dbe1914f19c2fe8217ed7389c1dba9ca0ee6132596cbe365f9497fa7b6",
+          "separateSetupRequired": true,
+          "bundledSecrets": false,
+          "githubLoginRequiredToDownload": false,
+          "appleNotarization": "not_claimed",
+          "windowsArtifact": "not_published",
+          "linuxHumanKeyStore": "Secret Service/DBus; not required for delegated agent reads"
+        }
+      },
+      {
+        "file": "os-cli-linux-amd64.tar.gz",
+        "bytes": 6557551,
+        "sha256": "7fedda6d7b866d328f05ec14d0c9269a6050a5975af8adff7118ee2d5471be3c",
+        "metadata": {
+          "version": "0.9.0-edge.1",
+          "programVersion": "0.9.0",
+          "protocol": "backbone.cli/v1",
+          "scope": "initial-human-and-delegated-read-cli",
+          "platforms": [
+            "darwin-arm64",
+            "linux-amd64"
+          ],
+          "candidate": false,
+          "sourceRevision": "aa2a20f5fb01257652dffdac369361a2bbebdb0b",
+          "platform": "linux-amd64",
+          "binarySha256": "09f3e7ea6360a1f51d2ac35e0e7c2bcc2f7ba7fa342724cb083ab37bce10ae08",
+          "separateSetupRequired": true,
+          "bundledSecrets": false,
+          "githubLoginRequiredToDownload": false,
+          "appleNotarization": "not_claimed",
+          "windowsArtifact": "not_published",
+          "linuxHumanKeyStore": "Secret Service/DBus; not required for delegated agent reads"
+        }
+      }
+    ],
+    "verificationKeySha256": "655a8c9d105bd84ca1c3546398e8c4b419e1147edb1ec3858dd5c283cfd9dd08",
+    "scope": "initial-read-cli-not-complete-cluster-control"
+  },
+  "protectedSourceProof": {
+    "pr": 91,
+    "head": "6de04f4ffd42fe7402df539821806817e0595676",
+    "branch": "feat/os-cli-admission-20261115",
+    "url": "http://127.0.0.1:60103/backbone-operator/OpenSphere-Backbone/pulls/91",
+    "merge": "aa2a20f5fb01257652dffdac369361a2bbebdb0b",
+    "requiredCheck": {
+      "id": 3,
+      "status": "success",
+      "target_url": "/backbone-operator/OpenSphere-Backbone/actions/runs/365/jobs/368",
+      "description": "Successful in 2m43s",
+      "url": "http://backbone-gitea.os-backbone-system.svc.cluster.local:3000/api/v1/repos/backbone-operator/OpenSphere-Backbone/statuses/6de04f4ffd42fe7402df539821806817e0595676",
+      "context": "Backbone source checks / source (pull_request)",
+      "creator": null,
+      "created_at": "2026-11-15T07:40:09Z",
+      "updated_at": "2026-11-15T07:40:09Z"
+    }
+  }
+}
