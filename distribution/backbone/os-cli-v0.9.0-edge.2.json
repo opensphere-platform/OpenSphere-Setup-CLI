@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "kind": "opensphere-os-cli-release",
+  "version": "0.9.0-edge.2",
+  "sourceRevision": "52c5a967c5fef5a57bc1ae8357dd945c9ba2178c",
+  "protocol": "backbone.cli/v1",
+  "assets": [
+    {
+      "file": "os-cli-darwin-arm64.tar.gz",
+      "bytes": 6418425,
+      "sha256": "152cab3eca68c65958df5a86c157842eb8d95272a03225285a66985b4931a131",
+      "metadata": {
+        "version": "0.9.0-edge.2",
+        "programVersion": "0.9.0",
+        "protocol": "backbone.cli/v1",
+        "scope": "human-and-delegated-read-cli-with-independent-approval-signing",
+        "platforms": [
+          "darwin-arm64",
+          "linux-amd64"
+        ],
+        "candidate": false,
+        "sourceRevision": "52c5a967c5fef5a57bc1ae8357dd945c9ba2178c",
+        "platform": "darwin-arm64",
+        "binarySha256": "6319be63198a8571d9dc5edd5d4274f21a3a4338d390c0b0ecba24163c82f922",
+        "separateSetupRequired": true,
+        "bundledSecrets": false,
+        "githubLoginRequiredToDownload": false,
+        "appleNotarization": "not_claimed",
+        "windowsArtifact": "not_published",
+        "linuxHumanKeyStore": "Secret Service/DBus; not required for delegated agent reads"
+      }
+    },
+    {
+      "file": "os-cli-linux-amd64.tar.gz",
+      "bytes": 6584346,
+      "sha256": "005b4fed49f0d6e073191be9b9895fb8a3e57bc74192d947e7996d5eb762caa3",
+      "metadata": {
+        "version": "0.9.0-edge.2",
+        "programVersion": "0.9.0",
+        "protocol": "backbone.cli/v1",
+        "scope": "human-and-delegated-read-cli-with-independent-approval-signing",
+        "platforms": [
+          "darwin-arm64",
+          "linux-amd64"
+        ],
+        "candidate": false,
+        "sourceRevision": "52c5a967c5fef5a57bc1ae8357dd945c9ba2178c",
+        "platform": "linux-amd64",
+        "binarySha256": "618ab0d494d1afbbe3c4b24c04e6114b136e3ad9d3404f69923703fb0229e8dd",
+        "separateSetupRequired": true,
+        "bundledSecrets": false,
+        "githubLoginRequiredToDownload": false,
+        "appleNotarization": "not_claimed",
+        "windowsArtifact": "not_published",
+        "linuxHumanKeyStore": "Secret Service/DBus; not required for delegated agent reads"
+      }
+    }
+  ],
+  "verificationKeySha256": "655a8c9d105bd84ca1c3546398e8c4b419e1147edb1ec3858dd5c283cfd9dd08",
+  "scope": "human-and-delegated-read-cli-with-independent-approval-signing"
+}
