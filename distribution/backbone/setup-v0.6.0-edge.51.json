@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 1,
+  "name": "OpenSphere Setup CLI-",
+  "version": "0.6.0-edge.51",
+  "installerChannel": "edge",
+  "sourceRepository": "opensphere-platform/OpenSphere-Backbone",
+  "sourceAuthority": "protected Gitea Backbone main, GitHub preservation",
+  "sourceRevision": "5c6780bc44d3685ce0c407784bbcaa0b599e77c1",
+  "sourceProof": {
+    "pr": 15,
+    "head": "0562aac8f785dd5043a944a6ac4e4e524732432a",
+    "branch": "feat/setup-nexus-mobile-ui-20261117",
+    "url": "http://127.0.0.1:60103/backbone-operator/OpenSphere-Backbone/pulls/15",
+    "merge": "5c6780bc44d3685ce0c407784bbcaa0b599e77c1",
+    "requiredCheck": {
+      "id": 3,
+      "status": "success",
+      "target_url": "/backbone-operator/OpenSphere-Backbone/actions/runs/53/jobs/53",
+      "description": "Successful in 3m15s",
+      "url": "http://127.0.0.1:60103/api/v1/repos/backbone-operator/OpenSphere-Backbone/statuses/0562aac8f785dd5043a944a6ac4e4e524732432a",
+      "context": "Backbone source checks / source (pull_request)",
+      "creator": null,
+      "created_at": "2026-11-16T16:42:53Z",
+      "updated_at": "2026-11-16T16:42:53Z"
+    }
+  },
+  "distributionRepository": "opensphere-platform/OpenSphere-Setup-CLI",
+  "targetPlatform": "linux/amd64",
+  "assets": [
+    {
+      "asset": "opensphere-setup-darwin-arm64.tar.gz",
+      "sha256": "aebcf233841cc5f173fc9873db2d24b340d6f148092dcd33ad0b15e821ee5e9d",
+      "bytes": 57119560,
+      "metadata": {
+        "kind": "fresh-backbone-setup-portable",
+        "name": "OpenSphere Setup CLI-",
+        "displayName": "OpenSphere Setup CLI-0.6.0-edge.51",
+        "version": "0.6.0-edge.51",
+        "installerChannel": "edge",
+        "supportedProductChannels": [
+          "edge",
+          "candidate",
+          "stable"
+        ],
+        "catalogUrl": "https://raw.githubusercontent.com/opensphere-platform/OpenSphere-Setup-CLI/backbone-channels/channels.json",
+        "sourceRevision": "5c6780bc44d3685ce0c407784bbcaa0b599e77c1",
+        "hostPlatform": "darwin-arm64",
+        "targetPlatform": "linux/amd64",
+        "setupContract": "backbone.setup/v1",
+        "installerDigest": "sha256:34006821f4049e7a4a49b2a1e9d180abdec76665703aeb96c9051f89d5d97f8f",
+        "embeddedProductRelease": false,
+        "node": {
+          "version": "24.22.1",
+          "officialArchiveSha256": "89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7",
+          "binarySha256": "6f32069480ec14d52b6d7b1f3c7124cfbbc46203abf5ddf5c65b127435f3f329"
+        },
+        "kubectl": {
+          "version": "1.37.0",
+          "binarySha256": "583beedaebe422e71d3f1a96acef8b1fef86ea2f09a45ad01aa6c9ce287c1380"
+        },
+        "hostInstallation": false,
+        "externalStorageInInstaller": false,
+        "candidateStablePromoted": false,
+        "appleNotarization": "not_claimed",
+        "releaseScope": "CLI-distribution-not-whole-product-production-acceptance"
+      }
+    },
+    {
+      "asset": "opensphere-setup-linux-amd64.tar.gz",
+      "sha256": "ea12ce63be719f04176169d1dc68352986ece251e92ee6a3ecb2a951fa03b9af",
+      "bytes": 63562636,
+      "metadata": {
+        "kind": "fresh-backbone-setup-portable",
+        "name": "OpenSphere Setup CLI-",
+        "displayName": "OpenSphere Setup CLI-0.6.0-edge.51",
+        "version": "0.6.0-edge.51",
+        "installerChannel": "edge",
+        "supportedProductChannels": [
+          "edge",
+          "candidate",
+          "stable"
+        ],
+        "catalogUrl": "https://raw.githubusercontent.com/opensphere-platform/OpenSphere-Setup-CLI/backbone-channels/channels.json",
+        "sourceRevision": "5c6780bc44d3685ce0c407784bbcaa0b599e77c1",
+        "hostPlatform": "linux-amd64",
+        "targetPlatform": "linux/amd64",
+        "setupContract": "backbone.setup/v1",
+        "installerDigest": "sha256:34006821f4049e7a4a49b2a1e9d180abdec76665703aeb96c9051f89d5d97f8f",
+        "embeddedProductRelease": false,
+        "node": {
+          "version": "24.22.1",
+          "officialArchiveSha256": "eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c",
+          "binarySha256": "e32e2d16081cf644f88392934288086e7662529d0d43277c34f7aad2207cfafb"
+        },
+        "kubectl": {
+          "version": "1.37.0",
+          "binarySha256": "6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f"
+        },
+        "hostInstallation": false,
+        "externalStorageInInstaller": false,
+        "candidateStablePromoted": false,
+        "appleNotarization": "not_claimed",
+        "releaseScope": "CLI-distribution-not-whole-product-production-acceptance"
+      }
+    }
+  ],
+  "wholeProductProductionAcceptance": false,
+  "executionTestEnvironments": {
+    "darwin-arm64": "native Mac mini",
+    "linux-amd64": "native remote Linux amd64 package-only tests; private cluster access not tested from that host"
+  },
+  "automaticKubernetesInspectionAcceptance": false,
+  "storageDiscovery": {
+    "protocol": "host-preflight/v2",
+    "mountedAlternatives": true,
+    "freshCheckRequired": true,
+    "rawDiskFormatSupported": true,
+    "explicitWholeDiskApprovalRequired": true,
+    "offlineOciNativeRke2Import": true,
+    "preparationGuidance": true
+  },
+  "hostDependenciesBundled": [
+    "Node24",
+    "kubectl"
+  ],
+  "supportedProductChannels": [
+    "edge",
+    "candidate",
+    "stable"
+  ],
+  "embeddedProductRelease": false,
+  "productChannelUnchanged": true,
+  "nexusScope": "fixed additive same-install enforcement and independent operator approval-key lifecycle; no automatic role grant or feature activation",
+  "nexusUiProfile": {
+    "schemaVersion": 1,
+    "nexusProfileDigest": "cf5a17db8645a9f6b783df3aa434db5aaea1704608091afa396d760e024a9140",
+    "previousImage": "ghcr.io/opensphere-platform/opensphere-backbone-console@sha256:dabbcd5e545f3e9e7d3ff591894511adc2362c931662c5a98d7188a12b0aba81",
+    "image": "ghcr.io/opensphere-platform/opensphere-backbone-console@sha256:05c935871ad437e3a0d7997415982adcf90b31b52801e462950816dffda76916",
+    "version": "26.1117.0135.19",
+    "sourceRevision": "f121da5b8312868d62a72b963a29c12e5a4da909",
+    "policyDigest": "sha256:8ceb7519c26ef687343779c42154739bce12c596d337c8998bba5ab2cfbd94bf",
+    "catalogDigest": "sha256:017dcc6c3117a1857e7312977db6f12b3dd4710fa9ed8b9b2328fceb115932c0",
+    "sourcePR": 14,
+    "nativePublicationRun": 52,
+    "nativeAmd64AndOciVerified": true
+  },
+  "nativeModuleProfile": {
+    "sourceRevision": "251f51bdd0e0d7699e78e8d8a7f35dad6ae277ae",
+    "realAuthAcceptance": 10,
+    "nativeAmd64Acceptance": 10,
+    "providerCalls": 0
+  },
+  "downloadRequiresGitHubCredential": false,
+  "privateGHCRReadCredentialStillRequired": true
+}
