@@ -1,0 +1,293 @@
+{
+  "schemaVersion": 1,
+  "name": "OpenSphere Setup CLI-",
+  "version": "0.6.0-edge.61",
+  "installerChannel": "edge",
+  "sourceRepository": "opensphere-platform/OpenSphere-Backbone",
+  "sourceAuthority": "protected Gitea Backbone main, GitHub preservation",
+  "sourceRevision": "da4b05c401e8395c0da169be01bb83e708130e18",
+  "sourceProof": {
+    "pr": 41,
+    "head": "cbce264d5904d67958964ff0fb31d68475f3d193",
+    "base": "1247502ad4417ba4977b4c8170d28bd861530ab0",
+    "merge": "da4b05c401e8395c0da169be01bb83e708130e18",
+    "requiredCheck": {
+      "id": 3,
+      "status": "success",
+      "target_url": "/backbone-operator/OpenSphere-Backbone/actions/runs/150/jobs/151",
+      "description": "Successful in 6m14s",
+      "url": "http://127.0.0.1:60103/api/v1/repos/backbone-operator/OpenSphere-Backbone/statuses/cbce264d5904d67958964ff0fb31d68475f3d193",
+      "context": "Backbone source checks / source (pull_request)",
+      "creator": null,
+      "created_at": "2026-11-18T03:01:18Z",
+      "updated_at": "2026-11-18T03:01:18Z"
+    }
+  },
+  "distributionRepository": "opensphere-platform/OpenSphere-Setup-CLI",
+  "targetPlatform": "linux/amd64",
+  "assets": [
+    {
+      "asset": "opensphere-setup-darwin-arm64.tar.gz",
+      "sha256": "9510f23093f446a3a126be8d31b9dbbe28a571a216019b9502657a0b3fbb8624",
+      "bytes": 57197526,
+      "metadata": {
+        "kind": "fresh-backbone-setup-portable",
+        "name": "OpenSphere Setup CLI-",
+        "displayName": "OpenSphere Setup CLI-0.6.0-edge.61",
+        "version": "0.6.0-edge.61",
+        "installerChannel": "edge",
+        "supportedProductChannels": [
+          "edge",
+          "candidate",
+          "stable"
+        ],
+        "catalogUrl": "https://raw.githubusercontent.com/opensphere-platform/OpenSphere-Setup-CLI/backbone-channels/channels.json",
+        "sourceRevision": "da4b05c401e8395c0da169be01bb83e708130e18",
+        "hostPlatform": "darwin-arm64",
+        "targetPlatform": "linux/amd64",
+        "setupContract": "backbone.setup/v1",
+        "installerDigest": "sha256:a01f4ec7881451538ef90ea3ddb7b2d4965ea9c66bc37bb0ae736334e1059504",
+        "embeddedProductRelease": false,
+        "node": {
+          "version": "24.22.1",
+          "officialArchiveSha256": "89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7",
+          "binarySha256": "6f32069480ec14d52b6d7b1f3c7124cfbbc46203abf5ddf5c65b127435f3f329"
+        },
+        "kubectl": {
+          "version": "1.37.0",
+          "binarySha256": "583beedaebe422e71d3f1a96acef8b1fef86ea2f09a45ad01aa6c9ce287c1380"
+        },
+        "hostInstallation": false,
+        "externalStorageInInstaller": false,
+        "candidateStablePromoted": false,
+        "appleNotarization": "not_claimed",
+        "releaseScope": "CLI-distribution-not-whole-product-production-acceptance"
+      }
+    },
+    {
+      "asset": "opensphere-setup-linux-amd64.tar.gz",
+      "sha256": "d10cea0893d682ef3fa5fae712f6f4dfa2119375e0bf2e02b6f8d1a3b6542d0c",
+      "bytes": 63632500,
+      "metadata": {
+        "kind": "fresh-backbone-setup-portable",
+        "name": "OpenSphere Setup CLI-",
+        "displayName": "OpenSphere Setup CLI-0.6.0-edge.61",
+        "version": "0.6.0-edge.61",
+        "installerChannel": "edge",
+        "supportedProductChannels": [
+          "edge",
+          "candidate",
+          "stable"
+        ],
+        "catalogUrl": "https://raw.githubusercontent.com/opensphere-platform/OpenSphere-Setup-CLI/backbone-channels/channels.json",
+        "sourceRevision": "da4b05c401e8395c0da169be01bb83e708130e18",
+        "hostPlatform": "linux-amd64",
+        "targetPlatform": "linux/amd64",
+        "setupContract": "backbone.setup/v1",
+        "installerDigest": "sha256:a01f4ec7881451538ef90ea3ddb7b2d4965ea9c66bc37bb0ae736334e1059504",
+        "embeddedProductRelease": false,
+        "node": {
+          "version": "24.22.1",
+          "officialArchiveSha256": "eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c",
+          "binarySha256": "e32e2d16081cf644f88392934288086e7662529d0d43277c34f7aad2207cfafb"
+        },
+        "kubectl": {
+          "version": "1.37.0",
+          "binarySha256": "6129359f4e1f3848a5572ccb0b26cf28b8ca08cef38c95a765b2f64a2c961a2f"
+        },
+        "hostInstallation": false,
+        "externalStorageInInstaller": false,
+        "candidateStablePromoted": false,
+        "appleNotarization": "not_claimed",
+        "releaseScope": "CLI-distribution-not-whole-product-production-acceptance"
+      }
+    }
+  ],
+  "wholeProductProductionAcceptance": false,
+  "executionTestEnvironments": {
+    "darwin-arm64": "native Mac mini",
+    "linux-amd64": "native remote Linux amd64 package-only tests; private cluster access not tested from that host"
+  },
+  "automaticKubernetesInspectionAcceptance": false,
+  "storageDiscovery": {
+    "protocol": "host-preflight/v2",
+    "mountedAlternatives": true,
+    "freshCheckRequired": true,
+    "rawDiskFormatSupported": true,
+    "explicitWholeDiskApprovalRequired": true,
+    "offlineOciNativeRke2Import": true,
+    "preparationGuidance": true
+  },
+  "hostDependenciesBundled": [
+    "Node24",
+    "kubectl"
+  ],
+  "supportedProductChannels": [
+    "edge",
+    "candidate",
+    "stable"
+  ],
+  "embeddedProductRelease": false,
+  "productChannelUnchanged": true,
+  "nexusScope": "Console22 UI-only refresh; no schema/authority/policy/catalog change or service activation",
+  "backboneBundleProfile": {
+    "schemaVersion": 1,
+    "sequence": 1,
+    "predecessor": {
+      "profile": "console-chain",
+      "profileDigest": "403f652f9807d976a3d429584ffc613b652cb35422f1813615bc1b038a60098d",
+      "console": {
+        "image": "ghcr.io/opensphere-platform/opensphere-backbone-console@sha256:b57015250ae0d389d8e147976c2cae9b34cee1c586ef2ce5339c638ca492c4c4",
+        "sourceRevision": "591bd0c7e34d54e53cbf8335aa127ffabebcd8fc"
+      },
+      "core": {
+        "image": "ghcr.io/opensphere-platform/opensphere-backbone-core@sha256:7b0171681b5d12c5d32f83e18afa3198b009a0a1da16f08441dca14cf38c5a88",
+        "sourceRevision": "14259d326163a5542926c35d6f88cf6342472b2f"
+      },
+      "policyDigest": "sha256:8ceb7519c26ef687343779c42154739bce12c596d337c8998bba5ab2cfbd94bf",
+      "catalogDigest": "sha256:017dcc6c3117a1857e7312977db6f12b3dd4710fa9ed8b9b2328fceb115932c0"
+    },
+    "console": {
+      "image": "ghcr.io/opensphere-platform/opensphere-backbone-console@sha256:88fd75c094d91d138fcc5a2dc74a384063cf528ceaf72fdda3190ed28a41e4a3",
+      "version": "26.1118.1108.26",
+      "sourceRevision": "0c3d37f9a263ea522042283e220e0296e53b79b1"
+    },
+    "core": {
+      "image": "ghcr.io/opensphere-platform/opensphere-backbone-core@sha256:5ab49f7a88a0931b48784b06dd951ab41c79b44bd9da9c4d9ba0ca0068223897",
+      "version": "26.1118.1108.13",
+      "sourceRevision": "0c3d37f9a263ea522042283e220e0296e53b79b1"
+    },
+    "policyDigest": "sha256:3307592d27aff132af2becffc08c4359eeac5350fd4166e653c7a8f81ec8de1b",
+    "catalogDigest": "sha256:b07532c5e9ebd7143a1de03e12b2a484653f889f4cc40ac86dc6afc706a9b395",
+    "migrationsDigest": "26d0fce2a1ebdf8485c9d172ba686ded185bbfa61d25bb703540595149622201",
+    "sourcePR": 39,
+    "nativePublicationRun": 145,
+    "nativeAmd64AndOciVerified": true,
+    "isolatedInstallationVerified": true,
+    "osrTrustAnchor": {
+      "keyId": "osr-anchor-2026a",
+      "publicKeyJwk": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "Rvd1LAhVv5N0R23mWMtMRRlIoXblJ-azke__x5HSUNk",
+        "y": "zvWHXA5EIsVE438SaJpFIenbjSJv8F0POiAAkTqqgAU"
+      }
+    },
+    "dependencyException": {
+      "record": "chrono-20261118-osr",
+      "advisory": "RUSTSEC-2026-0543",
+      "advisorySha256": "18424c6a155f754151a55ce9fb73376bf66f3709d81750d921f5293da91ccc59",
+      "notBefore": "2026-11-17T17:50:00Z",
+      "expiresAt": "2026-12-18T14:59:59Z"
+    }
+  },
+  "backboneBundleScope": "Core and Console images, four additive migrations, one reviewed correction (Console runtime OSR membership), reviewed policy/catalog transition; no module installed, no reviewer role assigned",
+  "consoleRefreshProfile": {
+    "schemaVersion": 1,
+    "nexusAdoptionProfileDigest": "a9f4e7a2235305dcc03fe1ef16dfd6fd7d03b87dd0496fbaef43fc354352d0d6",
+    "previousImage": "ghcr.io/opensphere-platform/opensphere-backbone-console@sha256:817470fbf183fd18f382e2a3b209e3c7eeb040171143a67b3b999d1a1150e13c",
+    "previousSourceRevision": "a4cf0bcd069cfe9057946b13f7036691b87454fd",
+    "image": "ghcr.io/opensphere-platform/opensphere-backbone-console@sha256:f8f0403afa2dc3b72505f6afd863c00b015da7b80cbb04c7eb972957f3339af1",
+    "version": "26.1117.2250.22",
+    "sourceRevision": "4cc14a20f55706cbc4992ac92a6c4bf77776ce27",
+    "policyDigest": "sha256:8ceb7519c26ef687343779c42154739bce12c596d337c8998bba5ab2cfbd94bf",
+    "catalogDigest": "sha256:017dcc6c3117a1857e7312977db6f12b3dd4710fa9ed8b9b2328fceb115932c0",
+    "sourcePR": 24,
+    "nativePublicationRun": 93,
+    "nativeAmd64AndOciVerified": true,
+    "dependencyException": {
+      "approvalMessage": "52249",
+      "advisory": "RUSTSEC-2026-0543",
+      "expiresAt": "2026-11-24T14:59:59Z",
+      "advisorySha256": "18424c6a155f754151a55ce9fb73376bf66f3709d81750d921f5293da91ccc59"
+    }
+  },
+  "consoleChainProfile": [
+    {
+      "schemaVersion": 1,
+      "sequence": 1,
+      "consoleOnly": true,
+      "predecessor": {
+        "profile": "console-refresh",
+        "profileDigest": "a77de1c7e1a52b4258d6050a905837ece2315ee25706787693b4cb813090660a",
+        "image": "ghcr.io/opensphere-platform/opensphere-backbone-console@sha256:f8f0403afa2dc3b72505f6afd863c00b015da7b80cbb04c7eb972957f3339af1",
+        "sourceRevision": "4cc14a20f55706cbc4992ac92a6c4bf77776ce27"
+      },
+      "image": "ghcr.io/opensphere-platform/opensphere-backbone-console@sha256:884eb0c66b6bedae7146dfdf708fdcb573638fe29c3c6cfabb6ac440b81b61b3",
+      "version": "26.1118.0114.23",
+      "sourceRevision": "2f4b7b10371a1c0838774774b4f970569c02e45b",
+      "policyDigest": "sha256:8ceb7519c26ef687343779c42154739bce12c596d337c8998bba5ab2cfbd94bf",
+      "catalogDigest": "sha256:017dcc6c3117a1857e7312977db6f12b3dd4710fa9ed8b9b2328fceb115932c0",
+      "sourcePR": 27,
+      "nativePublicationRun": 104,
+      "nativeAmd64AndOciVerified": true,
+      "dependencyException": {
+        "approvalMessage": "52249",
+        "advisory": "RUSTSEC-2026-0543",
+        "expiresAt": "2026-11-24T14:59:59Z",
+        "advisorySha256": "18424c6a155f754151a55ce9fb73376bf66f3709d81750d921f5293da91ccc59"
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "sequence": 2,
+      "consoleOnly": true,
+      "predecessor": {
+        "profile": "console-chain",
+        "profileDigest": "338def538fcdfe4ecf89c5d06ff9d9aa04f5ce849ea4b32049aaf5fea060ac0a",
+        "image": "ghcr.io/opensphere-platform/opensphere-backbone-console@sha256:884eb0c66b6bedae7146dfdf708fdcb573638fe29c3c6cfabb6ac440b81b61b3",
+        "sourceRevision": "2f4b7b10371a1c0838774774b4f970569c02e45b"
+      },
+      "image": "ghcr.io/opensphere-platform/opensphere-backbone-console@sha256:b57015250ae0d389d8e147976c2cae9b34cee1c586ef2ce5339c638ca492c4c4",
+      "version": "26.1118.0158.24",
+      "sourceRevision": "591bd0c7e34d54e53cbf8335aa127ffabebcd8fc",
+      "policyDigest": "sha256:8ceb7519c26ef687343779c42154739bce12c596d337c8998bba5ab2cfbd94bf",
+      "catalogDigest": "sha256:017dcc6c3117a1857e7312977db6f12b3dd4710fa9ed8b9b2328fceb115932c0",
+      "sourcePR": 29,
+      "nativePublicationRun": 111,
+      "nativeAmd64AndOciVerified": true,
+      "dependencyException": {
+        "approvalMessage": "52249",
+        "advisory": "RUSTSEC-2026-0543",
+        "expiresAt": "2026-11-24T14:59:59Z",
+        "advisorySha256": "18424c6a155f754151a55ce9fb73376bf66f3709d81750d921f5293da91ccc59"
+      }
+    }
+  ],
+  "nexusUiProfile": {
+    "schemaVersion": 1,
+    "nexusProfileDigest": "cf5a17db8645a9f6b783df3aa434db5aaea1704608091afa396d760e024a9140",
+    "previousImage": "ghcr.io/opensphere-platform/opensphere-backbone-console@sha256:dabbcd5e545f3e9e7d3ff591894511adc2362c931662c5a98d7188a12b0aba81",
+    "image": "ghcr.io/opensphere-platform/opensphere-backbone-console@sha256:05c935871ad437e3a0d7997415982adcf90b31b52801e462950816dffda76916",
+    "version": "26.1117.0135.19",
+    "sourceRevision": "f121da5b8312868d62a72b963a29c12e5a4da909",
+    "policyDigest": "sha256:8ceb7519c26ef687343779c42154739bce12c596d337c8998bba5ab2cfbd94bf",
+    "catalogDigest": "sha256:017dcc6c3117a1857e7312977db6f12b3dd4710fa9ed8b9b2328fceb115932c0",
+    "sourcePR": 14,
+    "nativePublicationRun": 52,
+    "nativeAmd64AndOciVerified": true
+  },
+  "nexusAdoptionProfile": {
+    "schemaVersion": 1,
+    "nexusProfileDigest": "cf5a17db8645a9f6b783df3aa434db5aaea1704608091afa396d760e024a9140",
+    "nexusUiProfileDigest": "2631bf93339d7af0b4071072a6314832fbf03f72365640bacff043b780caa8af",
+    "previousImage": "ghcr.io/opensphere-platform/opensphere-backbone-console@sha256:05c935871ad437e3a0d7997415982adcf90b31b52801e462950816dffda76916",
+    "previousSourceRevision": "f121da5b8312868d62a72b963a29c12e5a4da909",
+    "image": "ghcr.io/opensphere-platform/opensphere-backbone-console@sha256:817470fbf183fd18f382e2a3b209e3c7eeb040171143a67b3b999d1a1150e13c",
+    "version": "26.1117.1110.21",
+    "sourceRevision": "a4cf0bcd069cfe9057946b13f7036691b87454fd",
+    "policyDigest": "sha256:8ceb7519c26ef687343779c42154739bce12c596d337c8998bba5ab2cfbd94bf",
+    "catalogDigest": "sha256:017dcc6c3117a1857e7312977db6f12b3dd4710fa9ed8b9b2328fceb115932c0",
+    "sourcePR": 17,
+    "nativePublicationRun": 64,
+    "nativeAmd64AndOciVerified": true
+  },
+  "nativeModuleProfile": {
+    "sourceRevision": "251f51bdd0e0d7699e78e8d8a7f35dad6ae277ae",
+    "realAuthAcceptance": 10,
+    "nativeAmd64Acceptance": 10,
+    "providerCalls": 0
+  },
+  "downloadRequiresGitHubCredential": false,
+  "privateGHCRReadCredentialStillRequired": true
+}
